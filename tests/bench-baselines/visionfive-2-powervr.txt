@@ -1,30 +1,64 @@
 # A StarFive VisionFive 2 (JH7110), Imagination PowerVR B-Series BXE-4-32,
 # Vulkan 1.3.225 through Imagination's own driver, release build, no heatsink
-# fitted, 44.5 C before and 46.5 C after.
+# fitted, 46.0 C before and 50.5 C after, desktop stopped, all four governors
+# pinned to performance, load 0.19.
 #
-#   cargo xtask bench --skip softpipe --check tests/bench-baselines/visionfive-2-powervr.txt
+#   cargo xtask bench --skip softpipe --skip gles --check tests/bench-baselines/visionfive-2-powervr.txt
 #
 # `--skip softpipe` and not `--skip llvmpipe`: this image's software driver calls
 # itself softpipe, and the skip matches on any part of the name a device gives
 # itself, so the Pi's invocation would have benched the software rasterizer here.
 #
-# GLES is absent rather than skipped for a reason worth stating. The account
-# running this is in `video` but not `render`, so EGL cannot open
-# `/dev/dri/renderD128` and falls back to Mesa softpipe -- which is a real
-# measurement of nothing. Vulkan reaches the GPU by another node and is
-# unaffected. Add the account to `render` and this file gains six rows.
+# `--skip gles` is the interesting one, and it replaces a note that said this
+# file would gain GLES rows once the account reached the `render` group. The
+# account reached it on 2026-09-29, GLES now runs, and the rows are still not
+# wanted -- for a different reason than before.
 #
-# Checked against three fresh runs on the board it came from, all six timed rows
-# inside six tenths of a per cent in every one of them, and `--check` then passed
-# three times over. That is tighter than the Pi 5 manages and was not expected:
-# the board has no desktop running and one governor state, where the Pi has more
-# of both.
+# Both backends report the device as `PowerVR B-Series BXE-4-32`, and they are
+# not the same stack. Vulkan is Imagination's DDK (`libVK_IMG.so`). GLES is Mesa:
+# `EGL_LOG_LEVEL=debug` shows the loader opening
+# `/usr/lib/riscv64-linux-gnu/dri/pvr_dri.so`, Mesa's in-progress PowerVR
+# Gallium driver, because `50_mesa.json` is the only EGL vendor on this image and
+# there is no IMG GLES. So a `vulkan` and a `gles` row here would sit under
+# identical device names while crossing a vendor boundary -- where on the Pi 5
+# both rows are one Mesa. That is a comparison that looks like two backends and
+# is really two drivers, and nothing in the file's own columns would say so.
 #
-# One row does not deserve that confidence. `recording / distance field` is the
-# row the bench itself marks noisy, and it moved between 0.872 and 1.003 across
-# runs -- a fifteen per cent spread where every other row held under one. It is
-# the cheapest row in the file on a slow core, so a scheduler hiccup is a large
-# fraction of it. Read it as "about a millisecond" and not as three decimals.
+# The numbers make the trap worse rather than better. Measured 2026-09-29, Mesa's
+# GLES came in *faster* than the DDK's Vulkan on every row -- 57.9 ms against
+# 64.0 on the full frame, 3.1 against 5.6 on the stroked path. It is also a
+# different renderer backend, so that gap attributes to neither the driver nor
+# the architecture, and the obvious reading of it would be wrong. Take these rows
+# only with a question about Mesa's pvr driver specifically, and label them.
+#
+# Checked against three fresh runs on the board it came from, and `--check`
+# passed three times over. The nine *device* rows hold to a third of a per cent
+# or better, with one exception below -- tighter than the Pi 5 manages, because
+# this board has no desktop running and one governor state.
+#
+# Two exceptions, both measured across those three runs rather than assumed, and
+# both carrying a tolerance in the rows below:
+#
+#   `vulkan / frame, gradient ground` spread 1.6 per cent where every other
+#   device row held under 0.4. Three of four runs agree at 43.15 and one came in
+#   at 43.85, so it is an outlier rather than a distribution, and 2.0 covers it.
+#   It is a single draw over every pixel, the most memory-bound row in the file.
+#
+#   Every `recording` row carries 5.0, matching the Pi 5's judgment on the same
+#   rows. They spread up to 4.3 per cent here -- `stroked field` 4.3,
+#   `distance field` 4.0, `tessellated, 4 samples` 2.9 -- because they are
+#   sub-millisecond figures on a slow core, where a scheduler hiccup is a large
+#   fraction of the measurement. An earlier sitting saw `recording / distance
+#   field`, the row the bench itself marks noisy, move between 0.872 and 1.003.
+#   Read that row as "about a millisecond" and not as three decimals.
+#
+# Worth knowing about the bar these tolerances sit under: `compare` only counts a
+# row as regressed when it is *slower*, so a row that comes back faster than its
+# tolerance never fails. Before the tolerances below were added, two recording
+# rows did exactly that in one of the three checks -- `distance field` 1.1 per
+# cent and `stroked field` 1.6 per cent under a one per cent bar -- and that
+# check passed. A passing `--check` is therefore not evidence that a row is
+# repeatable in both directions, only that it did not get slower.
 #
 # What this board is here to say, against `raspberry-pi-5-v3d.txt`: two tile
 # architectures agree that the analytic field costs more than the triangles it
@@ -33,28 +67,31 @@
 # here and 1.2 times on V3D. `docs/on-a-board.md` has both tables and what
 # follows from them.
 #
-# Last checked against the board: bf6bbbd
+# The frame is four rows rather than one as of 1ef0205, each adding one element
+# to the one before, so a difference between two of them is what that element
+# cost. Here the gradient ground alone is 43.1 ms of the 64.0 -- two thirds of
+# the frame in one full-screen draw -- and the blurred layer is the next 15.3.
+# The three cards and their shadows together are 5.6.
+#
+# Last checked against the board: 1ef0205
 #
 # cargo xtask bench --record
-#
-# The frame is measured in four stages as of this commit, and the three new rows
-# -- `frame, gradient ground`, `frame, plus cards`, `frame, plus shadows` -- are
-# not in this file. Nothing invented them: they want a run on the board. Until
-# that run, `--check` against this file reports them unmatched and exits
-# non-zero, which is the honest result and not a regression. `full frame, mixed
-# content` is unchanged and still the whole frame.
-#
 # device	configuration	median in milliseconds	[tolerance %]
-#
-recording	distance field, 1 sample	0.872
-recording	tessellated, 4 samples	2.132
-recording	tessellated, 1 sample	2.133
-recording	stroked field, 1 sample	0.876
-recording	stroked path, 1 sample	6.331
-recording	full frame, mixed content	0.157
-vulkan:0 PowerVR B-Series BXE-4-32	distance field, 1 sample	26.617
-vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 4 samples	26.874
-vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 1 sample	10.242
-vulkan:0 PowerVR B-Series BXE-4-32	stroked field, 1 sample	33.072
-vulkan:0 PowerVR B-Series BXE-4-32	stroked path, 1 sample	5.569
-vulkan:0 PowerVR B-Series BXE-4-32	full frame, mixed content	63.919
+recording	distance field, 1 sample	0.864	5.0
+recording	tessellated, 4 samples	1.914	5.0
+recording	tessellated, 1 sample	2.154	5.0
+recording	stroked field, 1 sample	0.881	5.0
+recording	stroked path, 1 sample	6.376	5.0
+recording	frame, gradient ground	0.079	5.0
+recording	frame, plus cards	0.098	5.0
+recording	frame, plus shadows	0.130	5.0
+recording	full frame, mixed content	0.159	5.0
+vulkan:0 PowerVR B-Series BXE-4-32	distance field, 1 sample	26.790
+vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 4 samples	26.844
+vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 1 sample	10.164
+vulkan:0 PowerVR B-Series BXE-4-32	stroked field, 1 sample	33.312
+vulkan:0 PowerVR B-Series BXE-4-32	stroked path, 1 sample	5.561
+vulkan:0 PowerVR B-Series BXE-4-32	frame, gradient ground	43.149	2.0
+vulkan:0 PowerVR B-Series BXE-4-32	frame, plus cards	45.498
+vulkan:0 PowerVR B-Series BXE-4-32	frame, plus shadows	48.717
+vulkan:0 PowerVR B-Series BXE-4-32	full frame, mixed content	64.019
