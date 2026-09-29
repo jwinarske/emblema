@@ -1612,3 +1612,95 @@ fn the_documents_count_the_drm_tests_correctly() {
         );
     }
 }
+
+/// The VisionFive 2's frame decomposition says what the baseline recorded.
+///
+/// Nothing read that baseline before this. Every figure quoted from that board
+/// -- and the section this guards derives four more from them by subtraction --
+/// was prose that no test could contradict, which is where the mistakes in this
+/// tree live. The stage table is the worst case of it: three of its four numbers
+/// exist only to be subtracted from each other, so a single stale row makes the
+/// attribution wrong while every individual figure still looks plausible.
+#[test]
+fn the_board_frame_stages_say_what_the_baseline_recorded() {
+    let baseline = |name: &str| {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/bench-baselines")
+                .join(name),
+        )
+        .unwrap_or_else(|e| panic!("reading {name}: {e}"))
+    };
+
+    let median = |text: &str, device: &str, configuration: &str| -> f64 {
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .find_map(|line| {
+                let mut fields = line.split('\t');
+                let named = fields.next()?;
+                if !named.starts_with(device) || fields.next()? != configuration {
+                    return None;
+                }
+                fields.next()?.parse().ok()
+            })
+            .unwrap_or_else(|| panic!("no {device} row for {configuration}"))
+    };
+
+    let vf2 = baseline("visionfive-2-powervr.txt");
+    let ground = median(&vf2, "vulkan:0 PowerVR", "frame, gradient ground");
+    let cards = median(&vf2, "vulkan:0 PowerVR", "frame, plus cards");
+    let shadows = median(&vf2, "vulkan:0 PowerVR", "frame, plus shadows");
+    let whole = median(&vf2, "vulkan:0 PowerVR", "full frame, mixed content");
+
+    let text = doc("on-a-board.md");
+    let says = |what: &str, needle: String| {
+        assert!(
+            text.contains(&needle),
+            "on-a-board.md no longer says {what} is {needle:?}; the baseline now \
+             records ground {ground}, cards {cards}, shadows {shadows}, whole \
+             {whole}"
+        );
+    };
+
+    // The table's own column, and then the differences it is there to support.
+    says("the ground", format!("| {ground:.3} ms | 1 |"));
+    says("the cards row", format!("| plus cards | {cards:.3} | 4 |"));
+    says(
+        "the shadows row",
+        format!("| plus shadows | {shadows:.3} | 7 |"),
+    );
+    says("the whole frame", format!("| {whole:.3} | 12 |"));
+    says("the ground's share", format!("**{ground:.3}**"));
+    says("what the cards cost", format!("| {:.3} |", cards - ground));
+    says(
+        "what the shadows cost",
+        format!("| {:.3} |", shadows - cards),
+    );
+    says(
+        "what the layer costs",
+        format!("| {:.3} |", whole - shadows),
+    );
+
+    // The prose restates three of those as rounded figures, which is where a
+    // stale number hides best: it reads fine and contradicts the table above it.
+    says(
+        "the ground's percentage",
+        format!("is {:.0} per cent of the frame", ground / whole * 100.0),
+    );
+    says(
+        "the cards and shadows together",
+        format!("together are {:.1} ms", shadows - ground),
+    );
+    says(
+        "the layer in prose",
+        format!("over the top is {:.1}", whole - shadows),
+    );
+
+    // And the cross-board ratio, which spans two files.
+    let pi = baseline("raspberry-pi-5-v3d.txt");
+    let v3d = median(&pi, "vulkan:0 V3D", "full frame, mixed content");
+    says(
+        "the ratio against V3D",
+        format!("{:.1} times V3D", whole / v3d),
+    );
+}

@@ -1181,8 +1181,17 @@ wrong here -- this image's software driver calls itself `softpipe`, the skip
 matches any part of the name a device gives itself, so the Pi's command benches
 the software rasterizer on this board. And the account must be in `render` or EGL
 cannot open `/dev/dri/renderD128`, falls back to softpipe, and reports a GLES
-figure that measures Mesa. Vulkan reaches the GPU by another node and does not
-care, which is why this board's baseline has Vulkan rows and no GLES ones.
+figure that measures Mesa.
+
+Vulkan does not depend on that group -- enumeration succeeded before it was set --
+but it is not indifferent to the node either: sampling `/proc/<pid>/fd` while
+`vulkaninfo` runs shows the ICD holding `renderD128` once it can. So the group is
+worth setting on both counts, and this entry used to say Vulkan "does not care",
+which was true only of whether it works.
+
+The account was added to `render` on 2026-09-29, and the consequence was not the
+six GLES rows this entry expected. See below: they arrived, and they are skipped
+for a different reason.
 
 ### What it measured, 2026-09-29 at bf6bbbd
 
@@ -1200,6 +1209,11 @@ state. The exception is `recording / distance field`, the row the bench marks
 noisy, which moved fifteen per cent between runs because it is a millisecond on a
 slow core and a scheduler hiccup is a large fraction of one.
 
+That count is six because the frame was one row at the time. It is nine now, and
+one of the three added rows does not hold to six tenths -- see below. The claim
+above is about these six and stays true of them; it was never a property of the
+board that would survive adding rows to it.
+
 | route | PowerVR BXE-4-32 | V3D 7.1.7.0 | draws |
 |---|---|---|---|
 | distance field, 1 sample | 26.617 ms | 8.852 ms | 160 |
@@ -1208,6 +1222,76 @@ slow core and a scheduler hiccup is a large fraction of one.
 | stroked field, 1 sample | 33.072 | 9.431 | 160 |
 | stroked path, 1 sample | **5.569** | **1.184** | 1 |
 | full frame, mixed content | 63.919 | 13.908 | 12 |
+
+### Two thirds of that frame is one gradient, measured 2026-09-29 at 1ef0205
+
+The 63.9 ms row above is a budget four times a 60 Hz period, and until this run
+nothing attributed it. The frame is now measured in four stages, each adding one
+element to the one before, so the difference between two rows is what that element
+cost. Same conditions as the run above -- desktop stopped, all four governors
+pinned, 46.0 C before and 50.5 C after, load 0.19, three runs and `--check` three
+times over.
+
+| stage | PowerVR BXE-4-32 | draws | this element cost |
+|---|---|---|---|
+| gradient ground | 43.149 ms | 1 | **43.149** |
+| plus cards | 45.498 | 4 | 2.349 |
+| plus shadows | 48.717 | 7 | 3.219 |
+| full frame, mixed content | 64.019 | 12 | 15.302 |
+
+**The gradient ground is 67 per cent of the frame in a single draw.** Three
+rounded rectangles and three blurred shadows together are 5.6 ms, or under nine
+per cent, and the blurred layer over the top is 15.3.
+
+That is a statement about this scene at this size before it is one about the
+renderer: the ground is one draw covering every one of 2.07 million pixels, and
+the cards cover a fraction of it, so the two are not comparable per element. What
+it does say is where to look, and it is not the shapes or the blurs that put
+this board over budget. A full-screen tabulated gradient is one draw that reads a
+ramp and writes every pixel, which is the most bandwidth the frame asks for in one
+place, on the slowest part measured here -- 4.6 times V3D on this same frame.
+
+It also relocates the earlier finding. The draw-count work above moved the
+`distance field` row by nothing at all here, and this says why that was never
+going to rescue the frame: the frame's cost is not in its draw count either. One
+draw is two thirds of it.
+
+Read the deltas only within one device on one run. The `gradient ground` row is
+the one device row on this board that does not hold to a third of a per cent --
+it spread 1.6 across three runs where every other held under 0.4 -- so it carries
+a 2.0 tolerance in the baseline, and the differences taken from it are worth about
+one decimal.
+
+### Mesa's GLES arrived on this board and is still not wanted in the baseline
+
+The `render` group turned GLES on, and the rows it produces are a trap the
+baseline's own columns cannot show.
+
+Both backends report the device as `PowerVR B-Series BXE-4-32`. They are not the
+same stack. Vulkan is Imagination's DDK (`libVK_IMG.so`). GLES is Mesa:
+`EGL_LOG_LEVEL=debug` shows the loader opening
+`/usr/lib/riscv64-linux-gnu/dri/pvr_dri.so`, Mesa's in-progress PowerVR Gallium
+driver, because `50_mesa.json` is the only EGL vendor on this image and there is
+no IMG GLES. On the Pi 5 a `vulkan` row and a `gles` row are one Mesa either
+side; here they would cross a vendor boundary under identical device names.
+
+The numbers make that worse rather than better:
+
+| route | gles (Mesa pvr) | vulkan (IMG DDK) |
+|---|---|---|
+| tessellated, 1 sample | 7.289 ms | 10.181 |
+| stroked path, 1 sample | 3.100 | 5.567 |
+| full frame, mixed content | 57.940 | 64.025 |
+
+Mesa's GLES is *faster* on every row. The tempting reading -- that the community
+driver beats the vendor's -- is not available: this is also a different renderer
+backend, with its own pass setup and its own sample handling, so the gap
+attributes to neither the driver nor the architecture. Two variables moved.
+
+So `--skip gles` joins `--skip softpipe` in the documented invocation, and the
+baseline stays Vulkan-only. Take a GLES row here only with a question about
+Mesa's pvr driver specifically, and label it as that driver rather than as this
+board.
 
 ### The field costs more than the triangles on both, and that is now a fact about tiling
 
