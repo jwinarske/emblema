@@ -1,9 +1,25 @@
 # Where this renderer knowingly differs from upstream Impeller
 
-Technical parity with upstream Impeller is the criterion this project decides
-against. This file is the list of places it does not have it, why, and what the
-difference costs — so that a divergence is a decision somebody made and can
-find, rather than something discovered later by whoever compares two pictures.
+Upstream Impeller is the authority on *what* this renderer must express — the
+`dart:ui` operations, their semantics, and the composition rules behind them. It
+is not the authority on *how* that is reached. Rasterization strategy, sample
+count and batching are answered against the devices this renderer targets, which
+are not the devices upstream targets; and where upstream's own choice is an
+artifact of its hardware or a known infelicity, this one may choose differently
+and say so here.
+
+That distinction is what separates the entries below from a list of debts. The
+fill entry is the clearest case: upstream reaches a filled path through
+stencil-then-cover and this renderer triangulates, because every pipeline here
+compiles ahead of time and nothing requires compute, which is what lets one
+binary serve any Vulkan 1.1 or GLES 3.0 device. Neither is a defect in the other.
+Linear light is the other shape the distinction takes — a deliberate improvement
+rather than a device constraint, and the reason a comparison of mixed colors can
+only be a comparison of shape.
+
+This file is the list of places the two differ, why, and what the difference
+costs — so that a divergence is a decision somebody made and can find, rather
+than something discovered later by whoever compares two pictures.
 
 Two things this file is not. It is not the list of what is *unbuilt*: that is
 [`parity.md`](parity.md) for the `dart:ui` surface and

@@ -131,12 +131,16 @@ could assemble, and every row claiming something works names the scene or test
 that renders it.
 
 [`docs/non-parity.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/non-parity.md) is the other half of that question.
-Technical parity with upstream Impeller is what this project decides against,
-so the places it knowingly does not have parity are worth being able to find in
-one list rather than inferring from a diff. Each entry says what differs, why,
-and what the difference costs. The deepest is that this pipeline works in linear
-light and upstream's does not, which is why a comparison against upstream can
-only be a comparison of shape wherever two colors are mixed.
+Upstream Impeller is what this project decides against for *what* a renderer
+must express, and not for *how* it is reached: strategy answers to the devices
+this one targets, which are not the devices upstream targets. So the places the
+two knowingly differ are worth finding in one list rather than inferring from a
+diff. Each entry says what differs, why, and what the difference costs. A filled
+path is the clearest — stencil-then-cover there, triangulated here, so that one
+binary serves any Vulkan 1.1 or GLES 3.0 device. The deepest is that this
+pipeline works in linear light and upstream's does not, which is why a
+comparison against upstream can only be a comparison of shape wherever two
+colors are mixed.
 
 ## Building
 
