@@ -754,9 +754,11 @@ one, and a cover whose bounds must be right.
 
 What this project can say about the trade is narrower than it would like, and the
 distinction matters because it is easy to overstate. It has never implemented
-stencil-then-cover and has therefore never timed it. **There is no measurement
-here of stencil-then-cover against triangulation, and no claim about which is
-faster.** What is measured is the neighboring question -- moving coverage from
+stencil-then-cover and has therefore never timed it. **There is still no
+measurement here of stencil-then-cover against triangulation, and no claim about
+which is faster** -- what is bounded below is the largest CPU saving it could
+possibly offer, which is not the same thing. What is measured beside it is the
+neighboring question -- moving coverage from
 vertices into a fragment shader -- because this renderer has both routes for a
 rounded rectangle and times all four. On a Raspberry Pi 5's V3D, from the
 committed baseline:
@@ -774,6 +776,41 @@ for the fill and eight times more for the stroke. That is why the analytic route
 here are narrow rather than universal: on a tile-based part the saving reverses,
 and a renderer aimed at such parts cannot take the CPU win as free. It says
 nothing about the stencil, which costs a pass rather than a shader.
+
+**What the stencil could save, as a ceiling.** The two designs do the same
+flattening; they differ in what follows it, and only for concave paths, because
+`fill` sends a single convex subpath to a fan and upstream sends one to
+`TessellateConvex`. So the CPU stencil-then-cover could save is bounded above by
+the time between flattening a path and filling it, and nothing in the rounded
+rectangle above reaches that route at all -- it tessellates `fan=1, general=0`,
+which is why the rows above cannot show this cost.
+
+Measured on real map geometry rather than a synthetic shape, since a map is the
+workload where concave fills dominate: one Berlin z14 vector tile, 527 polygon
+features, 1,185 rings, 13,795 points, 38 of them multi-ring.
+
+| device | flatten | flatten + fill | triangulation | share |
+|---|---|---|---|---|
+| x86-64 workstation | 0.102 ms | 1.585 ms | 1.483 ms | 93.6% |
+| SA8155P, Kryo | 0.510 | 5.294 | 4.784 | 90.4% |
+| Raspberry Pi 5, A76 | 0.479 | 5.668 | 5.189 | 91.6% |
+| VisionFive 2, U74 | 2.291 | 21.300 | 19.010 | 89.2% |
+
+Two readings, and the second is the one that matters. The *share* barely moves --
+about nine tenths of the phase on every device from an x86-64 desktop to an
+in-order U74 -- so the ceiling is a property of the work rather than of the part.
+The *absolute* does move, by 3.7x between the two extremes, and nineteen
+milliseconds for one tile is past a whole frame at sixty hertz.
+
+Four things that keep this from being a case for stencil-then-cover on its own.
+It is a ceiling and not a saving: the stencil trades that CPU for a second draw
+and an attachment, which a tiler does not give away. Vector tile geometry carries
+no curves, so flattening here is line-segment work and cheap, and a curve-heavy
+path would shift the share down. A tile is tessellated once and retained, so this
+is a load cost amortized over frames rather than a per-frame one -- it would
+appear as a stall when a pan lands many tiles at once, not as a lower frame rate.
+And these are static-musl builds, which run about fourteen per cent slower than
+glibc on the workstation where both were timed; the shares are unaffected.
 
 **Impact.** A concave fill costs a CPU triangulation here and two draws plus a
 stencil attachment upstream, and which is dearer is unmeasured on any hardware
