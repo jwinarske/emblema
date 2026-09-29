@@ -1124,6 +1124,152 @@ at **four** cards and misses 119 blanks at five, so what the published figure ha
 hand is more than one card's worth of work and less than two. A frame budget is not
 the same as a frame rate, and this is the frame budget.
 
+## A third board, and two tile GPUs disagreeing
+
+A StarFive VisionFive 2 -- JH7110, four SiFive U74 cores, Imagination PowerVR
+B-Series BXE-4-32 -- answers a question the other two boards could not. V3D and
+Mali are both tile architectures, so a conclusion drawn from one and confirmed on
+the other reads as a fact about tile GPUs. PowerVR is the third, and it is the
+oldest and most committed of the tile designs: deferred, with hidden-surface
+removal. If a conclusion is about tiling rather than about V3D, it should hold
+here.
+
+One does and one does not.
+
+### Getting a binary onto it, which the Pi's recipe does not do
+
+The sysroot instructions at the top of this file assume the board can supply one.
+This image cannot: it is Ubuntu 24.04 with no toolchain, so
+`/usr/lib/riscv64-linux-gnu` holds `libc.so.6` and no `libc.so`, no `Scrt1.o`,
+and there is no `/usr/lib/gcc/riscv64-linux-gnu` at all. Nothing to rsync. The
+host's `riscv64-linux-gnu-gcc` is no better off -- `-print-file-name=Scrt1.o`
+echoes the name back, which is how that compiler says it has no C library.
+
+What worked, and is the recipe for any board whose image carries no development
+packages: read the board's glibc version, then assemble the sysroot on the host
+from the distribution's own packages for that exact version.
+
+```sh
+S=$HOME/.cache/starfive-sysroot
+P=http://ports.ubuntu.com/ubuntu-ports/pool/main/g/glibc
+# `ldd --version` on the board said 2.39-0ubuntu8.9; match it rather than approximate.
+curl -fsSLO --output-dir /tmp "$P/libc6_2.39-0ubuntu8.9_riscv64.deb"
+curl -fsSLO --output-dir /tmp "$P/libc6-dev_2.39-0ubuntu8.9_riscv64.deb"
+dpkg-deb -x /tmp/libc6_2.39-0ubuntu8.9_riscv64.deb "$S"
+dpkg-deb -x /tmp/libc6-dev_2.39-0ubuntu8.9_riscv64.deb "$S"
+# `libgcc_s.so.1` ships in a package whose version does not track glibc's; the
+# board already has the file, and one `scp` is cheaper than finding the deb.
+scp user@starfive.lan:/usr/lib/riscv64-linux-gnu/libgcc_s.so.1 \
+  "$S/usr/lib/riscv64-linux-gnu/"
+ln -sfn libgcc_s.so.1 "$S/usr/lib/riscv64-linux-gnu/libgcc_s.so"
+ln -sfn usr/lib "$S/lib"
+
+export CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER=riscv64-linux-gnu-gcc
+export CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS="\
+-C link-arg=--sysroot=$S \
+-C link-arg=-B$S/usr/lib/riscv64-linux-gnu \
+-C link-arg=-L$S/usr/lib/riscv64-linux-gnu"
+
+cargo build -p xtask --release --target riscv64gc-unknown-linux-gnu
+```
+
+Three link arguments rather than the Pi's four: there is no gcc directory to add,
+because `libgcc_s` went into the multiarch directory beside libc instead.
+
+Two things about the invocation there. `--skip llvmpipe` is the Pi's flag and is
+wrong here -- this image's software driver calls itself `softpipe`, the skip
+matches any part of the name a device gives itself, so the Pi's command benches
+the software rasterizer on this board. And the account must be in `render` or EGL
+cannot open `/dev/dri/renderD128`, falls back to softpipe, and reports a GLES
+figure that measures Mesa. Vulkan reaches the GPU by another node and does not
+care, which is why this board's baseline has Vulkan rows and no GLES ones.
+
+### What it measured, 2026-09-29 at bf6bbbd
+
+Desktop stopped, all four governors pinned to `performance` -- which matters more
+here than anywhere: `ondemand` idles these cores at 750 MHz against 1.5 GHz
+pinned, so an unpinned run halves the clock rather than nudging it. Board at 44.5
+C before and 46.5 C after, no heatsink, load 0.11. Three runs, then `--check`
+three times over.
+
+**It is the steadiest board here.** All six timed rows inside six tenths of a per
+cent across three runs, against the Pi 5's three tenths on its best rows and
+worse on others, and with none of the bimodality that makes the Pi want three
+runs a side. The reason is dull and worth copying: no desktop, and one governor
+state. The exception is `recording / distance field`, the row the bench marks
+noisy, which moved fifteen per cent between runs because it is a millisecond on a
+slow core and a scheduler hiccup is a large fraction of one.
+
+| route | PowerVR BXE-4-32 | V3D 7.1.7.0 | draws |
+|---|---|---|---|
+| distance field, 1 sample | 26.617 ms | 8.852 ms | 160 |
+| tessellated, 4 samples | 26.874 | 4.525 | 1 |
+| tessellated, 1 sample | **10.242** | **3.688** | 1 |
+| stroked field, 1 sample | 33.072 | 9.431 | 160 |
+| stroked path, 1 sample | **5.569** | **1.184** | 1 |
+| full frame, mixed content | 63.919 | 13.908 | 12 |
+
+### The field costs more than the triangles on both, and that is now a fact about tiling
+
+A filled rounded rectangle through the analytic field costs 2.60 times the
+tessellated one here and 2.40 times on V3D. Stroked, it is 5.94 times here and
+7.96 on V3D. Two unrelated tile architectures, the same direction and nearly the
+same magnitude.
+
+What makes that more than a coincidence is that the mechanism is already written
+down in the bench's own source: the two routes do not submit the same number of
+draws. Every tessellated shape carries the same solid material so the batch
+merges all hundred and sixty into one; an analytic shape carries its geometry
+inside its material and merges with nothing. The comparison is one draw against a
+hundred and sixty, and reading it as fragment work against fragment work is
+reading it wrong.
+
+So this is not an argument for choosing the route per device. It is an argument
+that the analytic route is paying an avoidable cost on every device measured, and
+that moving a shape's parameters out of its material -- into vertex attributes or
+an instance buffer, where they would merge -- is worth more than any policy that
+picks the cheaper of two evils.
+
+### Multisampling is where they disagree, and it inverts
+
+Four samples against one, on the same tessellated shapes:
+
+| board | 4 samples | 1 sample | cost of MSAA |
+|---|---|---|---|
+| V3D 7.1.7.0 | 4.525 ms | 3.688 ms | **1.23x** |
+| PowerVR BXE-4-32 | 26.874 ms | 10.242 ms | **2.62x** |
+
+On V3D four samples are nearly free, which is the property that makes
+multisampling the obvious way to antialias on a tiler: the samples live in tile
+memory and resolve on chip. On PowerVR they cost more than twice the frame.
+
+This is the entry to point at when someone -- including whoever wrote the
+sentence above -- generalizes from one tile GPU to tile GPUs. "Cheap on a tiler"
+was a V3D fact wearing an architecture's clothes. Sample count is therefore the
+one decision in this renderer that genuinely wants to be a property of the device
+rather than of the code, and it is currently `samples: 4` written into
+`Canvas::new`, with `SampleCounts::max` called from nothing outside tests.
+
+### The number that outranks the routes
+
+A mixed frame of 1080p content costs **63.9 ms** here: sixteen frames a second,
+nearly four times a sixty-hertz budget, where the Pi 5 does the same frame in
+13.9. Tuning the fill route on the hundred-and-sixty-rectangle scene moves
+sixteen milliseconds in a synthetic frame; this is the realistic one, it is
+reported as a single number over twelve draws, and nothing attributes it.
+
+That is the case for per-route rows in the bench rather than for per-device
+policy in the renderer. A blur, a shadow, a tabulated gradient and a layer are
+all in that frame and none of them has a row of its own, so on the board where
+the frame is furthest over budget there is no way to say what it is spending on.
+
+Two smaller findings from the same runs. These cores are about ten times slower
+per core than the Pi 5's A76 -- the field's recording row is 0.87 ms here against
+0.099 -- and the stroker is the most expensive recording row in the file at 6.33
+ms, eight times the tessellated fill's, which on a slow core is a cost in its own
+right rather than a detail of the comparison. And this device reports no
+advanced-blend support, so all fifteen of those modes refuse here.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and

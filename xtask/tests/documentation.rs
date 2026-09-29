@@ -1159,22 +1159,45 @@ fn the_timing_baseline_records_the_commit_it_was_checked_against() {
     // Checked here because the line is a comment in a data file, which nothing
     // else would notice the loss of. A baseline that has stopped saying when it
     // was checked reports "current" forever.
-    let text = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/bench-baselines/raspberry-pi-5-v3d.txt"),
-    )
-    .expect("the Pi 5 baseline");
-    let sha = text
-        .lines()
-        .find_map(|line| line.strip_prefix("# Last checked against the board: "))
-        .expect(
-            "the baseline should record the commit a board run last passed \
-             against; see `baseline_drift` in xtask",
-        )
-        .trim();
+    // Every baseline in the directory, not the one that happened to exist when
+    // this was written. A second board arrived and its file was held to nothing:
+    // the convention is the directory's, so the test walks it.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/bench-baselines");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(&dir)
+        .expect("the baseline directory")
+        .flatten()
+    {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "txt") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let text = std::fs::read_to_string(&path).expect("a baseline");
+        let sha = text
+            .lines()
+            .find_map(|line| line.strip_prefix("# Last checked against the board: "))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{name} should record the commit a board run last passed against; \
+                     see `baseline_drift` in xtask"
+                )
+            })
+            .trim();
+        assert!(
+            sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "{name}'s checked-at line should hold a commit hash, and holds {sha:?}"
+        );
+        checked += 1;
+    }
     assert!(
-        sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
-        "that line should hold a commit hash, and holds {sha:?}"
+        checked > 0,
+        "no baselines found in {}, so this read nothing and would pass on anything",
+        dir.display()
     );
 }
 

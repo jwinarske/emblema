@@ -1,0 +1,51 @@
+# A StarFive VisionFive 2 (JH7110), Imagination PowerVR B-Series BXE-4-32,
+# Vulkan 1.3.225 through Imagination's own driver, release build, no heatsink
+# fitted, 44.5 C before and 46.5 C after.
+#
+#   cargo xtask bench --skip softpipe --check tests/bench-baselines/visionfive-2-powervr.txt
+#
+# `--skip softpipe` and not `--skip llvmpipe`: this image's software driver calls
+# itself softpipe, and the skip matches on any part of the name a device gives
+# itself, so the Pi's invocation would have benched the software rasterizer here.
+#
+# GLES is absent rather than skipped for a reason worth stating. The account
+# running this is in `video` but not `render`, so EGL cannot open
+# `/dev/dri/renderD128` and falls back to Mesa softpipe -- which is a real
+# measurement of nothing. Vulkan reaches the GPU by another node and is
+# unaffected. Add the account to `render` and this file gains six rows.
+#
+# Checked against three fresh runs on the board it came from, all six timed rows
+# inside six tenths of a per cent in every one of them, and `--check` then passed
+# three times over. That is tighter than the Pi 5 manages and was not expected:
+# the board has no desktop running and one governor state, where the Pi has more
+# of both.
+#
+# One row does not deserve that confidence. `recording / distance field` is the
+# row the bench itself marks noisy, and it moved between 0.872 and 1.003 across
+# runs -- a fifteen per cent spread where every other row held under one. It is
+# the cheapest row in the file on a slow core, so a scheduler hiccup is a large
+# fraction of it. Read it as "about a millisecond" and not as three decimals.
+#
+# What this board is here to say, against `raspberry-pi-5-v3d.txt`: two tile
+# architectures agree that the analytic field costs more than the triangles it
+# replaces, and disagree about multisampling. The field is 2.6 times the
+# tessellated fill here and 2.4 times on V3D; four samples cost 2.6 times one
+# here and 1.2 times on V3D. `docs/on-a-board.md` has both tables and what
+# follows from them.
+#
+# Last checked against the board: bf6bbbd
+#
+# cargo xtask bench --record
+# device	configuration	median in milliseconds	[tolerance %]
+recording	distance field, 1 sample	0.872
+recording	tessellated, 4 samples	2.132
+recording	tessellated, 1 sample	2.133
+recording	stroked field, 1 sample	0.876
+recording	stroked path, 1 sample	6.331
+recording	full frame, mixed content	0.157
+vulkan:0 PowerVR B-Series BXE-4-32	distance field, 1 sample	26.617
+vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 4 samples	26.874
+vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 1 sample	10.242
+vulkan:0 PowerVR B-Series BXE-4-32	stroked field, 1 sample	33.072
+vulkan:0 PowerVR B-Series BXE-4-32	stroked path, 1 sample	5.569
+vulkan:0 PowerVR B-Series BXE-4-32	full frame, mixed content	63.919
