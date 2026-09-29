@@ -645,59 +645,58 @@ the clamp is invisible, because the attachment would have clipped the sum anyway
 written to fail if the clamp comes out again so that whoever notices the
 inconsistency finds the cost recorded rather than rediscovering it.
 
-## 17. A morphology radius is in device pixels; upstream's is a local length
+## 17. A morphology radius turns and stretches with the transform upstream; here it only scales
 
-**What differs.** `ImageFilter.dilate` and `ImageFilter.erode` take a radius, and
-the two renderers disagree about what space it is in. Upstream's is local: read at
-master on 2026-09-23, `DirectionalMorphologyFilterContents::RenderFilter` builds
-`entity.GetTransform() * effect_transform.Basis()`, applies it to the radius, and
-rounds the length of the result to whole texels for the shader. So a dilated layer
-under `canvas.scale(3.0)` spreads three times as far. Here the radius is device
-pixels and nothing scales it: `Layer::scaled_by` multiplies `blur` and
-`backdrop_blur` by the layer's scale and leaves `morphology` alone, deliberately.
+**What differs.** The larger half of this entry is closed. A dilate or erode
+radius used to be device pixels here while upstream's was a local length, so a
+dilated layer under a scale of two spread twice as far there and the same
+distance here. Since 2026-09-29 the radius is a local length in both:
+`Layer::scaled_by` converts it with the sigmas, `ImageFilter::scaled_by` converts
+a dilation handed over as a filter, and `Morphology::applied_radius` rounds to
+whole device texels where the device radius is known.
 
-**Why.** Not a decision so much as a claim that turned out to be false.
-`architecture.md` records the conversion of every blur from device space to local,
-done because a card lifting under a scale kept a blur the same size while its
-content grew -- and it exempted morphology on the stated grounds that "upstream has
-no morphology to be in parity with". Upstream has both filters, so the exemption
-rested on nothing, and the one filter left in the old convention is the one the
-section was written to fix.
+What remains is the *shape* of the conversion. Read at `flutter/flutter` master
+`fab99153`, upstream builds two directional passes -- X carrying `radius_x` with
+direction `Point(1, 0)`, Y carrying `radius_y` with `Point(0, 1)` -- and each one
+transforms its own direction vector:
 
-It was not simply flipped along with the blur, and the reason is worth stating
-rather than leaving as an omission. The radius is rounded to whole texels at
-construction, in device space, and `architecture.md` explains why that rounding
-must happen in the one place both the shader and the layer's bounds read the
-radius from: a structuring element is a set of sample positions, and a radius
-rounded for one reader and not the other grows the picture past what the target
-has room for. Making the radius local moves the rounding after the scale, which
-means it no longer happens where the value is stored, and the bounds and the pass
-have to be shown to still agree. That is a change with a correctness argument
-attached, not a multiplication.
+```
+transform          = entity.GetTransform() * effect_transform.Basis()
+transformed_radius = transform.TransformDirection(direction_ * radius_.radius)
+frag_info.radius   = round(transformed_radius.GetLength())
+frag_info.uv_offset = ...TransformDirection(transformed_radius).Normalize() / extent
+```
 
-**Impact.** A dilate or erode inside a scaled layer reaches the wrong distance
-compared with upstream -- unchanged by the scale where upstream's grows with it --
-and the error is proportional to the scale, so it is invisible at one and total at
-ten. Nothing noticed until this entry was written: every morphology scene in the catalog
-was drawn without a scale, rotation or concat, all six of them, so the corpus
-comparison agreed with itself across backends and devices while both differed from
-upstream.
+So upstream takes a *length per axis* from the transformed vector, and walks each
+pass along the transformed *direction*. Here the conversion is a single scalar --
+`max_scale_of(transform)`, the same factor the blur uses -- and
+`morphology_passes` steps along `[1/width, 0]` and `[0, 1/height]`, which are the
+target's own axes rather than the caller's.
 
-The pair that notices now is `layer-dilated` and `layer-dilated-under-scale` --
-the same cross at half the size under a scale of two, so it lands on exactly the
-pixels the unscaled one covers and the dilation distance is the only thing left
-that can separate them. `the_dilation_under_a_scale_reaches_the_same_distance`
-reads the radius out of the recording and asserts they agree, which they do here
-and would not upstream. It is written to fail when the convention is flipped, and
-says in its own message to replace it with the doubled assertion rather than delete
-it.
+**Why.** The scalar is what blur already uses, so morphology matching it makes
+the two filters consistent here, which was worth more than matching upstream on a
+third axis of behavior in the same change. The axis-aligned step is the same gap
+`non-parity.md` 14 records for the blur, except the blur closed it:
+`BlurBasis::of` gives the transformed unit directions and the blur walks them.
+Morphology could use the same basis; it does not yet, and that is the work this
+entry now describes rather than the radius.
 
-Worth knowing what does *not* catch it, since it looks as though it should: the
-cost baseline records identical rows for the two scenes. A pass is emitted per
-`MORPHOLOGY_TAPS` texels and that constant is thirty-two, so eight and sixteen both
-fit in one pass each way and the pass count never moves. The same arithmetic means
-the two scenes are very likely pixel-identical, so the image comparison is not the
-detector either. The radius has to be read, not counted.
+**Impact.** The two agree under a uniform scale, which is nearly every use and is
+what the corpus pair exercises. They part in two cases. Under an **anisotropic**
+scale -- `scale(2, 5)` on a radius of 8 -- upstream reaches 16 along one axis and
+40 along the other, where this reaches 40 along both, because a single factor
+cannot carry two. Under a **rotation** the dilation here still spreads along the
+screen's axes while upstream's spreads along the caller's, so a rotated square
+dilates to a square in the wrong orientation.
+
+`the_dilation_under_a_scale_reaches_twice_as_far` pins the part that is fixed,
+over the corpus pair `layer-dilated` and `layer-dilated-under-scale`, and
+`a_morphology_radius_is_the_same_length_either_way_and_scales` pins that both
+spellings agree. Neither covers the anisotropic or rotated case: closing that
+wants a corpus scene with a non-uniform transform, which does not exist yet, and
+the same reasoning as before applies -- write the scene before the fix or the
+change is unmeasured.
+
 
 ## 18. A filled path is triangulated here; upstream stencils and covers it
 

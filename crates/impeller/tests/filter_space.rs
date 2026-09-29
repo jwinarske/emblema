@@ -203,13 +203,19 @@ fn a_composed_blur_scales_both_halves() {
     );
 }
 
-/// A morphology radius is the same length in both spellings, and is not scaled.
+/// A morphology radius is the same length in both spellings, and scales.
 ///
-/// The divergence from upstream this deliberately keeps -- see the file header and
-/// `docs/non-parity.md` 17. What matters here is that the two spellings agree with
-/// each other, so the divergence is one fact rather than two.
+/// It did not scale until 2026-09-29, which made it the one length here that
+/// was device pixels while every other was the caller's. The entry that
+/// recorded the divergence rested on upstream having no morphology to be in
+/// parity with, and upstream has `dilate` and `erode`.
+///
+/// Both halves matter and they fail differently. The two spellings agreeing is
+/// what keeps a dilation from meaning one thing through a `Layer` field and
+/// another through an `ImageFilter` -- the defect this whole file exists for.
+/// The doubling is what keeps the radius a length in the caller's space.
 #[test]
-fn a_morphology_radius_is_the_same_length_either_way_and_is_not_scaled() {
+fn a_morphology_radius_is_the_same_length_either_way_and_scales() {
     let radius = 12.0f32;
     let own = radii(|canvas| {
         canvas.save_layer(Layer::opacity(1.0).with_morphology(Morphology::dilate(radius, radius)));
@@ -233,11 +239,12 @@ fn a_morphology_radius_is_the_same_length_either_way_and_is_not_scaled() {
          different lengths"
     );
     assert!(
-        own.iter().all(|reached| *reached == radius),
-        "the radius is device pixels in both spellings, so a scale of two must \
-         leave {radius} alone: {own:?}. If it was deliberately made a local \
-         length, docs/non-parity.md 17 and \
-         the_dilation_under_a_scale_reaches_the_same_distance are what record the \
-         convention this asserts."
+        own.iter().all(|reached| *reached == radius * 2.0),
+        "the radius is a length in the caller's space, so a scale of two makes \
+         {radius} reach {}: {own:?}. If it was deliberately returned to device \
+         pixels, docs/non-parity.md 17 and \
+         the_dilation_under_a_scale_reaches_twice_as_far record the convention \
+         this asserts.",
+        radius * 2.0
     );
 }

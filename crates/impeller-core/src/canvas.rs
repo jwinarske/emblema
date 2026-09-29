@@ -685,20 +685,18 @@ impl Morphology {
         }
     }
 
-    /// Whole texels, not negative, and finite.
+    /// Not negative, and finite.
     ///
-    /// Rounded here rather than in the shader so that the radius a caller can
-    /// observe -- through the bounds a dilated layer takes, which grow by it --
-    /// is the radius that actually gets applied. A structuring element is a set
-    /// of sample positions; there is no half of one to keep.
+    /// No longer rounded here, and the reason is the whole of the change that
+    /// made the radius a local length. A structuring element is a set of sample
+    /// positions and there is no half of one to keep -- but the positions are
+    /// *device* texels, and this runs on the caller's number before any
+    /// transform has been applied to it. Rounding a local length rounds the
+    /// wrong quantity: at a scale of three, a radius of 1.5 rounded here becomes
+    /// two and then six, where the sample positions it is naming are four and a
+    /// half. `applied_radius` rounds instead, where the device radius is known.
     fn sane(x: f32, y: f32) -> [f32; 2] {
-        let one = |v: f32| {
-            if v.is_finite() {
-                v.max(0.0).round()
-            } else {
-                0.0
-            }
-        };
+        let one = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
         [one(x), one(y)]
     }
 
@@ -739,7 +737,13 @@ impl Morphology {
     pub fn applied_radius(&self, extent: Extent2D) -> [f32; 2] {
         let one = |radius: f32, along: u32| {
             if radius.is_finite() {
-                radius.max(0.0).min(along as f32)
+                // Rounded here rather than at construction, because this is the
+                // first point at which the number is in device texels: the
+                // caller states a local length and `Layer::scaled_by` converts
+                // it. A structuring element is a set of sample positions and
+                // there is no half of one, so the rounding still happens -- just
+                // where the positions are.
+                radius.max(0.0).min(along as f32).round()
             } else {
                 0.0
             }
@@ -979,6 +983,14 @@ impl Layer {
         Self {
             blur: self.blur * scale,
             backdrop_blur: self.backdrop_blur * scale,
+            // A morphology radius is a length in the caller's space too, and was
+            // the one filter left out of this conversion -- on the stated
+            // grounds that upstream had no morphology to be in parity with,
+            // which was wrong. See `non-parity.md` 17.
+            morphology: self.morphology.map(|m| Morphology {
+                radius: [m.radius[0] * scale, m.radius[1] * scale],
+                ..m
+            }),
             ..self
         }
     }

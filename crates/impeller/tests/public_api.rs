@@ -9737,18 +9737,39 @@ fn composing_with_a_filter_that_does_nothing_is_the_other_filter() {
         ImageFilter::compose(ImageFilter::None, ImageFilter::None).is_identity(),
         "two of them are still nothing"
     );
-    // A radius below half a texel rounds to nothing, so it folds too -- the
-    // identity test is the filter's own, not a comparison against `None`.
+    // A radius of zero folds too -- the identity test is the filter's own, not a
+    // comparison against `None`.
     assert_eq!(
         ImageFilter::compose(
             plain.clone(),
             ImageFilter::Dilate {
-                radius_x: 0.2,
-                radius_y: 0.2
+                radius_x: 0.0,
+                radius_y: 0.0
             }
         ),
         plain,
-        "a radius that rounds to no texels is a filter that does nothing"
+        "a radius of zero is a filter that does nothing"
+    );
+    // But a small *positive* radius does not fold, and this assertion is the
+    // inverse of the one that stood here. It used to say a radius below half a
+    // texel rounds to nothing and folds. That was true while the radius was
+    // device pixels and stopped being true when it became a length in the
+    // caller's space: a fifth of a unit under a scale of ten is two device
+    // texels, and folding it away would discard a filter the caller can see.
+    // Whether a radius rounds to nothing is now decided in
+    // `Morphology::applied_radius`, after the transform has been applied.
+    let small = ImageFilter::Dilate {
+        radius_x: 0.2,
+        radius_y: 0.2,
+    };
+    assert!(
+        !small.is_identity(),
+        "a small positive radius is a filter until a scale says otherwise"
+    );
+    assert_ne!(
+        ImageFilter::compose(plain.clone(), small),
+        plain,
+        "so composing with it keeps both halves"
     );
 }
 

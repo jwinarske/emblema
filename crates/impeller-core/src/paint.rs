@@ -380,12 +380,14 @@ impl ImageFilter {
     /// received it, which is the defect this closes rather than a difference
     /// between the two spellings.
     ///
-    /// **Only the blur scales**, and the rest is not an oversight:
+    /// **The lengths scale and the rest does not**, which is not an oversight:
     ///
-    /// - A morphology radius is device pixels here on purpose, and diverges from
-    ///   upstream in exactly that way -- `docs/non-parity.md` 17 has the entry
-    ///   and the pinning test. Scaling it here and not in `Layer::scaled_by`
-    ///   would trade a stated divergence for an unstated inconsistency.
+    /// - A blur's deviations and a morphology's radii are lengths in the
+    ///   caller's space. The morphology pair used to be left out, on the reading
+    ///   that its radius was device pixels here on purpose; that reading rested
+    ///   on upstream having no morphology, which was wrong, and both now scale.
+    ///   `Layer::scaled_by` does the same to the fields a `Copy` layer carries,
+    ///   so the two spellings of a dilation agree.
     /// - A matrix is not a length. It moves a finished image, and the transform
     ///   is already in the space the image is in.
     /// - A color filter and a caller's program carry no lengths at all.
@@ -402,16 +404,19 @@ impl ImageFilter {
                 sigma_x: sigma_x * scale,
                 sigma_y: sigma_y * scale,
             },
+            Self::Dilate { radius_x, radius_y } => Self::Dilate {
+                radius_x: radius_x * scale,
+                radius_y: radius_y * scale,
+            },
+            Self::Erode { radius_x, radius_y } => Self::Erode {
+                radius_x: radius_x * scale,
+                radius_y: radius_y * scale,
+            },
             Self::Compose { outer, inner } => Self::Compose {
                 outer: Box::new(outer.scaled_by(scale)),
                 inner: Box::new(inner.scaled_by(scale)),
             },
-            Self::None
-            | Self::Matrix { .. }
-            | Self::Dilate { .. }
-            | Self::Erode { .. }
-            | Self::Color(_)
-            | Self::Runtime { .. } => self,
+            Self::None | Self::Matrix { .. } | Self::Color(_) | Self::Runtime { .. } => self,
         }
     }
 
@@ -429,11 +434,17 @@ impl ImageFilter {
             Self::Matrix { transform } => {
                 !transform.is_finite() || *transform == Transform2D::IDENTITY
             }
-            // Rounded before the comparison, on the same reasoning that rounds
-            // it before it is applied: a radius of a third of a pixel names no
-            // sample the filter could take, so it is not a filter.
+            // Positive is a filter, however small, and this used to round first
+            // on the reasoning that a radius of a third of a pixel names no
+            // sample the filter could take. That reasoning died with the radius
+            // becoming a length in the caller's space: a third of *what* is not
+            // known here, and a local 0.2 under a scale of ten is two device
+            // texels -- a filter this would have discarded. Whether a radius
+            // rounds to nothing is decided in `Morphology::applied_radius`,
+            // where the scale has been applied.
             Self::Dilate { radius_x, radius_y } | Self::Erode { radius_x, radius_y } => {
-                Morphology::dilate(*radius_x, *radius_y).is_identity()
+                let positive = |v: f32| v.is_finite() && v > 0.0;
+                !positive(*radius_x) && !positive(*radius_y)
             }
             // Composing two filters that each change nothing changes nothing,
             // and costs two layers to say so.
