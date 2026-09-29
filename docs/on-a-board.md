@@ -1246,9 +1246,34 @@ memory and resolve on chip. On PowerVR they cost more than twice the frame.
 This is the entry to point at when someone -- including whoever wrote the
 sentence above -- generalizes from one tile GPU to tile GPUs. "Cheap on a tiler"
 was a V3D fact wearing an architecture's clothes. Sample count is therefore the
-one decision in this renderer that genuinely wants to be a property of the device
-rather than of the code, and it is currently `samples: 4` written into
-`Canvas::new`, with `SampleCounts::max` called from nothing outside tests.
+one decision in this renderer that wants to follow the device rather than sit in
+the code, and it is currently `samples: 4` written into `Canvas::new`.
+
+**`SampleCounts` cannot carry that decision, which this entry used to imply it
+could.** `framebufferColorSampleCounts`, read on every device on the bench:
+
+| device | Vulkan | color sample counts |
+|---|---|---|
+| V3D 7.1.7.0 | 1.3.305 | 1, 4 |
+| PowerVR BXE-4-32 | 1.3.225 | 1, 2, 4 |
+| Adreno 640, SA8155P | 1.1.128 | 1, 2, 4 |
+
+`max()` is four on all three. It returns the same answer for the device where
+four samples cost 1.23x and the device where they cost 2.62x, because it reports
+what is *supported* and there is no query in Vulkan or GLES for what is *cheap*.
+A part advertising eight would be told to take eight, which is the wrong
+direction on the evidence above. So wiring it in would not have implemented the
+decision; what carries it today is `Canvas::with_samples`, which the executor
+already threads from a scene's own count.
+
+What the masks do say is narrower and more useful. **Two samples exist on both
+devices where four are dear, and not on the one where four are nearly free** --
+the middle setting is available exactly where it might help, and absent where it
+would not. What two costs on either is unmeasured.
+
+The Adreno's `1.1.128` is worth noticing while the table is here: the automotive
+part is the one sitting on the Vulkan 1.1 floor this renderer targets, where the
+other two are well past it. The floor is load-bearing rather than theoretical.
 
 ### The number that outranks the routes
 
