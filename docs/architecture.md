@@ -887,15 +887,30 @@ conclusion, and the test failed the moment it did. Without it the shadow would
 have silently started growing with the transform, which is the one thing
 upstream is explicit about not doing.
 
-The morphology is left in device pixels and says so, and that is a divergence
-rather than the absence of one. This sentence used to end "upstream has no
-morphology to be in parity with", which is wrong twice: upstream has dilate and
-erode, and its radius is a *local* length scaled by the transform at the pass --
-`entity.GetTransform() * effect_transform.Basis()` applied to the radius, then
-rounded to whole texels in device space. So the convention here is the opposite
-of upstream's, on the one filter this section changed everything else to match.
-`non-parity.md` §17 has what it costs and why it was not simply flipped with the
-blur.
+The morphology now converts with everything else, which it did not until
+2026-09-29. This paragraph twice said otherwise. It first ended "upstream has no
+morphology to be in parity with", which is wrong twice over -- upstream has
+dilate and erode, and its radius is a *local* length that
+`entity.GetTransform() * effect_transform.Basis()` scales at the pass. It then
+said the radius was device pixels here and that this was a divergence, which was
+true and is no longer: `Layer::scaled_by` converts the radius with the sigmas,
+and `ImageFilter::scaled_by` does the same to a dilation handed over as a filter,
+so the two spellings agree.
+
+Where the rounding happens moved with it, and that is the part worth
+understanding. A structuring element is a set of sample positions and there is no
+half of one, so the radius is still rounded to whole texels -- but the positions
+are *device* texels, and the caller states a local length, so rounding at
+construction rounded the wrong quantity. At a scale of three a radius of 1.5
+rounded to two and then became six, where the positions it named were four and a
+half. `Morphology::applied_radius` rounds instead, where the device radius is
+known, and it is the one place the value is finalized: the clamp to the target's
+extent lives there too.
+
+What is left is narrower and still recorded in `non-parity.md` 17: the conversion
+here is a single scalar and the passes stay axis-aligned, where upstream
+transforms each axis's direction vector and walks the result. The two agree under
+a uniform scale and part under an anisotropic one or a rotation.
 
 **A stroke narrower than a pixel is widened, and dimmed to pay for it.** A
 stroke's width is a length in the space the shape is drawn in, and nothing stops

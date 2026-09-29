@@ -9,6 +9,28 @@ Dates are the day a version reached crates.io.
 
 ## Unreleased
 
+**A morphology radius is a length in the caller's space, as upstream's is.** It
+was device pixels, alone among this renderer's lengths, on the recorded grounds
+that upstream had no morphology to be in parity with -- and upstream has `dilate`
+and `erode`, whose radius `entity.GetTransform() * effect_transform.Basis()`
+scales at the pass. `Layer::scaled_by` now converts it with the sigmas and
+`ImageFilter::scaled_by` converts a dilation handed over as a filter, so the two
+spellings agree. **This changes what a scaled dilate or erode draws**: under a
+scale of two a radius of eight now reaches sixteen device pixels rather than
+eight.
+
+The rounding moved with it. A structuring element is a set of sample positions
+and there is no half of one, but the positions are device texels and the caller
+states a local length, so rounding at construction rounded the wrong quantity --
+1.5 at a scale of three became two and then six, naming positions at four and a
+half. `Morphology::applied_radius` rounds where the device radius is known, and
+is now the one place the value is finalized.
+
+Narrower than parity: the conversion is a single scalar and the passes stay
+axis-aligned, where upstream transforms each axis's direction vector. The two
+agree under a uniform scale and part under an anisotropic one or a rotation,
+which is what `docs/non-parity.md` 17 now records.
+
 `impeller_present_drm::pacing` counts the vertical blanks a frame loop did not land
 on, from the sequence the kernel reports with each completed flip -- which the event
 loop previously discarded. `KmsOutput` gains `pacing`, `exact_frame_nanos` and
@@ -82,7 +104,7 @@ a local length the transform scales at the pass -- so a dilated layer under a
 scale of two spreads twice as far there. `layer-dilated-under-scale` is the same
 cross at half the size under that scale, landing on the pixels the unscaled scene
 covers, so the dilation distance is all that can separate the pair, and
-`the_dilation_under_a_scale_reaches_the_same_distance` reads the radius out of the
+`the_dilation_under_a_scale_reaches_twice_as_far` reads the radius out of the
 recording. The divergence is recorded as non-parity 17; the test is written to
 fail if the convention is flipped rather than to endorse it.
 

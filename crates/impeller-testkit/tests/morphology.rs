@@ -62,18 +62,26 @@ fn radii(name: &str) -> Vec<[f32; 2]> {
         .collect()
 }
 
-/// A dilation reaches the same distance whether or not its layer is scaled.
+/// A dilation under a scale of two reaches twice as far.
 ///
-/// The current convention, and a divergence from upstream rather than a
-/// preference -- see this file's header and `docs/non-parity.md` 17.
+/// The radius is a length in the caller's space, so the transform converts it
+/// like any other length. That is what upstream does -- read at master
+/// `fab99153`: `RenderFilter` applies
+/// `entity.GetTransform() * effect_transform.Basis()` to the radius and takes
+/// the length of the result -- and this renderer did not, until 2026-09-29.
 ///
-/// **This test is meant to fail when the convention is flipped.** It is not
-/// asserting the better of two behaviors; it is making the worse one impossible
-/// to change by accident. Whoever makes the radius local should expect this to
-/// go red, and should replace it with the opposite assertion -- the scaled
-/// scene's radii doubled -- rather than delete it.
+/// The pair is built to make that visible and nothing else: the same cross at
+/// half the size under a scale of two lands on exactly the pixels the unscaled
+/// scene covers, so the dilation distance is all that can separate them.
+///
+/// This assertion is the inverse of the one that stood here before, which said
+/// the two reached the *same* distance and existed to make the old convention
+/// impossible to change by accident. It did its job: it failed the moment the
+/// radius became local, with a message naming the replacement. Kept rather than
+/// deleted, because the convention still has to be impossible to change by
+/// accident -- in either direction.
 #[test]
-fn the_dilation_under_a_scale_reaches_the_same_distance() {
+fn the_dilation_under_a_scale_reaches_twice_as_far() {
     let unscaled = radii("layer-dilated");
     let scaled = radii("layer-dilated-under-scale");
 
@@ -81,27 +89,37 @@ fn the_dilation_under_a_scale_reaches_the_same_distance() {
         !unscaled.is_empty(),
         "no morphology material in layer-dilated, so this compared nothing"
     );
+
+    let doubled: Vec<[f32; 2]> = unscaled
+        .iter()
+        .map(|pair| [pair[0] * 2.0, pair[1] * 2.0])
+        .collect();
     assert_eq!(
-        unscaled, scaled,
-        "the dilation reached a different distance under a scale of two. If the \
-         radius was deliberately made a local length, this test is what says so \
-         -- assert the doubled radii here and update docs/non-parity.md 17, which \
-         records the convention as it was."
+        scaled, doubled,
+        "the scene under a scale of two should dilate twice as far. If the radius \
+         was deliberately returned to device pixels, this test is what says so -- \
+         assert equality here again and update docs/non-parity.md 17."
     );
 
-    // And the radii are the ones the scene asked for, so the equality above is
-    // two scenes agreeing on the right answer rather than on nothing. The scene
-    // states eight and three, which the shader reads one axis at a time.
-    let mut reached: Vec<f32> = unscaled
-        .iter()
-        .flat_map(|pair| pair.iter().copied())
-        .filter(|distance| *distance > 0.0)
-        .collect();
-    reached.sort_by(f32::total_cmp);
+    // And the unscaled scene reaches what it asked for, so the relation above is
+    // two scenes agreeing on the right answer rather than on nothing.
+    let reached = |rows: &[[f32; 2]]| {
+        let mut v: Vec<f32> = rows
+            .iter()
+            .flat_map(|pair| pair.iter().copied())
+            .filter(|d| *d > 0.0)
+            .collect();
+        v.sort_by(f32::total_cmp);
+        v
+    };
     assert_eq!(
-        reached,
+        reached(&unscaled),
         vec![3.0, 8.0],
-        "the scene asks for radii of eight and three, and the recording carries \
-         {reached:?}"
+        "the scene asks for radii of eight and three"
+    );
+    assert_eq!(
+        reached(&scaled),
+        vec![6.0, 16.0],
+        "the same radii under a scale of two are sixteen and six"
     );
 }
