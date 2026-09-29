@@ -856,48 +856,49 @@ vec4 shade(VertexOutput in_2) {
             return _e196;
         }
         case 7: {
-            vec4 _e198 = rounded_rect_coverage(in_2.clip);
-            return _e198;
-        }
-        case 8: {
-            vec4 _e200 = ellipse_coverage(in_2.clip);
-            return _e200;
-        }
-        case 12: {
-            vec4 _e202 = rrect_blur_coverage(in_2.clip);
-            return _e202;
-        }
-        case 13: {
-            vec4 _e204 = point_field_coverage(in_2.uv);
-            return _e204;
-        }
-        case 6: {
-            vec4 _e206 = blur_along_axis(in_2.clip);
-            return _e206;
-        }
-        case 11: {
-            vec4 _e208 = morphology_along_axis(in_2.clip);
+            float _e204 = _group_1_binding_0_fs.geometry.x;
+            vec4 _e208 = rounded_rect_coverage(((_e204 > 0.5) ? vec3(in_2.uv, 1.0) : in_2.clip));
             return _e208;
         }
-        case 10: {
-            vec4 _e210 = sample_mesh(in_2.uv);
+        case 8: {
+            vec4 _e210 = ellipse_coverage(in_2.clip);
             return _e210;
+        }
+        case 12: {
+            vec4 _e212 = rrect_blur_coverage(in_2.clip);
+            return _e212;
+        }
+        case 13: {
+            vec4 _e214 = point_field_coverage(in_2.uv);
+            return _e214;
+        }
+        case 6: {
+            vec4 _e216 = blur_along_axis(in_2.clip);
+            return _e216;
+        }
+        case 11: {
+            vec4 _e218 = morphology_along_axis(in_2.clip);
+            return _e218;
+        }
+        case 10: {
+            vec4 _e220 = sample_mesh(in_2.uv);
+            return _e220;
         }
         default: {
             break;
         }
     }
     if (((kind_2 > 4.5) && (kind_2 < 5.5))) {
-        vec4 _e220 = textureLod(_group_0_binding_0_fs, vec2(in_2.uv), 0.0);
-        float coverage_2 = _e220.x;
+        vec4 _e230 = textureLod(_group_0_binding_0_fs, vec2(in_2.uv), 0.0);
+        float coverage_2 = _e230.x;
         vec4 tint_5 = _group_1_binding_0_fs.stops[0];
         float alpha_5 = (tint_5.w * coverage_2);
         return vec4((tint_5.xyz * alpha_5), alpha_5);
     }
-    vec4 _e231 = color_2;
-    float _e234 = color_2.w;
-    float _e237 = color_2.w;
-    return vec4((_e231.xyz * _e234), _e237);
+    vec4 _e241 = color_2;
+    float _e244 = color_2.w;
+    float _e247 = color_2.w;
+    return vec4((_e241.xyz * _e244), _e247);
 }
 
 void main() {
