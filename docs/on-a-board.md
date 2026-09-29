@@ -1216,19 +1216,41 @@ tessellated one here and 2.40 times on V3D. Stroked, it is 5.94 times here and
 7.96 on V3D. Two unrelated tile architectures, the same direction and nearly the
 same magnitude.
 
-What makes that more than a coincidence is that the mechanism is already written
-down in the bench's own source: the two routes do not submit the same number of
-draws. Every tessellated shape carries the same solid material so the batch
-merges all hundred and sixty into one; an analytic shape carries its geometry
-inside its material and merges with nothing. The comparison is one draw against a
-hundred and sixty, and reading it as fragment work against fragment work is
-reading it wrong.
+A mechanism was proposed for it here and has since been tried and mostly
+disproved, which is worth keeping in full rather than quietly replacing.
 
-So this is not an argument for choosing the route per device. It is an argument
-that the analytic route is paying an avoidable cost on every device measured, and
-that moving a shape's parameters out of its material -- into vertex attributes or
-an instance buffer, where they would merge -- is worth more than any policy that
-picks the cheaper of two evils.
+The proposal was that the two routes do not submit the same number of draws.
+Every tessellated shape carries the same solid material, so the batch merged all
+hundred and sixty into one; an analytic shape carried its geometry inside its
+material and merged with nothing. The comparison was one draw against a hundred
+and sixty, and this entry concluded that reading it as fragment work against
+fragment work was reading it wrong, and that moving a shape's parameters out of
+its material was worth more than any policy picking between routes.
+
+**The move was made and the second half of that is not what happened.** A rounded
+rectangle now carries its own space on its vertices rather than in its material,
+so identical shapes merge. Pinned, three runs a side:
+
+| device | draws | distance field | stroked |
+|---|---|---|---|
+| Adreno 640 | 160 -> 44 | 13.78 -> 13.15 ms | 15.33 -> 14.50 ms |
+| PowerVR BXE-4-32 | 160 -> 44 | 26.78 -> 26.78 | 33.00 -> 33.31 |
+
+About five per cent on the Adreno and **nothing at all on the PowerVR**. Taking
+away nearly three quarters of the draws moved that part's frame by less than the
+run-to-run spread, so on it the comparison *was* fragment work against fragment
+work, and this entry had that backwards. The field is simply expensive there --
+the same shapes take it twice what they take the Adreno.
+
+Forty-four rather than one because the grid is not a single size: `shapes()`
+builds each rectangle as `left + width` less `left`, which in f32 gives three
+widths and three heights, and only exactly equal sizes merge. Content with
+genuinely identical shapes collapses further, so the draw count above is a floor
+on what merging can do rather than a ceiling.
+
+What survives is the narrower claim: the draw count is part of what the analytic
+route pays on one part and none of what it pays on another, and a mechanism that
+holds on two tile GPUs can still fail to explain a third.
 
 ### Multisampling is where they disagree, and it inverts
 
