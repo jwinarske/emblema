@@ -682,3 +682,94 @@ cost baseline records identical rows for the two scenes. A pass is emitted per
 fit in one pass each way and the pass count never moves. The same arithmetic means
 the two scenes are very likely pixel-identical, so the image comparison is not the
 detector either. The radius has to be read, not counted.
+
+## 18. A filled path is triangulated here; upstream stencils and covers it
+
+**What differs.** This is the deepest divergence in the file, and it is about how a
+filled path becomes pixels at all rather than about any one operation.
+
+Upstream, read at `flutter/flutter` master `fab99153` on 2026-09-29: a filled
+path's winding is resolved by the *stencil buffer*, not by a triangulator.
+`FillPathSourceGeometry::GetResultMode` returns `Mode::kNormal` for a convex path
+and `kNonZero` or `kEvenOdd` otherwise, and
+`ColorSourceContents::DrawGeometry` turns the latter into two draws -- a
+preparation pass under `StencilMode::kStencilNonZeroFill`, which increments the
+stencil on front faces and decrements on back, then a cover draw under
+`kCoverCompare` over the geometry's bounds. What runs on the CPU is curve
+*flattening* plus fan or strip index building: `Tessellator::TessellateConvex`,
+documented as "Given a convex path, create a triangle fan structure", and it
+produces the same vertex buffer for the convex direct draw and for the stencil
+pass. A true arbitrary triangulator is in the tree and the renderer does not use
+it -- `tessellator_libtess.h` wraps libtess2 and its only non-test consumer is the
+Dart FFI shim. One comment states the purpose plainly: "for sufficiently complex
+paths we may opt to use stencil-then-cover to avoid tessellation".
+
+Here a filled path is triangulated on the CPU, by lyon, and those triangles *are*
+the fill. `architecture.md` says it in a line: a recording is tessellated
+geometry. No fill takes a stencil pass; the stencil serves clipping only.
+
+**Where the two agree, which this framing makes easy to lose.** Both flatten
+curves on the CPU. Both build stroke outlines on the CPU and neither expands a
+stroke on the GPU -- upstream's `StrokePathSegmentReceiver` emits a triangle strip
+carrying `Mode::kPreventOverdraw`, which is resolved by the depth buffer rather
+than the stencil, and this one emits quads from lyon's stroker.
+
+**And the analytic routes run closer than the entry's title suggests, in both
+directions.** Upstream computes circle coverage from a distance function by
+default -- `circle.frag`'s `distanceFromCircle`, shading a polygon mesh padded for
+antialiasing -- and absorbs a symmetrically mask-blurred rounded rectangle into a
+closed form in `rrect_blur.frag`, which is the same approximation this renderer
+cites where it does the same thing. Its wider signed-distance family
+(`uber_sdf.frag`, covering rect, oval, rounded rect and symmetric round
+superellipse, filled and stroked) is **off by default**: `impeller::Flags`
+declares `bool use_sdfs = false`, every one of the six call sites in
+`display_list/canvas.cc` is gated on it, and only `--impeller-use-sdfs` turns it
+on. So an unblurred rounded rectangle is a CPU polygon upstream today, where here
+it is a field -- under a gate of nearly the same shape, both requiring
+antialiasing, a solid color and no perspective.
+
+**Why.** Reach, and it is stated in the first line of the README rather than
+discovered here: every pipeline compiles ahead of time and nothing requires
+compute, which is what lets one binary serve every Vulkan 1.1 and GLES 3.0 device
+including embedded parts whose compute support is weak or immature. A triangulated
+fill needs a vertex buffer and one draw. Stencil-then-cover needs a stencil
+attachment on every pass that might fill a concave path, two draws where there was
+one, and a cover whose bounds must be right.
+
+What this project can say about the trade is narrower than it would like, and the
+distinction matters because it is easy to overstate. It has never implemented
+stencil-then-cover and has therefore never timed it. **There is no measurement
+here of stencil-then-cover against triangulation, and no claim about which is
+faster.** What is measured is the neighboring question -- moving coverage from
+vertices into a fragment shader -- because this renderer has both routes for a
+rounded rectangle and times all four. On a Raspberry Pi 5's V3D, from the
+committed baseline:
+
+| route | recording (CPU) | execute (GPU, Vulkan) |
+|---|---|---|
+| distance field | 0.099 ms | 8.852 ms |
+| tessellated, 1 sample | 0.240 ms | 3.688 ms |
+| stroked field | 0.098 ms | 9.431 ms |
+| stroked path | 0.739 ms | 1.184 ms |
+
+The field is two and a half times cheaper on the CPU for a fill and seven times
+cheaper for a stroke, and on this hardware it costs two and a half times more GPU
+for the fill and eight times more for the stroke. That is why the analytic routes
+here are narrow rather than universal: on a tile-based part the saving reverses,
+and a renderer aimed at such parts cannot take the CPU win as free. It says
+nothing about the stencil, which costs a pass rather than a shader.
+
+**Impact.** A concave fill costs a CPU triangulation here and two draws plus a
+stencil attachment upstream, and which is dearer is unmeasured on any hardware
+this project has. Fill rules are not affected -- lyon resolves non-zero and
+even-odd as the stencil does, so a self-intersecting path fills the same either
+way, which is why nothing in `parity.md` or the corpus shows this. The visible
+consequences are elsewhere: a concave path's cost here scales with its vertex
+count on the CPU rather than with its area on the GPU, and a pathological path is
+a CPU problem here and a bandwidth one upstream.
+
+The honest reading of the whole entry: the two renderers agree closely on what a
+picture should look like, and this file is the record of where they do not, but
+they do not agree on the most basic question of how a fill is rasterized. Nobody
+should infer the C++ design from this one, which is the reason this entry leads
+with the mechanism instead of the consequence.

@@ -644,8 +644,15 @@ and a caller composing pictures that disagree about what image three is has to
 renumber before recording -- which is a thing they can see and this call cannot.
 
 **A recording is tessellated geometry, not a command list.** Worth stating
-because the name suggests otherwise and because it decides what nesting one
-inside another could mean. By the time a draw reaches a batch its path has been
+because the name suggests otherwise, because it decides what nesting one inside
+another could mean, and because it is the one place this renderer parts from
+upstream on mechanism rather than on detail: upstream resolves a concave fill's
+winding in the stencil buffer and covers it, and does not triangulate at all.
+That alternative is not recorded here as rejected because it was never weighed --
+this design predates knowing it, which is its own kind of answer. `non-parity.md`
+18 has both mechanisms with citations read at tip, what each costs, and the one
+measurement this project can honestly bring to it, which is about fragment
+coverage rather than about the stencil. By the time a draw reaches a batch its path has been
 flattened -- at a tolerance taken from the scale of the transform then in force
 -- and its vertices and its material are both in clip space. Nothing upstream
 of that survives.
