@@ -68,17 +68,20 @@ saying what this file says they say" is. The same lesson is written out at
 length beside the timing baseline, which went eight commits pointing at a state
 no run had passed against, for want of exactly this.
 
-Six entries name something in upstream specific enough to re-read, and all six
-were, on that date and at tip:
+Seven entries name something in upstream specific enough to re-read. Six were
+read on the date above; §1 was read again and §19 for the first time at tip on
+**2026-09-29**, which is why those two rows carry their own date and the others
+do not:
 
 | | claim | what was read | still true |
 |---|---|---|---|
-| §1 | 256 uniform stops | `gradient_generator.h`, `kMaxUniformGradientStops = 256u` | yes |
+| §1 | 256 uniform stops | `gradient_generator.h`, `kMaxUniformGradientStops = 256u` | yes, again 2026-09-29 |
 | §3 | the GLES shading language floors at 1.00 | `compiler.cc`, `sl_options.version = ... : 100`, and the `#ifndef IMPELLER_TARGET_OPENGLES` around `IPOrderedDither8x8` in `fast_gradient.frag` | yes |
 | §5 | elevation is in logical pixels | `dl_dispatcher.cc`, `Scalar occluder_z = dpr * elevation` | yes |
 | §6 | a blur reduces in one step | `gaussian_blur_filter_contents.cc`, `kMaxSigma = 500.0f` and one `downsample_scalar` through `texture_downsample.frag` | yes |
 | §8 | the blurred rectangle's asymmetric term | `solid_rrect_like_blur_contents.cc`, `NegPos` and `1.25 * sigma * (eccentricV.x - eccentricV.y)` under the comment "Pull in long end" | yes |
 | §10 | the squircle's conic-weight sawtooth | `round_superellipse_param.cc`, `frac * kPrecomputedVariables[left + 1][0] * sqrt(n)` | yes |
+| §19 | a vertex-interpolated gradient path | `linear_gradient_contents.cc`, `CanApplyFastGradient` and `FastLinearGradient`, reached before the uniform path in `Render` | yes, read 2026-09-29 |
 
 Two of those six are upstream defects rather than differences of design -- §8's
 asymmetry and §10's sawtooth -- and both are still there. §10 is the sharper
@@ -107,6 +110,21 @@ tested to one level per channel: the ramp holds exactly what the four-stop walk
 produces, so no quantization enters that the walk does not also have. The cost
 is an upload and a sampler binding per gradient past four stops, on a path
 upstream would not have taken.
+
+That sentence understated it, and a measurement is why. The bench's frame draws a
+full-screen five-stop gradient, so it is on this path; on the VisionFive 2 that
+one draw is **43.1 ms of a 64.0 ms frame** -- 67 per cent of the frame, measured
+2026-09-29 at 1ef0205 and tabulated in [`on-a-board.md`](on-a-board.md). An
+upload and a sampler binding are per-draw costs and sound like overhead; what the
+row actually shows is that a filtered fetch per fragment, over two million
+fragments, on the most bandwidth-starved part measured here, is the largest single
+item in a frame.
+
+What that figure does *not* establish is how much of the 43.1 ms is the fetch and
+how much is simply covering every pixel once. Nothing here has measured the same
+scene through the four-stop path to separate them, and until something does, this
+entry claims the cost is on a path upstream would not have taken -- not that
+taking upstream's path would return most of it.
 
 Note the trap this sets, because it is easy to fall into and one commit here
 already did. Upstream's *texture* path does not dither, and reading that across
@@ -825,3 +843,60 @@ picture should look like, and this file is the record of where they do not, but
 they do not agree on the most basic question of how a fill is rasterized. Nobody
 should infer the C++ design from this one, which is the reason this entry leads
 with the mechanism instead of the consequence.
+
+## 19. An axis-aligned gradient is shaded per fragment here; upstream interpolates it across vertices
+
+**What differs.** Upstream has three linear-gradient paths and this renderer has
+two. `LinearGradientContents::Render` tries `CanApplyFastGradient()` *first*: if
+the effect transform inverts to identity, the geometry has coverage, and the
+gradient is axis-aligned with its endpoints on the covered rect's edges — start
+and end sharing an x for a vertical wash, sharing a y for a horizontal one — it
+takes `FastLinearGradient`, which computes no gradient in the fragment shader at
+all. It divides the rect into one section per pair of stops, emits six vertices a
+section carrying the two stop colors, and lets the rasterizer interpolate between
+them. `fast_gradient.frag` is left applying alpha and, off GLES, a dither.
+
+Only when that fails does upstream reach the uniform path this file's §1 is
+about, and only past 256 stops the texture path. This renderer's fastest path is
+that uniform walk: four stops in the paint block, evaluated per fragment, and a
+sampled ramp beyond. There is no vertex-interpolated path and no predicate that
+would select one.
+
+**Why.** No reason on record, which is what distinguishes this entry from its
+neighbors. It is not a device constraint — vertex color interpolation is the one
+thing every target here does in fixed-function hardware — and not a semantic
+difference, since the two produce the same picture up to interpolation
+precision. It is a missing optimization, listed here rather than in
+[`parity.md`](parity.md) because the `dart:ui` operation is built and behaves;
+what is absent is a route through it.
+
+The honest account of how it stayed absent: the symbol was already cited in this
+file, in §3's evidence column, as the file that dithers under an `#ifndef`.
+Something can be read for one property and not seen for another.
+
+**Impact.** For the most ordinary gradient in an interface — a vertical or
+horizontal wash behind a card or a bar — upstream does zero per-fragment gradient
+work where this renderer does a four-stop walk or a filtered texture fetch per
+fragment. The cost of that is unmeasured here, and the reason to expect it to
+matter is §1's measurement: a full-screen five-stop gradient is 43.1 ms of a 64.0
+ms frame on the VisionFive 2.
+
+**The measurement cannot be taken from anything here as it stands**, and the
+bench is the reason. Its only gradient is the ground's, `[0, 0]` to `[w, h]` —
+diagonal, so not a case this path would catch even if it existed. The corpus is
+the other way round: of its thirty-eight linear gradients, nine share a y --
+`[8, 0]` to `[120, 0]` among them -- so axis-aligned cases are not missing there,
+though none share an x, and upstream's predicate takes a vertical wash as readily
+as a horizontal one. What is unchecked is whether any of the nine satisfies the
+stricter half of that predicate — endpoints landing on the *covered rect's* edges
+rather than anywhere along the axis — because that depends on each scene's
+geometry and was not worth resolving before a path exists to select. The corpus
+checks pictures in any case, and a vertex-interpolated wash is meant to produce
+the same one.
+
+So: an axis-aligned rect gradient in the bench comes first, because without one
+there is nothing to time a change against and §1's row cannot separate a fetch
+from a fill either. Then the path, whose predicate is cheap and whose geometry is
+the sections upstream already describes. The paint block's four stops do not bound
+it — the sections are geometry, so a vertex-interpolated wash is not limited the
+way the fragment walk is, and building it would narrow §1 as well.
