@@ -331,7 +331,15 @@
 # makes.
 #
 #
+# The frame is measured in four stages as of this commit, and the three new rows
+# -- `frame, gradient ground`, `frame, plus cards`, `frame, plus shadows` -- are
+# not in this file. Nothing invented them: they want a run on the board. Until
+# that run, `--check` against this file reports them unmatched and exits
+# non-zero, which is the honest result and not a regression. `full frame, mixed
+# content` is unchanged and still the whole frame.
+#
 # device	configuration	median in milliseconds	[tolerance %]
+#
 recording	distance field, 1 sample	0.099	5.0
 recording	tessellated, 4 samples	0.235	5.0
 recording	tessellated, 1 sample	0.240	5.0

@@ -186,8 +186,69 @@ pub fn recording(path: Path) -> Recording {
 /// How the full-frame row names itself.
 pub(super) const FRAME: &str = "full frame, mixed content";
 
-/// What a whole frame of mixed content costs, which is a budget rather than a
-/// comparison.
+/// The mixed frame, built up one element at a time.
+///
+/// The whole frame is a budget and not a comparison, which was the point of it
+/// -- but a budget nobody can attribute is a number you cannot act on. On the
+/// VisionFive 2 that frame costs sixty-four milliseconds, four times a sixty
+/// hertz period, over twelve draws, and nothing said which of them to look at.
+///
+/// So the frame is measured four times, each stage adding one element to the
+/// one before, and the *difference* between two rows is what that element cost.
+/// Additive rather than leave-one-out because every stage is then a frame that
+/// could be drawn, and because removing something from the middle changes what
+/// the things over it composite against.
+///
+/// The last stage is the whole frame and keeps its old name, so the row that
+/// two baselines already carry stays the row it was.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Frame {
+    /// A clear and the gradient wash. Five stops, so the recorder bakes a ramp
+    /// and the shader samples it -- the one thing here that tabulates one.
+    Ground,
+    /// The three rounded rectangles over it, and nothing else: the fill route a
+    /// card takes when it casts no shadow.
+    Cards,
+    /// Each card's shadow under it. The delta is what a blurred occluder costs,
+    /// which is the analytic rounded-rectangle blur rather than a layer.
+    Shadows,
+    /// The blurred highlight over everything, which is the only stage that opens
+    /// a layer: its own target, two blur passes and a composite back.
+    All,
+}
+
+impl Frame {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ground => "frame, gradient ground",
+            Self::Cards => "frame, plus cards",
+            Self::Shadows => "frame, plus shadows",
+            Self::All => FRAME,
+        }
+    }
+
+    /// Whether this stage draws the cards.
+    fn cards(self) -> bool {
+        !matches!(self, Self::Ground)
+    }
+
+    /// Whether it draws their shadows under them.
+    fn shadows(self) -> bool {
+        matches!(self, Self::Shadows | Self::All)
+    }
+
+    /// Whether it draws the blurred layer over them.
+    fn highlight(self) -> bool {
+        matches!(self, Self::All)
+    }
+}
+
+/// Every stage, in the order they build on each other.
+pub(super) const FRAME_STAGES: [Frame; 4] =
+    [Frame::Ground, Frame::Cards, Frame::Shadows, Frame::All];
+
+/// One stage of the mixed frame; `Frame::All` is the whole of it, and what a
+/// whole frame of mixed content costs is a budget rather than a comparison.
 ///
 /// The three routes above answer one narrow question and answer it well: the
 /// same shapes, twice, so the difference is the route. That is not a frame. It
@@ -209,7 +270,7 @@ pub(super) const FRAME: &str = "full frame, mixed content";
 ///
 /// Static, at one instant of that scene rather than a moving one: a benchmark
 /// that changed its own content between runs would report the content.
-pub(super) fn full_frame() -> Recording {
+pub(super) fn frame(stage: Frame) -> Recording {
     let (w, h) = (EXTENT.width as f32, EXTENT.height as f32);
     let mut canvas = Canvas::new(EXTENT);
     canvas.clear(Color::srgb(0.05, 0.06, 0.09, 1.0));
@@ -244,12 +305,16 @@ pub(super) fn full_frame() -> Recording {
     let center = Vec2::new(w * 0.5, h * 0.5);
     let orbit = w.min(h) * 0.26;
     let side = w.min(h) * 0.20;
-    let hues = [
-        Color::srgb(0.98, 0.42, 0.28, 1.0),
-        Color::srgb(0.36, 0.82, 0.62, 1.0),
-        Color::srgb(0.42, 0.58, 0.98, 1.0),
-    ];
-    for (i, hue) in hues.into_iter().enumerate() {
+    let hues: &[Color] = if stage.cards() {
+        &[
+            Color::srgb(0.98, 0.42, 0.28, 1.0),
+            Color::srgb(0.36, 0.82, 0.62, 1.0),
+            Color::srgb(0.42, 0.58, 0.98, 1.0),
+        ]
+    } else {
+        &[]
+    };
+    for (i, hue) in hues.iter().copied().enumerate() {
         let phase = i as f32 * std::f32::consts::TAU / 3.0;
         let at = Vec2::new(
             center.x + orbit * phase.cos(),
@@ -263,9 +328,11 @@ pub(super) fn full_frame() -> Recording {
         );
         // Shadow first and card over it, which is the order every real caller
         // uses and the one the occluder flag describes.
-        canvas
-            .draw_shadow(&card.to_rounded_path(side * 0.18), Color::BLACK, 8.0, false)
-            .expect("a shadow");
+        if stage.shadows() {
+            canvas
+                .draw_shadow(&card.to_rounded_path(side * 0.18), Color::BLACK, 8.0, false)
+                .expect("a shadow");
+        }
         canvas
             .draw_rrect(card, side * 0.18, &Paint::fill(hue))
             .expect("a card");
@@ -273,15 +340,17 @@ pub(super) fn full_frame() -> Recording {
 
     // A blurred highlight, so the layer's own target and its composite back are
     // in the number too.
-    canvas.save_layer(Layer::opacity(0.5).with_blur(24.0));
-    canvas
-        .draw_circle(
-            center,
-            w.min(h) * 0.10,
-            &Paint::fill(Color::srgb(1.0, 0.95, 0.80, 1.0)),
-        )
-        .expect("a highlight");
-    canvas.restore();
+    if stage.highlight() {
+        canvas.save_layer(Layer::opacity(0.5).with_blur(24.0));
+        canvas
+            .draw_circle(
+                center,
+                w.min(h) * 0.10,
+                &Paint::fill(Color::srgb(1.0, 0.95, 0.80, 1.0)),
+            )
+            .expect("a highlight");
+        canvas.restore();
+    }
 
     canvas.finish()
 }

@@ -36,7 +36,16 @@
 # Last checked against the board: bf6bbbd
 #
 # cargo xtask bench --record
+#
+# The frame is measured in four stages as of this commit, and the three new rows
+# -- `frame, gradient ground`, `frame, plus cards`, `frame, plus shadows` -- are
+# not in this file. Nothing invented them: they want a run on the board. Until
+# that run, `--check` against this file reports them unmatched and exits
+# non-zero, which is the honest result and not a regression. `full frame, mixed
+# content` is unchanged and still the whole frame.
+#
 # device	configuration	median in milliseconds	[tolerance %]
+#
 recording	distance field, 1 sample	0.872
 recording	tessellated, 4 samples	2.132
 recording	tessellated, 1 sample	2.133
