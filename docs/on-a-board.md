@@ -1269,7 +1269,41 @@ already threads from a scene's own count.
 What the masks do say is narrower and more useful. **Two samples exist on both
 devices where four are dear, and not on the one where four are nearly free** --
 the middle setting is available exactly where it might help, and absent where it
-would not. What two costs on either is unmeasured.
+would not.
+
+### Two samples do not rescue PowerVR
+
+Measured by adding a two-sample tessellated route to the bench, running it, and
+taking the route back out; the rows below are the tessellated rounded rectangle
+at each count, on Vulkan. PowerVR with the desktop stopped and all four
+governors pinned, 43.5 C before and 49.3 C after, three runs. Adreno with the
+eight CPU governors and the `kgsl-3d0` devfreq pinned to `performance`, three
+runs, restored to `schedutil` and `msm-adreno-tz` after. V3D's pair is the
+committed baseline, and it has no two-sample row because the device does not
+offer one.
+
+| device | 1 | 2 | 4 | 2 over 1 | 4 over 1 |
+|---|---|---|---|---|---|
+| V3D 7.1.7.0 | 3.688 ms | — | 4.525 ms | — | **1.23x** |
+| Adreno 640 | 6.92 | 7.49 | 8.24 | **1.08x** | **1.19x** |
+| PowerVR BXE-4-32 | 10.25 | 18.12 | 26.93 | **1.77x** | **2.63x** |
+
+**PowerVR pays per sample.** One to two costs 7.87 ms and two to four costs
+8.81 ms -- two nearly equal steps, which is what a part resolving somewhere other
+than tile memory looks like. Adreno and V3D both spend under a quarter to go from
+one sample to four, and the Adreno's two-sample row buys almost nothing because
+there is almost nothing to buy.
+
+So the middle setting is not the answer it looked like. Dropping four to two on
+PowerVR recovers 8.81 ms of the 16.68 ms that antialiasing costs there, a little
+over half, and leaves the row still 1.77x its unantialiased self. **Sample count
+is not the lever on that part; the antialiasing strategy is.** Which also means
+the device-property framing this section began with resolves to something smaller
+than it promised: two of the three parts do not care what the count is, and the
+third is not fixed by changing it.
+
+Worth stating for the vertical this renderer aims at: the automotive part is one
+of the two that do not care. Four samples cost it nineteen per cent.
 
 The Adreno's `1.1.128` is worth noticing while the table is here: the automotive
 part is the one sitting on the Vulkan 1.1 floor this renderer targets, where the
