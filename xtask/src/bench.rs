@@ -81,7 +81,7 @@ use impeller_hal_gles::{DisplayTarget, GlesContext, GlesHal};
 use impeller_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
 mod frames;
 
-use frames::{full_frame, EXTENT, FRAME, FRAMES, SHAPES, WARMUP};
+use frames::{frame, Frame, EXTENT, FRAMES, FRAME_STAGES, SHAPES, WARMUP};
 pub use frames::{recording, Path};
 
 use std::io::{self, Write};
@@ -334,7 +334,20 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 },
             )));
         }
-        report(Event::Measured(time_building(FRAME, full_frame)));
+        for stage in FRAME_STAGES {
+            // Spelled out per stage for the reason the paths above are: the
+            // builder is a function pointer so that a prepared recording cannot
+            // be handed to it, and a closure capturing `stage` is not one.
+            report(Event::Measured(time_building(
+                stage.name(),
+                match stage {
+                    Frame::Ground => || frame(Frame::Ground),
+                    Frame::Cards => || frame(Frame::Cards),
+                    Frame::Shadows => || frame(Frame::Shadows),
+                    Frame::All => || frame(Frame::All),
+                },
+            )));
+        }
     }
 
     for index in 0.. {
@@ -356,11 +369,13 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 time_frames::<VulkanHal>(&mut ctx, path.name(), &recording, |_| {}),
             ));
         }
-        let frame = full_frame();
-        report(outcome(
-            FRAME,
-            time_frames::<VulkanHal>(&mut ctx, FRAME, &frame, |_| {}),
-        ));
+        for stage in FRAME_STAGES {
+            let recording = frame(stage);
+            report(outcome(
+                stage.name(),
+                time_frames::<VulkanHal>(&mut ctx, stage.name(), &recording, |_| {}),
+            ));
+        }
     }
 
     if let Ok(mut ctx) = GlesContext::new(DisplayTarget::Surfaceless) {
@@ -378,12 +393,14 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
             });
             report(outcome(path.name(), timed));
         }
-        let frame = full_frame();
-        let timed = time_frames::<GlesHal>(&mut ctx, FRAME, &frame, |ctx| {
-            // SAFETY: a context is current on this thread.
-            unsafe { glow::HasContext::finish(ctx.raw_gl()) }
-        });
-        report(outcome(FRAME, timed));
+        for stage in FRAME_STAGES {
+            let recording = frame(stage);
+            let timed = time_frames::<GlesHal>(&mut ctx, stage.name(), &recording, |ctx| {
+                // SAFETY: a context is current on this thread.
+                unsafe { glow::HasContext::finish(ctx.raw_gl()) }
+            });
+            report(outcome(stage.name(), timed));
+        }
     }
 }
 
@@ -430,10 +447,11 @@ const NOTHING: &str = "no device on this machine could render the frame\n";
 fn header() -> String {
     format!(
         "{SHAPES} rounded rectangles at {}x{}, then one frame of mixed \
-         content at the same size.\n{FRAMES} frames each after {WARMUP} \
-         warm-up{}\n",
+         content at the same size in {} stages.\n{FRAMES} frames each after \
+         {WARMUP} warm-up{}\n",
         EXTENT.width,
         EXTENT.height,
+        FRAME_STAGES.len(),
         governor()
             .map(|g| format!(", cpu governor {g}"))
             .unwrap_or_default()
@@ -542,11 +560,21 @@ fn epilogue() -> &'static str {
      are one shape filled two ways and the next two are the same shape \n\
      stroked two ways, so within a group the difference is the route and not \n\
      the content -- and a fill's cost is not an outline's, which is why they \n\
-     are not read across. The last line is not part of either. That is a whole \n\
-     frame of mixed content -- a tabulated gradient behind, shadowed cards \n\
-     over it, a blurred layer on top -- and it is there because a renderer can \n\
-     be quick at a hundred and sixty identical rectangles and slow at \n\
-     everything an interface is made of.\n\
+     are not read across. The last four are not part of either. They are one \n\
+     frame of mixed content, built up an element at a time -- a tabulated \n\
+     gradient, then shadowed cards over it, then a blurred layer on top -- and \n\
+     it is there because a renderer can be quick at a hundred and sixty \n\
+     identical rectangles and slow at everything an interface is made of.\n\
+     \n\
+     Those four are a budget and its parts: each row is the one above it plus \n\
+     one element, so the *difference* between two of them is what that element \n\
+     cost, and the last is the whole frame. Subtract only within one device on \n\
+     one run -- across runs the noise is larger than most of the differences. \n\
+     A difference is also this scene's cost for that element at this size, not \n\
+     the element's cost in general: the ground is one draw over every pixel and \n\
+     the cards cover a fraction of it, so the two are not comparable per \n\
+     element. And the shadows row moves with the cards above it, since a \n\
+     shadow is drawn under each card that exists.\n\
      \n\
      The `recording` section is the other half, and it needs no device: it is \n\
      what building each of those frames costs before anything is submitted, \n\
@@ -1005,6 +1033,45 @@ mod tests {
         }
     }
 
+    /// Each stage of the frame adds what it says, and the last is the frame.
+    ///
+    /// The point of the decomposition is that the *difference* between two rows
+    /// is one element's cost, which only holds if each stage is the one before
+    /// it plus one thing. Counted rather than trusted, because a stage that
+    /// silently drew nothing extra would make its delta zero and read as an
+    /// element that costs nothing.
+    ///
+    /// The last row also has to stay what it was: two baselines carry
+    /// `full frame, mixed content`, and a decomposition that changed the whole
+    /// frame while adding rows would move a number nobody asked to move.
+    #[test]
+    fn each_frame_stage_adds_one_element_and_the_last_is_the_whole_frame() {
+        let draws = |stage| frames::frame(stage).draw_count();
+        let ground = draws(frames::Frame::Ground);
+        let cards = draws(frames::Frame::Cards);
+        let shadows = draws(frames::Frame::Shadows);
+        let all = draws(frames::Frame::All);
+
+        // One, not two: the clear is a pass attribute rather than a draw.
+        assert_eq!(ground, 1, "the gradient wash");
+        assert_eq!(cards, ground + 3, "three cards over it");
+        assert_eq!(shadows, cards + 3, "a shadow under each card");
+        assert!(
+            all > shadows,
+            "the blurred layer draws something: {all} against {shadows}"
+        );
+        assert_eq!(
+            all, 12,
+            "the whole frame is twelve draws, which is what the baselines were \
+             recorded against"
+        );
+        assert_eq!(
+            frames::Frame::All.name(),
+            frames::FRAME,
+            "the last stage keeps the name two baselines already carry"
+        );
+    }
+
     /// The two paths do not cost the same number of draws, and the difference
     /// is the first thing to know about the comparison rather than a detail.
     ///
@@ -1442,7 +1509,7 @@ mod tests {
     /// a sampled texture rather than four colors riding inside a material.
     #[test]
     fn the_full_frame_reaches_a_layer_and_a_ramp() {
-        let frame = full_frame();
+        let frame = frames::frame(frames::Frame::All);
         assert!(
             frame.passes.len() > 1,
             "no layer in the frame: {} pass(es)",
