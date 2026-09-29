@@ -16087,9 +16087,17 @@ fn a_field_of_points_is_one_draw_with_the_edge_each_dot_had() {
     let (dot_draws, dot_pixels) = shot(&mut ctx, separately);
 
     assert_eq!(field_draws, 1, "sixteen points should record one draw");
-    assert_eq!(
-        dot_draws, 16,
-        "sixteen circles drawn one at a time are sixteen"
+    // Sixteen, until an analytic shape began carrying its own space on its
+    // vertices rather than in its material; identical circles in different
+    // places are now one material and merge. What is left is a handful, and how
+    // many depends on where the centers round -- a radius either side of a
+    // center gives a width that differs in its last bits from one position to
+    // the next, and only exactly equal sizes merge. So the claim here is the
+    // comparison rather than the count: the field still records fewer.
+    assert!(
+        dot_draws > field_draws,
+        "circles drawn one at a time should still be more draws than the field: \
+         {dot_draws} against {field_draws}"
     );
 
     let lit = field_pixels.chunks_exact(4).filter(|p| p[0] > 8).count();

@@ -1452,7 +1452,13 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         // 4
         case 4: { return sample_image(in.clip); }
         // 7, 8 -- the analytic shape fields
-        case 7: { return rounded_rect_coverage(in.clip); }
+        // The one arm that takes its space from the vertex when asked. A
+        // rounded rectangle carried its clip-to-local mapping in the material,
+        // which made two of one shape in different places compare unequal and
+        // cost a draw each; the mapping rides on `uv` instead when
+        // `geometry.x` says so, and then they merge. The select is on this arm
+        // rather than hoisted, so every other material still runs it no times.
+        case 7: { return rounded_rect_coverage(select(in.clip, vec3<f32>(in.uv, 1.0), paint.geometry.x > 0.5)); }
         case 8: { return ellipse_coverage(in.clip); }
         case 12: { return rrect_blur_coverage(in.clip); }
         case 13: { return point_field_coverage(in.uv); }

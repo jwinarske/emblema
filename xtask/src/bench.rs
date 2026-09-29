@@ -1011,18 +1011,25 @@ mod tests {
     /// This was written expecting them to match, on the reasoning that the same
     /// shapes drawn two ways should record the same work. They do not. Every
     /// tessellated shape carries the same solid material, so the batch merges
-    /// all hundred and sixty into one draw; an analytic shape carries its own
-    /// geometry inside its material and can merge with nothing. So the timing
-    /// below is not fragment work against fragment work -- it is one draw of
-    /// many triangles against a hundred and sixty draws of two, and reading it
-    /// as anything else would be reading it wrong.
+    /// all hundred and sixty into one draw; an analytic shape merges only with
+    /// another of exactly its size. So the timing below is not fragment work
+    /// against fragment work -- it is one draw of many triangles against a
+    /// handful of draws of two, and reading it as anything else would be
+    /// reading it wrong.
+    ///
+    /// It was a hundred and sixty until the analytic route began carrying the
+    /// shape's own space on its vertices rather than in its material. What is
+    /// left is the grid: `shapes()` builds each rectangle as `left + width` less
+    /// `left`, which in f32 gives three distinct widths and three heights across
+    /// the sixteen columns and ten rows, and only exactly equal sizes merge.
     #[test]
     fn the_two_paths_differ_in_draw_count_and_the_output_says_so() {
         let draws = |path| recording(path).draw_count();
-        assert_eq!(
-            draws(Path::Analytic),
-            SHAPES,
-            "an analytic shape carries its own geometry, so none of them merge"
+        let analytic = draws(Path::Analytic);
+        assert!(
+            analytic > 1 && analytic < SHAPES,
+            "an analytic shape merges with others of its exact size and not with \
+             the rest, so this is neither one draw nor one per shape: {analytic}"
         );
         assert_eq!(
             draws(Path::TessellatedMultisampled),
@@ -1252,17 +1259,17 @@ mod tests {
     fn a_stroked_row_strokes_and_takes_the_route_it_is_named_for() {
         // The two stroked rows exist to be a comparison, which they are only if
         // each takes the route its name claims. Read off the draw count, which
-        // is what separates the two: the analytic field carries the shape's
-        // parameters in its own material, so a hundred and sixty of them cannot
-        // merge, and the tessellated one puts every outline through a single
-        // solid material and comes out as one draw. A stroked row that had
-        // quietly fallen back to tessellation would report one draw here and
-        // measure the same thing twice.
-        assert_eq!(
-            recording(Path::StrokedAnalytic).draw_count(),
-            SHAPES,
-            "a stroked field is one draw per shape, so falling back to the \
-             tessellator would show here"
+        // is what separates the two: the analytic field merges only shapes of
+        // exactly one size, so the grid comes out as several draws, and the
+        // tessellated one puts every outline through a single solid material
+        // and comes out as one. A stroked row that had quietly fallen back to
+        // tessellation would report one draw here and measure the same thing
+        // twice.
+        let stroked = recording(Path::StrokedAnalytic).draw_count();
+        assert!(
+            stroked > 1,
+            "a stroked field is more than one draw over this grid, so falling \
+             back to the tessellator would show here: {stroked}"
         );
         assert_eq!(
             recording(Path::StrokedTessellated).draw_count(),

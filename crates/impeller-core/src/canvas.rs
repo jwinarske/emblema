@@ -3438,8 +3438,8 @@ impl Canvas {
         if rect.is_empty() {
             return Ok(self);
         }
-        if let Some(material) = self.analytic_rrect(rect, 0.0, paint) {
-            return self.draw_analytic(rect, material, paint);
+        if let Some((material, to_local)) = self.analytic_rrect(rect, 0.0, paint) {
+            return self.draw_analytic_local(rect, material, paint, to_local);
         }
         let path = rect.to_path();
         self.draw_path(&path, paint)
@@ -3466,8 +3466,8 @@ impl Canvas {
         if let Some((material, pad, drawn)) = self.analytic_rrect_blur_draw(rect, radius, paint) {
             return self.draw_analytic(rect.outset(pad), material, &drawn);
         }
-        if let Some(material) = self.analytic_rrect(rect, radius, paint) {
-            return self.draw_analytic(rect, material, paint);
+        if let Some((material, to_local)) = self.analytic_rrect(rect, radius, paint) {
+            return self.draw_analytic_local(rect, material, paint, to_local);
         }
         let path = rect.to_rounded_path(radius);
         self.draw_path(&path, paint)
@@ -3793,7 +3793,17 @@ impl Canvas {
     /// one at once — which is the case the push-constant budget was sized
     /// against — and an aliased fill is asking for hard edges, which the
     /// tessellated path gives and this one deliberately does not.
-    fn analytic_rrect(&self, rect: Rect, radius: f32, paint: &Paint) -> Option<Material> {
+    /// The material, and the clip-to-local mapping it would otherwise carry.
+    ///
+    /// Returned beside the material rather than inside it so that two of this
+    /// shape in different places compare equal and the batch merges them; the
+    /// mapping rides on the vertices instead. See `Renderer::fill_into_local`.
+    fn analytic_rrect(
+        &self,
+        rect: Rect,
+        radius: f32,
+        paint: &Paint,
+    ) -> Option<(Material, [f32; 12])> {
         // Invisible and fully-clipped shapes are rejected before the path is
         // built, and this route has to reject them too. It bypasses
         // `draw_path`, which is where those checks live -- so an alpha of zero
@@ -3848,27 +3858,34 @@ impl Canvas {
             (rect.left + rect.right) / 2.0,
             (rect.top + rect.bottom) / 2.0,
         );
-        Some(Material::RoundedRect {
-            color: dimmed(*color, coverage),
-            half_size: [rect.width() / 2.0, rect.height() / 2.0],
-            // Maps a clip-space position back into the shape's own space,
-            // measured from its center, so the distance is measured where the
-            // radius means what the caller said. Measuring in clip space would
-            // round the corners by different amounts on each axis of a target
-            // that is not square.
-            to_local: invert_to_local(to_clip * Affine2::from_translation(center)),
-            radius: radius.min(rect.width() / 2.0).min(rect.height() / 2.0),
-            // A mitered square corner offsets to a square corner, which is a
-            // radius of nothing. Everything else grows by half the stroke:
-            // a rounded corner because that is what offsetting an arc does, and
-            // a round join because the arc is what it asks for.
-            outer_radius: if mitered && radius <= 0.0 {
-                0.0
-            } else {
-                radius.min(rect.width() / 2.0).min(rect.height() / 2.0) + stroke / 2.0
+        let clip_to_local = invert_to_local(to_clip * Affine2::from_translation(center));
+        Some((
+            Material::RoundedRect {
+                color: dimmed(*color, coverage),
+                half_size: [rect.width() / 2.0, rect.height() / 2.0],
+                // Identity, because the mapping travels on the vertices instead
+                // -- `clip_to_local` below, applied by `fill_into_local`. It maps a
+                // clip-space position back into the shape's own space, measured
+                // from its center, so the distance is measured where the radius
+                // means what the caller said; measuring in clip space would round
+                // the corners by different amounts on each axis of a target that is
+                // not square. Keeping it out of the material is what lets two of
+                // this shape in different places merge into one draw.
+                to_local: to_local_columns(Transform2D::IDENTITY),
+                radius: radius.min(rect.width() / 2.0).min(rect.height() / 2.0),
+                // A mitered square corner offsets to a square corner, which is a
+                // radius of nothing. Everything else grows by half the stroke:
+                // a rounded corner because that is what offsetting an arc does, and
+                // a round join because the arc is what it asks for.
+                outer_radius: if mitered && radius <= 0.0 {
+                    0.0
+                } else {
+                    radius.min(rect.width() / 2.0).min(rect.height() / 2.0) + stroke / 2.0
+                },
+                stroke,
             },
-            stroke,
-        })
+            clip_to_local,
+        ))
     }
 
     /// Draw the quad a fragment-evaluated shape is painted onto.
@@ -3912,6 +3929,51 @@ impl Canvas {
             &outset.to_path(),
             self.transform,
             &render_paint,
+        )?;
+        Ok(self)
+    }
+
+    /// [`Self::draw_analytic`], with the shape's own space carried on the
+    /// vertices instead of in the material.
+    ///
+    /// Separate rather than an `Option` on the one above, because the two say
+    /// different things: a material that maps clip space itself is one shape's
+    /// worth of draw, and one that reads `uv` merges with every other placement
+    /// of the same shape. Only the rounded rectangle takes this route so far --
+    /// the ellipse and the blurred rectangle still carry their mapping.
+    fn draw_analytic_local(
+        &mut self,
+        rect: Rect,
+        material: Material,
+        paint: &Paint,
+        clip_to_local: [f32; 12],
+    ) -> Result<&mut Self> {
+        let reach = 1.0
+            + thin_stroke(
+                self.transform,
+                analytic_stroke(paint).unwrap_or(0.0),
+                Zero::IsNotAStroke,
+            )
+            .0 / 2.0;
+        let outset = Rect::new(
+            rect.left - reach,
+            rect.top - reach,
+            rect.right + reach,
+            rect.bottom + reach,
+        );
+        let render_paint = RenderPaint {
+            material,
+            filter: paint.color_filter,
+            blend: paint.blend,
+            clip: self.clip,
+            stencil: ClipState::content(self.depth),
+        };
+        self.renderer.fill_into_local(
+            &mut self.batch,
+            &outset.to_path(),
+            self.transform,
+            &render_paint,
+            clip_to_local,
         )?;
         Ok(self)
     }
@@ -4029,8 +4091,8 @@ impl Canvas {
         if let Some((material, pad, drawn)) = self.analytic_rrect_blur_draw(bounds, radius, paint) {
             return self.draw_analytic(bounds.outset(pad), material, &drawn);
         }
-        if let Some(material) = self.analytic_rrect(bounds, radius, paint) {
-            return self.draw_analytic(bounds, material, paint);
+        if let Some((material, to_local)) = self.analytic_rrect(bounds, radius, paint) {
+            return self.draw_analytic_local(bounds, material, paint, to_local);
         }
         let path = circle_path(center, radius);
         self.draw_path(&path, paint)
@@ -6607,8 +6669,15 @@ mod tests {
 
         // Two shapes, one batch: describing the frame before submitting is what
         // lets them share a pass.
+        //
+        // And one *draw*, which is stronger and newer. Both take the analytic
+        // route, and that route carries the shape's own space on its vertices
+        // rather than in its material, so two rectangles of a size differing
+        // only in where they sit are the same material and merge. It was two
+        // until then, with the placement inside the material making every
+        // instance unequal to every other.
         let recording = canvas.finish();
-        assert_eq!(recording.draw_count(), 2);
+        assert_eq!(recording.draw_count(), 1);
     }
 
     #[test]

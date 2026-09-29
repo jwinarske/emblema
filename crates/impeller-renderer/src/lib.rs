@@ -265,6 +265,69 @@ impl Renderer {
         )
     }
 
+    /// Tessellate a filled path, carrying the paint's own space on the vertices
+    /// rather than in the material.
+    ///
+    /// For a material that evaluates a field, the mapping from clip space into
+    /// the shape's space is the only thing that differs between two of the same
+    /// shape in different places -- so while it sits in the material, two such
+    /// shapes compare unequal and the batch cannot merge them. A hundred and
+    /// sixty identical rounded rectangles became a hundred and sixty draws for
+    /// that reason alone, against one for the tessellated route.
+    ///
+    /// Applying the mapping here instead puts it on `uv`, which
+    /// `paint_at_texture_coords` tells the shader to read as the paint's space.
+    /// The material is then equal for every placement of one shape, and the
+    /// draws merge.
+    ///
+    /// Exact rather than an approximation. The per-fragment mapping this
+    /// replaces is applied to an interpolated position, and the routes that
+    /// reach here are affine by construction -- an analytic shape refuses
+    /// perspective. Over an affine the mapping is linear in what the rasterizer
+    /// interpolates, so evaluating it at the corners is the same arithmetic in
+    /// a different place.
+    pub fn fill_into_local(
+        &mut self,
+        batch: &mut Batch,
+        path: &Path,
+        transform: impl Into<Transform2D>,
+        paint: &Paint,
+        clip_to_local: [f32; 12],
+    ) -> Result<()> {
+        let geo = self.fill_path(path, transform);
+        let indices = geo.indices.to_vec();
+        let vertices: Vec<Vertex> = geo
+            .vertices()
+            .into_iter()
+            .map(|v| {
+                let [x, y, w] = v.position;
+                // The shader's own mapping, at a vertex: three packed columns
+                // against the homogeneous clip position, then the divide. The
+                // `max` guards the vanishing line as the shader does, so a
+                // degenerate vertex lands far from the origin rather than at a
+                // NaN the blend would spread.
+                let m = [
+                    clip_to_local[0] * x + clip_to_local[4] * y + clip_to_local[8] * w,
+                    clip_to_local[1] * x + clip_to_local[5] * y + clip_to_local[9] * w,
+                    clip_to_local[2] * x + clip_to_local[6] * y + clip_to_local[10] * w,
+                ];
+                let z = m[2].max(1e-6);
+                Vertex::projected(v.position, [m[0] / z, m[1] / z])
+            })
+            .collect();
+        batch.push_mesh_tinted(
+            &vertices,
+            &indices,
+            paint.material.clone(),
+            paint.filter,
+            paint.blend,
+            paint.clip,
+            paint.stencil,
+            BlendMode::Modulate,
+            true,
+        )
+    }
+
     /// Tessellate a stroked path and append it to a batch.
     pub fn stroke_into(
         &mut self,
