@@ -68,10 +68,16 @@ saying what this file says they say" is. The same lesson is written out at
 length beside the timing baseline, which went eight commits pointing at a state
 no run had passed against, for want of exactly this.
 
-Eight entries name something in upstream specific enough to re-read. Six were
-read on the date above; §1 was read again, and §19 and §20 for the first time, at
-tip on **2026-09-29**, which is why those rows carry their own date and the others
-do not:
+Nine entries name something in upstream specific enough to re-read. Six were read
+on the date above. §1 and §19 were read at tip on **2026-09-29**, and §17 and §20 on
+**2026-09-30**, which is why four rows carry their own date.
+
+Two things about how those four arrived, because both are the failure this table
+exists to catch. §17 quoted upstream code with a commit in its own text for as long
+as it existed and was never listed here, so nothing said when it had last been
+checked. And §20's row was written from §14's citation of `ExtractScale` rather than
+from the file -- a row asserting a re-read that had not happened. Both were read
+before this sentence was written:
 
 | | claim | what was read | still true |
 |---|---|---|---|
@@ -82,7 +88,8 @@ do not:
 | §8 | the blurred rectangle's asymmetric term | `solid_rrect_like_blur_contents.cc`, `NegPos` and `1.25 * sigma * (eccentricV.x - eccentricV.y)` under the comment "Pull in long end" | yes |
 | §10 | the squircle's conic-weight sawtooth | `round_superellipse_param.cc`, `frac * kPrecomputedVariables[left + 1][0] * sqrt(n)` | yes |
 | §19 | a vertex-interpolated gradient path | `linear_gradient_contents.cc`, `CanApplyFastGradient` and `FastLinearGradient`, reached before the uniform path in `Render` | yes, read 2026-09-29 |
-| §20 | a blur's deviations scale per axis | `gaussian_blur_filter_contents.cc`, `ExtractScale` taking the lengths of the transformed basis vectors, which §14 cites for the same call | yes, read 2026-09-29 |
+| §20 | a blur's deviations scale per axis | `filters/gaussian_blur_filter_contents.cc`, `Vector2 ExtractScale(...)` and the `Vector2 scaled_sigma` it feeds, which §14 cites for the same call | yes, read 2026-09-30 |
+| §17 | a morphology radius per transformed direction | `filters/morphology_filter_contents.cc`, `transform.TransformDirection(direction_ * radius_.radius)` and `std::round(transformed_radius.GetLength())` | yes, read 2026-09-30 |
 
 Two of those six are upstream defects rather than differences of design -- §8's
 asymmetry and §10's sawtooth -- and both are still there. §10 is the sharper
@@ -915,39 +922,62 @@ the sections upstream already describes. The paint block's four stops do not bou
 it — the sections are geometry, so a vertex-interpolated wash is not limited the
 way the fragment walk is, and building it would narrow §1 as well.
 
-## 20. A blur's deviations are scaled by one factor; upstream scales them per axis
+## 20. A blur's deviations scale per axis; a backdrop blur's single number cannot
 
-**What differs.** `dart:ui` states a deviation per axis in the caller's space, and
-something has to convert the pair into device pixels. Upstream's
+**Closed for the pair, open for the one number, and the pair is why this entry
+exists.** `dart:ui` states a deviation per axis in the caller's space, and something
+has to convert the pair into device pixels. Upstream's
 `GaussianBlurFilterContents` uses `ExtractScale`, which takes the lengths of the
-transformed basis vectors -- one length per axis. `Layer::scaled_by` here
-multiplies both deviations by `max_scale_of`, which is the *larger* of those two
-lengths.
+transformed basis vectors -- one length per axis. `Layer::scaled_by` multiplied both
+deviations by `max_scale_of`, the *larger* of those two, until 2026-09-30.
 
-**Why.** No reason on record. It is what this renderer has always done, and it is
-the same defect entry 17 records for the morphology radius, which took the same
-factor until 2026-09-29 on the stated grounds of matching the blur. Fixing
-morphology left the two filters inconsistent, and this is the half that is still
-wrong rather than the half that changed.
+**What that cost, measured before it was fixed.** A layer blurred with deviations of
+six and two recorded eighteen and six under `scale(2, 3)` -- and the same eighteen
+and six under `scale(3, 2)`. Two transforms that transpose each other produced an
+identical blur, because one number cannot tell them apart. It now records twelve and
+six, and eighteen and four, which transpose as the transforms do.
 
-**Impact.** Measured 2026-09-29. A layer blurred with deviations of eight and three
-records sigmas of ten and fifteen under `scale(2, 5)` -- and **the same ten and
-fifteen under `scale(5, 2)`**. Two transforms that transpose each other produce an
-identical blur, because one number cannot tell them apart. Upstream produces
-transposed results. The ten rather than forty is the reduction of entry 6 doing its
-work on an inflated deviation, which is the other half of the cost: an anisotropic
-blur is downsampled further here than the deviation the caller asked for would
-have needed.
+By the rule in this file's opening that was never a divergence to keep: it is not a
+question about how the pixels get there but about what the picture is, and two
+different transforms giving one picture is not an answer to it. It was recorded
+rather than fixed for one commit because no corpus scene blurred a layer under an
+anisotropic scale, and the scene comes before the fix here or the change is
+unmeasured.
 
-By the rule in this file's own opening, this is not a divergence to keep. It is not
-a question about how the pixels get there -- it is a question about what the
-picture is, and two different transforms giving one picture is not an answer to it.
+**What remains is `Layer::backdrop_blur`, and it is a public type rather than a
+mistake.** The field is one `f32` and `with_backdrop_blur` takes one sigma, so a
+caller cannot state an anisotropic backdrop blur and this cannot give them one. It
+keeps the single largest factor: a backdrop blur of six under `scale(2, 3)` records
+eighteen on *both* axes, and under `scale(3, 2)` records the same. So a frosted panel
+under an anisotropic scale is blurred round here where the same deviations on the
+layer itself would stretch, and the two transforms are again indistinguishable.
 
-**It is recorded rather than fixed because nothing pins it.** No corpus scene
-blurs a layer under an anisotropic scale, so the change would be unmeasured, and
-this tree's rule -- set by the radius flip and followed again for the morphology
-conversion -- is that the scene comes before the fix. The scene wants care the
-morphology pair did not: a sigma also drives the reduction in entry 6, so a scene
-whose deviations cross a halving threshold would move its own pass count for a
-second reason and confuse the two. `the_dilation_under_an_anisotropic_scale_converts_per_axis`
-is the shape to copy.
+Making that right means making the field a pair, which changes a published type and
+wants its own decision -- the isotropic spelling is also the one nearly every caller
+wants, and `save_layer_backdrop` already takes a full `ImageFilter` for anything
+else, so an anisotropic backdrop blur is expressible today by a caller who asks for
+it that way. `a_backdrop_blur_stays_round_under_an_anisotropic_scale` pins what it
+does now.
+
+**Impact.** For the pair, none against upstream: they agree under every transform
+`BlurBasis` can decompose. For the backdrop, a blur that should stretch stays round,
+bounded to a backdrop blur stated as a single sigma under a transform whose axes
+scale differently.
+
+Three tests hold it, written the way entry 17's were:
+
+- `a_blur_under_an_anisotropic_scale_converts_per_axis` asserted eighteen and six
+  until the conversion landed, then failed with twelve and six and named its
+  replacement, over `layer-blurred-under-anisotropic-scale`.
+- `transposing_the_scale_transposes_the_deviations` is the property the single factor
+  destroyed, and is built from a `Canvas` because the two halves have to be recorded
+  in one test to be compared.
+- `a_backdrop_blur_stays_round_under_an_anisotropic_scale` pins what is left.
+
+The scene's deviations are small deliberately, and entry 6 is why: a deviation drives
+the reduction as well as the blur, so a scene crossing a halving threshold would move
+its own pass count for a second reason and leave a reader unable to tell which one
+did it. Eighteen was the largest in play against a threshold a little over nineteen.
+`the_scene_does_not_reach_the_reduction_either_way` pins that, on the whole
+recording's pass count rather than on the blur materials -- a halving is a pass of its
+own, so counting blurs would read two either way and prove nothing.

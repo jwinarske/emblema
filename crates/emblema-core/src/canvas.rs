@@ -985,22 +985,22 @@ impl Layer {
     /// each use -- the transform that decides it is the one in force when the
     /// layer is opened, and it may be gone by the time the layer is composited.
     ///
-    /// **The two filters take different factors, and the difference is a defect
-    /// on the blur's side rather than a design.** A morphology radius is
-    /// converted per axis, as upstream converts it; a blur's deviations are
-    /// converted by the single largest factor, which is what this renderer has
-    /// always done and is wrong the same way morphology's was. `non-parity.md`
-    /// 20 has the measurement -- under `scale(2, 5)` and `scale(5, 2)` a blur
-    /// here comes out *identical*, because one number cannot tell the two
-    /// transforms apart. It is not fixed in the same change because no corpus
-    /// scene pins an anisotropically scaled blur yet, and this tree's rule is
-    /// that the scene comes first or the change is unmeasured.
+    /// **Every length stated per axis takes the axis factors; the one stated as a
+    /// single number cannot.** A blur's deviations and a morphology's radii are
+    /// pairs, and each component takes the length of its own transformed basis
+    /// vector -- which is what upstream's `ExtractScale` and `TransformDirection`
+    /// take. `backdrop_blur` is one number by public API, so a caller cannot
+    /// state an anisotropic backdrop blur and this cannot give them one: it keeps
+    /// the single largest factor, and under an anisotropic scale it stays round
+    /// where the same blur on the layer itself would stretch. `non-parity.md` 20
+    /// records that as what is left, and why making the field a pair is an API
+    /// decision rather than a correction.
     fn scaled_by(self, scale: f32, axes: Vec2) -> Self {
         if !scale.is_finite() || scale <= 0.0 {
             return self;
         }
         Self {
-            blur: self.blur * scale,
+            blur: self.blur * axes,
             backdrop_blur: self.backdrop_blur * scale,
             // A morphology radius is a length in the caller's space too, and was
             // the one filter left out of this conversion -- on the stated

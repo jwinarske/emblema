@@ -52,13 +52,21 @@ axes rather than the screen's. Under a shear or perspective the basis does not
 decompose and both fall back to the target's axes, which `docs/non-parity.md` 17
 records as what remains.
 
-**A blur's deviations still take the single factor, and that is now a recorded
-defect rather than a matched pair.** Measured while doing the above: a layer blurred
-with deviations of eight and three records the same sigmas under `scale(2, 5)` as
-under `scale(5, 2)`, because one number cannot tell two transposed transforms apart.
-`docs/non-parity.md` 20 is the entry. It is not fixed in the same change because no
-corpus scene blurs under an anisotropic scale, and a scene comes before a fix here
-or the change is unmeasured.
+**A blur's deviations scale per axis too, which closes the pair.** They took the
+single largest factor, so a layer blurred with deviations of six and two recorded the
+same sigmas under `scale(2, 3)` as under `scale(3, 2)` -- two transforms that
+transpose each other producing one picture, because one number cannot tell them
+apart. Each component now takes the length of its own transformed basis vector, as
+upstream's `ExtractScale` does: twelve and six one way, eighteen and four the other.
+**This changes what a blurred layer draws under an anisotropic scale.**
+
+`Layer::backdrop_blur` is what remains, and it is a public type rather than an
+oversight: the field is one `f32` and `with_backdrop_blur` takes one sigma, so a
+caller cannot state an anisotropic backdrop blur and this does not invent one. It
+keeps the largest factor and stays round where the same deviations on the layer
+itself would stretch. `docs/non-parity.md` 20 has what changing it would cost, and
+`save_layer_backdrop` already takes a full `ImageFilter` for a caller who wants
+something else.
 
 `emblema_present_drm::pacing` counts the vertical blanks a frame loop did not land
 on, from the sequence the kernel reports with each completed flip -- which the event
