@@ -2495,18 +2495,29 @@ rather than in principle.
 
   | device | field ÷ tessellated at one sample | cost of four samples |
   |---|---|---|
-  | Pi 5 V3D, Vulkan | 0.98× → **2.40×** | 1.17× → 1.23× |
-  | Pi 5 V3D, GLES | 1.00× → **2.44×** | 1.17× → 1.50× |
+  | Pi 5 V3D, Vulkan | 0.98× → **2.22×** | 1.17× → 1.23× |
+  | Pi 5 V3D, GLES | 1.00× → **2.35×** | 1.17× → 1.50× |
 
-  Two of these cells have moved in the third decimal place across the two
-  baseline re-recordings of 2026-09-18, and neither move has a cause worth looking
-  for. The Vulkan four-sample cost read 1.23×, then 1.22× from the same two rows
-  measured again, then 1.23× once the processor was held at one frequency; the
-  GLES field ratio went 2.45× to 2.44× the same way. These are quotients of two
-  measurements each good to a few thousandths of a millisecond, so the second
-  decimal place is the first one that is theirs rather than the clock's. The
-  conclusions the table is here for -- which route wins, and by roughly how much
-  -- are an order of magnitude away from that.
+  Two of these cells moved in the third decimal place across the two baseline
+  re-recordings of 2026-09-18, and neither move had a cause worth looking for. The
+  Vulkan four-sample cost read 1.23×, then 1.22× from the same two rows measured
+  again, then 1.23× once the processor was held at one frequency; the GLES field
+  ratio went 2.45× to 2.44× the same way. These are quotients of two measurements
+  each good to a few thousandths of a millisecond, so the second decimal place is
+  the first one that is theirs rather than the clock's. The conclusions the table
+  is here for -- which route wins, and by roughly how much -- are an order of
+  magnitude away from that.
+
+  **The re-recording of 2026-09-30 is the other kind, and the distinction is the
+  point.** The field ratios moved further than any clock explains -- 2.40× to
+  2.22× on Vulkan and 2.44× to 2.35× on GLES -- because the numerator moved: the
+  distance-field row went 8.852 ms to 8.205, and the stroked field 9.431 to 8.779.
+  That is the rounded rectangle carrying its own space on its vertices rather than
+  inside its material, which let identical shapes batch and took the grid from a
+  hundred and sixty draws to forty-four. `docs/on-a-board.md` records the same
+  change as worth about five per cent on an Adreno 640 and nothing at all on a
+  PowerVR BXE-4-32, so seven per cent here is a third answer rather than a
+  confirmation of either.
 
   The paragraph above this table said the margin was expected to narrow on a
   tiler and possibly invert, and that both halves held. The first half no longer
@@ -2518,8 +2529,8 @@ rather than in principle.
   contradicting it.
 
   It goes further than narrowing. At these sample counts the field at one sample
-  costs about twice the *tessellated* shapes at four -- 1.96× on Vulkan and
-  1.63× on GLES -- so on this board, for this scene, tessellating and
+  costs about twice the *tessellated* shapes at four -- 1.81× on Vulkan and
+  1.56× on GLES -- so on this board, for this scene, tessellating and
   multisampling is cheaper than evaluating the field, which is the opposite of
   what the numbers said a week ago.
 

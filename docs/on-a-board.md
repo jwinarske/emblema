@@ -1283,6 +1283,28 @@ it spread 1.6 across three runs where every other held under 0.4 -- so it carrie
 a 2.0 tolerance in the baseline, and the differences taken from it are worth about
 one decimal.
 
+**Confirmed on V3D, 2026-09-30 at 50b64f4, and it leans harder there.** The Pi 5's
+stage rows were recorded the same way, after a reboot with the governor pinned:
+
+| route | ground | plus cards | plus shadows | frame | ground's share |
+|---|---|---|---|---|---|
+| Pi 5 Vulkan | 10.427 ms | 11.066 | 11.913 | 13.911 | **75.0%** |
+| Pi 5 GLES | 11.766 | 12.444 | 13.328 | 14.866 | **79.1%** |
+| VisionFive 2 Vulkan | 43.149 | 45.498 | 48.717 | 64.019 | **67.4%** |
+
+So a single full-screen five-stop gradient is three quarters of the frame on V3D and
+two thirds on PowerVR -- two unrelated tile architectures, the same answer, and the
+one with a mature driver is the one that leans on it more. It is not a PowerVR quirk.
+The three cards and their three shadows together are between nine and eleven per cent
+of the frame on every row here -- 10.7 and 10.5 on the Pi, 8.7 on the VisionFive 2 --
+so the shapes are not where the frame goes on any of them.
+
+That is what makes `non-parity.md` 1 and 19 the entries to read rather than a
+curiosity about one board. Five stops is past this renderer's `MAX_STOPS`, so the
+gradient is tabulated into a ramp texture and sampled per fragment; upstream would
+walk uniforms for the same gradient and, for an axis-aligned one, interpolate it
+across vertices and do no per-fragment gradient work at all.
+
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
 The `render` group turned GLES on, and the rows it produces are a trap the
