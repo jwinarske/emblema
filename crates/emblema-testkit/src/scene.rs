@@ -3672,6 +3672,69 @@ pub fn corpus() -> Vec<Scene> {
         // pass order swapped between the halves would show. The blur is the half
         // that carries a length, which makes it the half the conversion has to
         // reach through the `Compose` to find.
+        // A blur under an *anisotropic* scale, which is the case one conversion
+        // factor cannot carry. `non-parity.md` 20 is the entry: upstream's
+        // `ExtractScale` takes the length of each transformed basis vector, so
+        // `scale(2, 3)` on deviations of six and two reaches twelve and six. Here
+        // `Layer::scaled_by` multiplies both by `max_scale_of`, the larger of the
+        // two, so x reaches eighteen -- and `scale(3, 2)` reaches eighteen and six
+        // as well, which is the sharp end of it: two transforms that transpose
+        // each other produce one picture.
+        //
+        // Stated through `filter` rather than `blur`, because `LayerSpec::blur` is
+        // one number and cannot say a deviation per axis at all. That also puts
+        // the scene on `ImageFilter::scaled_by`, which is the spelling the defect
+        // lives in.
+        //
+        // **The deviations are small on purpose.** A sigma drives the reduction of
+        // entry 6 as well as the blur itself: past a kernel radius of
+        // `BLUR_MAX_TAPS` the pass halves its target and divides the deviation,
+        // which moves the pass count. Six and two under a factor of three reach
+        // eighteen, and eighteen is under the threshold of about nineteen -- so
+        // neither the inflated pair nor the corrected one reduces, and the pass
+        // count is the same either way. A scene whose deviations crossed that
+        // threshold would move its cost row for a second reason and leave a reader
+        // unable to tell which one did it.
+        //
+        // So this scene is pinned by reading the sigmas out of the recording, in
+        // `a_blur_under_an_anisotropic_scale_uses_one_factor`, and not by its cost
+        // row and not by its picture -- every comparison the corpus makes is
+        // between two backends or two devices, and the conversion sits above both.
+        Scene::tree(
+            "layer-blurred-under-anisotropic-scale",
+            vec![Node::Layer {
+                layer: Box::new(LayerSpec {
+                    filter: ImageFilter::Blur {
+                        sigma_x: 6.0,
+                        sigma_y: 2.0,
+                    },
+                    ..LayerSpec::default()
+                }),
+                bounds: None,
+                transform: Transform::scale(2.0, 3.0),
+                children: vec![
+                    Item::fill(
+                        Shape::Rect {
+                            min: [22.0, 10.0],
+                            max: [42.0, 18.0],
+                        },
+                        [1.0, 1.0, 1.0, 1.0],
+                    )
+                    .with_blend(BlendMode::SrcOver)
+                    .into(),
+                    Item::fill(
+                        Shape::Circle {
+                            center: [32.0, 30.0],
+                            radius: 8.0,
+                        },
+                        [0.4, 0.9, 1.0, 1.0],
+                    )
+                    .with_blend(BlendMode::SrcOver)
+                    .into(),
+                ],
+            }],
+        )
+        .with_background(DARK_GROUND),
         Scene::tree(
             "layer-composed-filter-under-scale",
             vec![Node::Layer {
