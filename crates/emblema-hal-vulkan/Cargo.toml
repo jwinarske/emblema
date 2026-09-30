@@ -1,0 +1,25 @@
+[package]
+name = "emblema-hal-vulkan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vulkan rendering backend for emblema."
+keywords = ["vulkan", "backend", "graphics", "renderer", "hal"]
+categories = ["graphics", "rendering::graphics-api"]
+
+[lints]
+workspace = true
+
+[dependencies]
+ash = { workspace = true }
+gpu-allocator = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-shaders = { workspace = true }
+
+[dev-dependencies]
+emblema-present = { path = "../emblema-present" }
+rustix = { version = "1.1.4", default-features = false, features = ["event", "std"] }

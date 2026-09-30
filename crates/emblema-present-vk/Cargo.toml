@@ -1,0 +1,22 @@
+[package]
+name = "emblema-present-vk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vulkan WSI swapchain presentation target for emblema."
+keywords = ["vulkan", "wsi", "swapchain", "presentation"]
+categories = ["graphics", "rendering::graphics-api"]
+
+[lints]
+workspace = true
+
+[dependencies]
+ash = { workspace = true }
+emblema-core = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-hal-vulkan = { workspace = true }
+emblema-present = { workspace = true }

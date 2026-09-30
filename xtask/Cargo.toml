@@ -13,10 +13,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-impeller-core = { workspace = true }
-impeller-hal = { workspace = true }
-impeller-hal-vulkan = { workspace = true }
-impeller-hal-gles = { workspace = true }
-impeller-present-drm = { workspace = true }
-impeller-testkit = { workspace = true }
+emblema-core = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-hal-vulkan = { workspace = true }
+emblema-hal-gles = { workspace = true }
+emblema-present-drm = { workspace = true }
+emblema-testkit = { workspace = true }
 glow = { workspace = true }

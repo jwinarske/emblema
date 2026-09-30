@@ -239,7 +239,7 @@ jobs:
       # never turns a feature on cannot notice that turning it on does nothing.
       - name: Check
         run: |
-          cargo check -p impeller-rs --no-default-features \
+          cargo check -p emblema --no-default-features \
             --features vulkan,gles,drm,present-wsi,present-egl \
             --target ${{ matrix.target }} --locked
 

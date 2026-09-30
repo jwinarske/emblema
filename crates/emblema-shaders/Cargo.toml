@@ -1,0 +1,25 @@
+[package]
+name = "emblema-shaders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WGSL shader sources for emblema, translated at build time by naga."
+keywords = ["wgsl", "shader", "naga", "spirv", "glsl"]
+categories = ["graphics", "rendering::graphics-api"]
+
+[build-dependencies]
+naga = { workspace = true, features = ["wgsl-in", "spv-out", "glsl-out"] }
+
+# For tests only, and one test in particular: the material kinds the shader
+# dispatches on are named there, and a list that has to agree with another list
+# is worth a dependency rather than a second copy. `emblema-hal` depends on
+# nothing here, so this adds no cycle and no weight to a build.
+[dev-dependencies]
+emblema-hal = { workspace = true }
+
+[lints]
+workspace = true

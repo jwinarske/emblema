@@ -1,0 +1,18 @@
+[package]
+name = "emblema-hal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rendering hardware abstraction layer for emblema."
+keywords = ["hal", "graphics", "vulkan", "gles", "renderer"]
+categories = ["graphics", "rendering::graphics-api"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

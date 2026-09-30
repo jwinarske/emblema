@@ -107,24 +107,24 @@ Two things the harness needs, both of which look like failures when missing.
 report the second as unable to open a card, which reads as a device problem and
 is a scheduling one.
 
-`IMPELLER_SHADER_SNAPSHOTS`, naming a directory holding `tests/shader-snapshots`
+`EMBLEMA_SHADER_SNAPSHOTS`, naming a directory holding `tests/shader-snapshots`
 copied across. The snapshot tests find their files from `CARGO_MANIFEST_DIR`,
 which is baked in at compile time and names a path on the machine that did the
 compiling. Without it they are the only two tests here that cannot run from a
 bare binary, and a board run can never come out clean.
 
-`IMPELLER_COST_BASELINE`, naming a copy of
-`crates/impeller-testkit/tests/cost-baseline.txt`, for the same reason and with
+`EMBLEMA_COST_BASELINE`, naming a copy of
+`crates/emblema-testkit/tests/cost-baseline.txt`, for the same reason and with
 the same failure. The cost table is counted rather than measured, so a board is
 where the claim that it is device-independent gets tested against a different
 architecture instead of a different driver -- which is worth doing and cannot
 be done from a binary that looks for its baseline on the machine that compiled
 it. Recorded on x86-64, it matched byte for byte on the Pi 5.
 
-`IMPELLER_DRM_CARD` matters on a board with more than one display controller. A
+`EMBLEMA_DRM_CARD` matters on a board with more than one display controller. A
 Pi 5 has two, and a test that opens the first `/dev/dri/cardN` gets `rp1-dsi`
 rather than `vc4`. A suite that passes on the controller that works says nothing
-about the one beside it; `impeller-present-drm`'s crate documentation has the
+about the one beside it; `emblema-present-drm`'s crate documentation has the
 table of what each board actually does.
 
 ## Benchmarking there, which has two rules of its own
@@ -552,7 +552,7 @@ cost is a step function of its size on this board, and that is enough reason not
 to carry code nothing runs.
 
 `every_function_in_a_shader_is_either_called_or_a_stage` in
-`crates/impeller-shaders/tests/sources.rs` is what would have said so. It reads
+`crates/emblema-shaders/tests/sources.rs` is what would have said so. It reads
 the WGSL rather than the generated output, since a call graph is legible there
 and not in the GLSL, and it catches a chain one link at a time: a helper called
 only from a dead function still reads as called, so removing the root is what
@@ -833,7 +833,7 @@ is working on is not that machine, and that the cheap version of a perf gate —
 record a baseline here, check it in CI — cannot work.
 
 The gate that does work on every commit is a different quantity entirely: see
-`crates/impeller-testkit/tests/cost.rs`, which counts what a frame does rather
+`crates/emblema-testkit/tests/cost.rs`, which counts what a frame does rather
 than timing it.
 
 ## A second board, and what it says about reading a green run
@@ -943,7 +943,7 @@ GPU, which closes the margin the architecture had been reasoning about.
 `docs/architecture.md` carries the measurement.
 
 **The KMS lane runs on a real display controller, not only on VKMS.** All
-thirty-four tests in `impeller-present-drm` pass on the Pi 5 -- nineteen unit,
+thirty-four tests in `emblema-present-drm` pass on the Pi 5 -- nineteen unit,
 nine scanout, and the six that take DRM master and commit a frame. The board
 has two display controllers, `vc4` driving HDMI and `drm-rp1-dsi` driving the
 panel, and a separate `v3d` render node, which is the split render/display
@@ -953,7 +953,7 @@ the thing itself rather than only against the stand-in.
 They need no display server running to get master, and there is none on this
 board. Note that `cargo test --workspace` does *not* build them -- the crate is
 reached through the facade's `drm` feature -- so a cross-compiled suite has to
-ask for `-p impeller-present-drm` by name or silently leave the whole crate
+ask for `-p emblema-present-drm` by name or silently leave the whole crate
 behind. Mine did, on the first run: the total was 809 where it should have been
 834, a gap of twenty-five, which is what the crate held that day.
 
@@ -1014,10 +1014,10 @@ cross-compiled without it and a debug frame against a real sixteen-millisecond b
 measures the optimizer:
 
 ```sh
-cargo build -p impeller-present-drm --release --example panel \
+cargo build -p emblema-present-drm --release --example panel \
   --target aarch64-unknown-linux-gnu
 scp target/aarch64-unknown-linux-gnu/release/examples/panel "$PI:/tmp/"
-ssh "$PI" 'cd /tmp && IMPELLER_DRM_CARD=/dev/dri/card0 SECONDS=30 ./panel'
+ssh "$PI" 'cd /tmp && EMBLEMA_DRM_CARD=/dev/dri/card0 SECONDS=30 ./panel'
 ```
 
 `/tmp` for the reason the bench rows want it, `card0` because that is `vc4` and the
@@ -1461,7 +1461,7 @@ and `drawAtlas` combine a per-vertex or per-sprite color with what the paint
 produced, and that happens inside the fragment -- no destination read, no
 extension, nothing to gate.
 `every_advanced_mode_agrees_with_the_reference_formulas` in
-`crates/impeller/tests/tint_blend.rs` checks all fifteen against `impeller_hal`'s
+`crates/emblema/tests/tint_blend.rs` checks all fifteen against `emblema_hal`'s
 reference, which was written first and independently of the shader, on whatever
 device the machine has. It passes on a Raspberry Pi 5, where no device has
 advanced blending at all.
@@ -1499,7 +1499,7 @@ crate's documentation states.
 This used to add that the board has no IOMMU "so Vulkan does not come up on it at
 all", which is wrong and was wrong in one direction only: the missing IOMMU stops
 `vc4` importing `v3d`'s memory, so what a Pi 4 cannot do is *scan out* what Vulkan
-allocated. Rendering is fine. `impeller-present-drm`'s crate documentation has
+allocated. Rendering is fine. `emblema-present-drm`'s crate documentation has
 always said so -- "works on a Pi 4 ... what a Pi 4 cannot do is *scan out* what
 Vulkan allocated" -- so the tree contradicted itself here for as long as this
 paragraph stood.

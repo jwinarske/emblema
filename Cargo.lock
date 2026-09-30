@@ -149,6 +149,180 @@ dependencies = [
 ]
 
 [[package]]
+name = "emblema"
+version = "0.1.0"
+dependencies = [
+ "emblema",
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-gles",
+ "emblema-hal-vulkan",
+ "emblema-present",
+ "emblema-present-drm",
+ "emblema-present-egl",
+ "emblema-present-vk",
+ "emblema-shaders",
+ "googletest",
+ "half",
+ "proptest",
+]
+
+[[package]]
+name = "emblema-capi"
+version = "0.1.0"
+dependencies = [
+ "emblema-core",
+]
+
+[[package]]
+name = "emblema-core"
+version = "0.1.0"
+dependencies = [
+ "emblema-geometry",
+ "emblema-hal",
+ "emblema-renderer",
+ "emblema-text",
+ "glam",
+ "half",
+]
+
+[[package]]
+name = "emblema-entity"
+version = "0.1.0"
+dependencies = [
+ "emblema-geometry",
+ "emblema-hal",
+ "glam",
+]
+
+[[package]]
+name = "emblema-geometry"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "lyon_tessellation",
+ "proptest",
+]
+
+[[package]]
+name = "emblema-hal"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "emblema-hal-gles"
+version = "0.1.0"
+dependencies = [
+ "emblema-hal",
+ "emblema-shaders",
+ "glow",
+ "half",
+ "khronos-egl",
+]
+
+[[package]]
+name = "emblema-hal-vulkan"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "emblema-hal",
+ "emblema-present",
+ "emblema-shaders",
+ "gpu-allocator",
+ "rustix",
+]
+
+[[package]]
+name = "emblema-present"
+version = "0.1.0"
+dependencies = [
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "emblema-renderer",
+ "emblema-testkit",
+ "log",
+ "proptest",
+]
+
+[[package]]
+name = "emblema-present-drm"
+version = "0.1.0"
+dependencies = [
+ "drm",
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "emblema-present",
+ "log",
+ "proptest",
+ "rustix",
+]
+
+[[package]]
+name = "emblema-present-egl"
+version = "0.1.0"
+dependencies = [
+ "emblema-hal",
+ "emblema-hal-gles",
+ "emblema-present",
+ "glow",
+ "khronos-egl",
+]
+
+[[package]]
+name = "emblema-present-vk"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "emblema-present",
+]
+
+[[package]]
+name = "emblema-renderer"
+version = "0.1.0"
+dependencies = [
+ "emblema-geometry",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "glam",
+]
+
+[[package]]
+name = "emblema-shaders"
+version = "0.1.0"
+dependencies = [
+ "emblema-hal",
+ "naga",
+]
+
+[[package]]
+name = "emblema-testkit"
+version = "0.1.0"
+dependencies = [
+ "emblema-core",
+ "emblema-geometry",
+ "emblema-hal",
+ "emblema-hal-gles",
+ "emblema-hal-vulkan",
+ "emblema-renderer",
+ "emblema-shaders",
+ "emblema-text",
+ "glam",
+ "googletest",
+ "half",
+]
+
+[[package]]
+name = "emblema-text"
+version = "0.1.0"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -314,180 +488,6 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
-
-[[package]]
-name = "impeller-capi"
-version = "0.1.0"
-dependencies = [
- "impeller-core",
-]
-
-[[package]]
-name = "impeller-core"
-version = "0.1.0"
-dependencies = [
- "glam",
- "half",
- "impeller-geometry",
- "impeller-hal",
- "impeller-renderer",
- "impeller-text",
-]
-
-[[package]]
-name = "impeller-entity"
-version = "0.1.0"
-dependencies = [
- "glam",
- "impeller-geometry",
- "impeller-hal",
-]
-
-[[package]]
-name = "impeller-geometry"
-version = "0.1.0"
-dependencies = [
- "glam",
- "lyon_tessellation",
- "proptest",
-]
-
-[[package]]
-name = "impeller-hal"
-version = "0.1.0"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "impeller-hal-gles"
-version = "0.1.0"
-dependencies = [
- "glow",
- "half",
- "impeller-hal",
- "impeller-shaders",
- "khronos-egl",
-]
-
-[[package]]
-name = "impeller-hal-vulkan"
-version = "0.1.0"
-dependencies = [
- "ash",
- "gpu-allocator",
- "impeller-hal",
- "impeller-present",
- "impeller-shaders",
- "rustix",
-]
-
-[[package]]
-name = "impeller-present"
-version = "0.1.0"
-dependencies = [
- "impeller-core",
- "impeller-hal",
- "impeller-hal-vulkan",
- "impeller-renderer",
- "impeller-testkit",
- "log",
- "proptest",
-]
-
-[[package]]
-name = "impeller-present-drm"
-version = "0.1.0"
-dependencies = [
- "drm",
- "impeller-core",
- "impeller-hal",
- "impeller-hal-vulkan",
- "impeller-present",
- "log",
- "proptest",
- "rustix",
-]
-
-[[package]]
-name = "impeller-present-egl"
-version = "0.1.0"
-dependencies = [
- "glow",
- "impeller-hal",
- "impeller-hal-gles",
- "impeller-present",
- "khronos-egl",
-]
-
-[[package]]
-name = "impeller-present-vk"
-version = "0.1.0"
-dependencies = [
- "ash",
- "impeller-core",
- "impeller-hal",
- "impeller-hal-vulkan",
- "impeller-present",
-]
-
-[[package]]
-name = "impeller-renderer"
-version = "0.1.0"
-dependencies = [
- "glam",
- "impeller-geometry",
- "impeller-hal",
- "impeller-hal-vulkan",
-]
-
-[[package]]
-name = "impeller-rs"
-version = "0.1.0"
-dependencies = [
- "googletest",
- "half",
- "impeller-core",
- "impeller-hal",
- "impeller-hal-gles",
- "impeller-hal-vulkan",
- "impeller-present",
- "impeller-present-drm",
- "impeller-present-egl",
- "impeller-present-vk",
- "impeller-rs",
- "impeller-shaders",
- "proptest",
-]
-
-[[package]]
-name = "impeller-shaders"
-version = "0.1.0"
-dependencies = [
- "impeller-hal",
- "naga",
-]
-
-[[package]]
-name = "impeller-testkit"
-version = "0.1.0"
-dependencies = [
- "glam",
- "googletest",
- "half",
- "impeller-core",
- "impeller-geometry",
- "impeller-hal",
- "impeller-hal-gles",
- "impeller-hal-vulkan",
- "impeller-renderer",
- "impeller-shaders",
- "impeller-text",
-]
-
-[[package]]
-name = "impeller-text"
-version = "0.1.0"
 
 [[package]]
 name = "indexmap"
@@ -1168,13 +1168,13 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-gles",
+ "emblema-hal-vulkan",
+ "emblema-present-drm",
+ "emblema-testkit",
  "glow",
- "impeller-core",
- "impeller-hal",
- "impeller-hal-gles",
- "impeller-hal-vulkan",
- "impeller-present-drm",
- "impeller-testkit",
 ]
 
 [[package]]

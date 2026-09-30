@@ -48,12 +48,12 @@ fi
 # scene both backends get wrong the same way, so a broken one is a check
 # quietly lost rather than an inconvenience.
 echo "artifacts"
-step "example" cargo run -q -p impeller-rs --example frame -- "$(mktemp -u).ppm"
+step "example" cargo run -q -p emblema --example frame -- "$(mktemp -u).ppm"
 step "gallery" cargo run -q -p xtask -- gallery "$(mktemp -u).ppm"
 
 echo "feature matrix"
 for features in vulkan gles vulkan,gles,drm present-wsi gles,present-egl vulkan,gles,drm,present-wsi,present-egl; do
-    step "$features" cargo check -p impeller-rs --no-default-features --features "$features"
+    step "$features" cargo check -p emblema --no-default-features --features "$features"
 done
 
 if [ "$fail" -eq 0 ]; then

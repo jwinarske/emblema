@@ -226,7 +226,7 @@ across five configurations, each asserted inside the shape and outside it two
 hundredths of a unit further out, and each labeled with the part of the curve
 it sits on: where the superellipse starts, where it meets the circular arc, the
 middle of that arc. Those points are transcribed into
-`crates/impeller-geometry/src/superellipse.rs` beside the table they check.
+`crates/emblema-geometry/src/superellipse.rs` beside the table they check.
 
 **What they check, measured rather than asserted.** Perturbing the corner
 construction is caught at a couple of percent — a gap factor moved from 0.2929
@@ -259,7 +259,7 @@ shader, so the whole set is arithmetic there and needs no extension and no
 device support. A note here once claimed the opposite, and it made the work
 sound architectural when it was a transcription.
 
-The shader's formulas are checked against `impeller_hal`'s, which are the
+The shader's formulas are checked against `emblema_hal`'s, which are the
 software reference the conformance tests already compare hardware to. Neither
 was derived from the other, so a transcription error shows as a disagreement
 rather than as two copies of one mistake.

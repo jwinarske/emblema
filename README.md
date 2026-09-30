@@ -1,4 +1,4 @@
-# impeller-rs
+# emblema
 
 A tessellation-based 2D vector graphics renderer for Rust, targeting everything
 from desktop discrete GPUs down to embedded SoCs driving panels directly
@@ -67,7 +67,7 @@ a framebuffer, the mode is set, and frames flip in turn.
 That is checked two ways rather than one. On a workstation it is the virtual KMS
 driver, because a compositor holds master on any card driving a display. On a
 Raspberry Pi 5 it is the hardware: no display server runs there, so the tests can
-take master, and all twenty-five in `impeller-present-drm` pass — including the
+take master, and all twenty-five in `emblema-present-drm` pass — including the
 five that set a mode and commit a frame — on `vc4` with `v3d` as a separate render
 node, which is the split render and display topology the virtual driver stands in
 for. The render fence rides each commit, so the kernel latches the flip when
@@ -83,7 +83,7 @@ cases, scaler limits.
 `cargo xtask drm` says whether a given machine could run that lane.
 
 ```rust
-use impeller::{BackendPreference, Canvas, Color, Context, Extent2D, Paint, PixelFormat, Rect};
+use emblema::{BackendPreference, Canvas, Color, Context, Extent2D, Paint, PixelFormat, Rect};
 
 // The backend is chosen at run time, so one binary serves a board with a
 // working Vulkan driver and one where only GLES is usable.
@@ -113,7 +113,7 @@ ctx.destroy_surface(surface);
 ## Running it
 
 ```sh
-cargo run -p impeller-rs --example frame -- frame.ppm
+cargo run -p emblema --example frame -- frame.ppm
 ```
 
 Draws one frame through the public API — a gradient, a group composited through
@@ -123,14 +123,14 @@ of scope, so converting to something friendlier is `magick frame.ppm frame.png`.
 
 ## How much of a renderer this is
 
-[`docs/parity.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/parity.md) is the operation-by-operation comparison
+[`docs/parity.md`](https://github.com/jwinarske/emblema/blob/main/docs/parity.md) is the operation-by-operation comparison
 against the `dart:ui` `Canvas` and `Paint` surface — the contract a
 Flutter-class renderer owes, and a more useful yardstick than any one
 implementation's internals. It distinguishes what exists from what a caller
 could assemble, and every row claiming something works names the scene or test
 that renders it.
 
-[`docs/non-parity.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/non-parity.md) is the other half of that question.
+[`docs/non-parity.md`](https://github.com/jwinarske/emblema/blob/main/docs/non-parity.md) is the other half of that question.
 Upstream Impeller is what this project decides against for *what* a renderer
 must express, and not for *how* it is reached: strategy answers to the devices
 this one targets, which are not the devices upstream targets. So the places the
@@ -178,7 +178,7 @@ like a run that covered everything. `cargo xtask verify` runs the same suite
 and prints what did *not* run, which is the number worth reading.
 
 `drm` is presentation-only and composes with either rendering backend. Feature
-flags live on the `impeller` facade crate, since a virtual workspace root
+flags live on the `emblema` facade crate, since a virtual workspace root
 cannot declare them.
 
 Development tasks run through `cargo xtask`. `report` says what this machine's
@@ -190,29 +190,29 @@ scene onto one sheet to look at. `cargo xtask help` lists them.
 
 ```
 crates/
-  impeller              public facade; carries the feature flags
-  impeller-core         drawing API: Canvas, Paint, Color, recording, execution
-  impeller-entity       entity and contents layer -- coverage only, not yet routed
-  impeller-geometry     path types, flattening, tessellation, stroking, dashing
-  impeller-renderer     render pass encoding, generic over the HAL
-  impeller-text         glyph atlas packing and placement; bring your own rasterizer
-  impeller-hal          rendering HAL trait
-  impeller-hal-vulkan   Vulkan backend (first-class)
-  impeller-hal-gles     GLES 3.0 backend
-  impeller-present      presentation trait, format negotiation
-  impeller-present-vk   Vulkan WSI swapchain target
-  impeller-present-egl  EGL window-surface target
-  impeller-present-drm  DRM/KMS scanout target
-  impeller-shaders      WGSL sources, build-time translation via naga
-  impeller-testkit      shared test harness
-  impeller-capi         Impeller C API (libimpeller), ABI-compatible
+  emblema               public facade; carries the feature flags
+  emblema-core         drawing API: Canvas, Paint, Color, recording, execution
+  emblema-entity       entity and contents layer -- coverage only, not yet routed
+  emblema-geometry     path types, flattening, tessellation, stroking, dashing
+  emblema-renderer     render pass encoding, generic over the HAL
+  emblema-text         glyph atlas packing and placement; bring your own rasterizer
+  emblema-hal          rendering HAL trait
+  emblema-hal-vulkan   Vulkan backend (first-class)
+  emblema-hal-gles     GLES 3.0 backend
+  emblema-present      presentation trait, format negotiation
+  emblema-present-vk   Vulkan WSI swapchain target
+  emblema-present-egl  EGL window-surface target
+  emblema-present-drm  DRM/KMS scanout target
+  emblema-shaders      WGSL sources, build-time translation via naga
+  emblema-testkit      shared test harness
+  emblema-capi         Impeller C API (libimpeller), ABI-compatible
 xtask/                  device runs, golden management, CI reproduction
 docs/                   architecture
 ```
 
 ## Impeller C API
 
-`impeller-capi` builds `libimpeller`, intended as an ABI-compatible
+`emblema-capi` builds `libimpeller`, intended as an ABI-compatible
 implementation of upstream Impeller's C API so that a consumer linking that API
 could link this instead without recompiling. **It is barely started**: version
 negotiation is the only entry point, and the rest waits on a vendored copy of
@@ -223,7 +223,7 @@ It is **not** a drop-in for Impeller inside the Flutter Engine build: the
 engine compiles Impeller's C++ sources directly rather than consuming them
 across this boundary, and no Rust library can present a compatible C++ ABI. The
 C API serves embedders. See
-[`docs/architecture.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/architecture.md#impeller-c-api-compatibility) for
+[`docs/architecture.md`](https://github.com/jwinarske/emblema/blob/main/docs/architecture.md#emblema-c-api-compatibility) for
 where parity is partial and how it is verified.
 
 ## Scope
@@ -242,14 +242,14 @@ nothing here uses.
 
 ## Documentation
 
-[`docs/architecture.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/architecture.md) covers the design and the rules
+[`docs/architecture.md`](https://github.com/jwinarske/emblema/blob/main/docs/architecture.md) covers the design and the rules
 that govern the codebase: the HAL and presentation split, the Vulkan-first
 policy, explicit synchronization, the ownership boundary with drm-rs, format
 and modifier negotiation, the shader pipeline, dependency purity, and the
 testing model. Read it before proposing structural changes — a fair number of
 alternatives were considered and rejected for recorded reasons.
 
-[`docs/on-a-board.md`](https://github.com/jwinarske/impeller-rs/blob/main/docs/on-a-board.md) is how to cross-build the suite and
+[`docs/on-a-board.md`](https://github.com/jwinarske/emblema/blob/main/docs/on-a-board.md) is how to cross-build the suite and
 run it on a real device, and what doing so has found. Most of what this suite
 checks is agreement between two devices, and on a workstation both of them are
 software — so the board is not a nice-to-have lane, it is where a class of
@@ -257,12 +257,12 @@ defect is visible at all.
 
 ## Releases
 
-`impeller-rs 0.1.0` is on crates.io, as are the thirteen crates it is assembled
+`emblema 0.1.0` is on crates.io, as are the thirteen crates it is assembled
 from.
 
 ```toml
 [dependencies]
-impeller-rs = "0.1.0"
+emblema = "0.1.0"
 ```
 
 Its default features are Vulkan and its swapchain, but docs.rs builds it with
@@ -270,19 +270,18 @@ Its default features are Vulkan and its swapchain, but docs.rs builds it with
 there whatever a caller enables. The links in this file are absolute for a
 related reason -- a relative one resolves here and 404s on a crate page.
 
-`impeller-rs 0.0.0` also exists and contains **no API**: it reserved the name,
-which the plain `impeller` had already lost to an unrelated crate. Nothing should
-depend on it.
+`emblema 0.0.0` also exists and contains **no API**: it reserved the name ahead
+of the first release under it. Nothing should depend on it.
 
-Fourteen of this workspace's seventeen crates publish; `impeller-capi`,
-`impeller-testkit` and `xtask` refuse, each saying why in its own manifest
+Fourteen of this workspace's seventeen crates publish; `emblema-capi`,
+`emblema-testkit` and `xtask` refuse, each saying why in its own manifest
 and each one line from changing its mind. A release is ordered, because
 `cargo publish` verifies a packaged crate against the registry rather than against
 the workspace: nothing can go up before what it depends on, and there is no way to
 rehearse the whole sequence in advance. A crate published for the first time also
 spends a token from a bucket that holds five and refills one every ten minutes, so
 adding several new crates at once waits on the clock rather than on this
-repository. [`CHANGELOG.md`](https://github.com/jwinarske/impeller-rs/blob/main/CHANGELOG.md)
+repository. [`CHANGELOG.md`](https://github.com/jwinarske/emblema/blob/main/CHANGELOG.md)
 records what each version carried.
 
 ## Contributing
@@ -359,7 +358,7 @@ only builds because another feature happened to be on is a coupling:
 
 ```sh
 for f in vulkan gles vulkan,gles,drm present-wsi gles,present-egl vulkan,gles,drm,present-wsi,present-egl; do
-  cargo check -p impeller-rs --no-default-features --features "$f" || break
+  cargo check -p emblema --no-default-features --features "$f" || break
 done
 ```
 
@@ -372,7 +371,7 @@ recover later.
 
 ## License
 
-BSD 3-Clause. See [`LICENSE`](https://github.com/jwinarske/impeller-rs/blob/main/LICENSE).
+BSD 3-Clause. See [`LICENSE`](https://github.com/jwinarske/emblema/blob/main/LICENSE).
 
 This matches the Flutter Engine, home of the C++ Impeller whose architecture
 this project takes as its reference. Any code ported from there retains its

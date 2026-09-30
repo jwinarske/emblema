@@ -123,7 +123,7 @@ fn connectors_of(sys_drm: &Path, card: &str) -> Vec<(String, String)> {
 /// still worth printing, and why one card would not answer is itself the
 /// finding.
 fn scanout_formats(path: &str) -> String {
-    use impeller_present_drm::device::DrmDevice;
+    use emblema_present_drm::device::DrmDevice;
 
     let formats = match DrmDevice::open(path).and_then(|d| d.scanout_formats()) {
         Ok(formats) => formats,
@@ -151,7 +151,7 @@ fn scanout_formats(path: &str) -> String {
             out,
             "  {name:<16} {} modifier(s){}",
             set.modifiers.len(),
-            if set.modifiers.contains(&impeller_hal::Modifier::LINEAR) {
+            if set.modifiers.contains(&emblema_hal::Modifier::LINEAR) {
                 ", linear among them"
             } else {
                 ""
@@ -234,7 +234,7 @@ mod tests {
 
     /// Build a directory tree standing in for what the kernel exposes.
     fn fixture(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("impeller-xtask-drm-{name}"));
+        let root = std::env::temp_dir().join(format!("emblema-xtask-drm-{name}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("dev")).expect("fixture");
         fs::create_dir_all(root.join("sys")).expect("fixture");

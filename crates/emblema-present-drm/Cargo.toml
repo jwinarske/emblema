@@ -1,0 +1,29 @@
+[package]
+name = "emblema-present-drm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DRM/KMS direct-scanout presentation target for emblema."
+keywords = ["drm", "kms", "scanout", "embedded", "display"]
+categories = ["graphics", "embedded"]
+
+[lints]
+workspace = true
+
+[dependencies]
+drm = { version = "0.15.0", default-features = false }
+emblema-core = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-present = { workspace = true }
+log = { workspace = true }
+rustix = { version = "1.1.4", default-features = false, features = ["fs"] }
+
+[dev-dependencies]
+emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
+# The `IN_FORMATS` parser reads the kernel's bytes at offsets it computes
+# itself, which is the shape a generator explores better than a table.
+proptest = { workspace = true }

@@ -14,7 +14,7 @@
 # here is reachable from a workspace build, `cargo deny`, the MSRV job or the
 # cross-compile jobs.
 [package]
-name = "impeller-playground"
+name = "emblema-playground"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
@@ -27,10 +27,10 @@ license = "BSD-3-Clause"
 # can reach is enough to write something real. It reached past the facade to six
 # crates while `present-wsi` was a feature that enabled nothing.
 #
-# `impeller-testkit` is the exception and stays, being the scene corpus this
+# `emblema-testkit` is the exception and stays, being the scene corpus this
 # tool exists to look at rather than any part of the renderer's surface.
-impeller = { path = "../crates/impeller", package = "impeller-rs" }
-impeller-testkit = { path = "../crates/impeller-testkit" }
+emblema = { path = "../crates/emblema" }
+emblema-testkit = { path = "../crates/emblema-testkit" }
 
 ash = "0.38"
 ash-window = "0.13"

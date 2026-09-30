@@ -12,9 +12,9 @@
 //! ways that decide which paths run — an extension can sit on one and not the
 //! other — and a report that showed one would answer the wrong question.
 
-use impeller_hal::{Capabilities, HalContext};
-use impeller_hal_gles::{DisplayTarget, GlesContext};
-use impeller_hal_vulkan::{DevicePreference, VulkanContext};
+use emblema_hal::{Capabilities, HalContext};
+use emblema_hal_gles::{DisplayTarget, GlesContext};
+use emblema_hal_vulkan::{DevicePreference, VulkanContext};
 
 /// One device, and what it reports.
 pub struct Device {

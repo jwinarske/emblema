@@ -17,7 +17,7 @@
 //!
 //! What it is good for is gross wrongness: a blank tile, a shape in the wrong
 //! place, a color inverted, a scene that is far too dark. It is not good for
-//! fine judgement, and the first two things that looked wrong on it were not.
+//! fine judgment, and the first two things that looked wrong on it were not.
 //! One tile appeared to have a gray surround and did not -- black corners, and
 //! forty distinct colors along an antialiased edge. Another appeared to blur
 //! one of its two shapes and not the other; both were blurred, and the larger
@@ -27,8 +27,8 @@
 //! and it needs no encoder, where taking an image dependency to write a nicer
 //! file would cost this workspace its pure-Rust build for a convenience.
 
-use impeller_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
-use impeller_testkit::{corpus, render_scene, Image};
+use emblema_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
+use emblema_testkit::{corpus, render_scene, Image};
 
 /// Gap between tiles, in pixels, and the color behind them.
 const GAP: u32 = 8;

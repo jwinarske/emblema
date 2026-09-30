@@ -75,10 +75,10 @@
 //! in the ordinary suite, which is where a stroker that doubled its output would
 //! now be caught without a board at all.
 
-use impeller_core::Recording;
-use impeller_hal::{Hal, HalContext, PixelFormat, TextureDescriptor};
-use impeller_hal_gles::{DisplayTarget, GlesContext, GlesHal};
-use impeller_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
+use emblema_core::Recording;
+use emblema_hal::{Hal, HalContext, PixelFormat, TextureDescriptor};
+use emblema_hal_gles::{DisplayTarget, GlesContext, GlesHal};
+use emblema_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
 mod frames;
 
 use frames::{frame, Frame, EXTENT, FRAMES, FRAME_STAGES, SHAPES, WARMUP};
@@ -254,7 +254,7 @@ where
         let mut samples = Vec::with_capacity(count);
         for _ in 0..count {
             let started = Instant::now();
-            let outcome = impeller_core::execute::<H>(ctx, &mut target, recording, &[]);
+            let outcome = emblema_core::execute::<H>(ctx, &mut target, recording, &[]);
             finish(ctx);
             samples.push(started.elapsed());
             outcome.map_err(|e| e.to_string())?;
@@ -944,11 +944,11 @@ fn verified_at() -> Option<String> {
 /// positive is reading a sentence; the cost of a false negative is a baseline
 /// claiming a board agreed with numbers it never saw.
 const TIMED: &[&str] = &[
-    "crates/impeller-core/src",
-    "crates/impeller-shaders/shaders",
-    "crates/impeller-hal/src",
-    "crates/impeller-hal-vulkan/src",
-    "crates/impeller-hal-gles/src",
+    "crates/emblema-core/src",
+    "crates/emblema-shaders/shaders",
+    "crates/emblema-hal/src",
+    "crates/emblema-hal-vulkan/src",
+    "crates/emblema-hal-gles/src",
     "xtask/src/bench/frames.rs",
 ];
 
@@ -1182,10 +1182,7 @@ mod tests {
             "{FRAMES_PATH} is watched and is not there"
         );
         // And still watches the renderer, which is the half that was never wrong.
-        for expected in [
-            "crates/impeller-core/src",
-            "crates/impeller-shaders/shaders",
-        ] {
+        for expected in ["crates/emblema-core/src", "crates/emblema-shaders/shaders"] {
             assert!(TIMED.contains(&expected), "{expected} is no longer watched");
         }
     }

@@ -28,10 +28,10 @@
 //! with that file even at the same commit. The longest-running row is the one that
 //! moves, which is the shape to expect if it is ever seen again.
 
-use impeller_core::{
+use emblema_core::{
     Canvas, Color, GradientStop, Layer, Paint, Recording, Rect, Shader, TileMode, Vec2,
 };
-use impeller_hal::Extent2D;
+use emblema_hal::Extent2D;
 
 /// The frame the document's number was taken from.
 pub(super) const EXTENT: Extent2D = Extent2D {

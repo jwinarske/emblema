@@ -1,0 +1,15 @@
+[package]
+name = "emblema-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Glyph atlas packing and placement for emblema; bring your own rasterizer."
+keywords = ["glyph", "atlas", "text", "font", "2d"]
+categories = ["graphics", "rendering"]
+
+[lints]
+workspace = true
