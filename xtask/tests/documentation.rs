@@ -1728,4 +1728,37 @@ fn the_board_frame_stages_say_what_the_baseline_recorded() {
         "the ratio against V3D",
         format!("{:.1} times V3D", whole / v3d),
     );
+
+    // The Pi 5's own stage rows, recorded 2026-09-30, and the shares the prose
+    // derives from them. Added because the claim the section now rests on is a
+    // *cross-board* one -- that a full-screen gradient dominates the frame on two
+    // unrelated tile architectures -- and half of it was unchecked while only the
+    // VisionFive 2's half was pinned.
+    for (device, label) in [("vulkan:0 V3D", "Pi 5 Vulkan"), ("gles V3D", "Pi 5 GLES")] {
+        let ground = median(&pi, device, "frame, gradient ground");
+        let cards = median(&pi, device, "frame, plus cards");
+        let shadows = median(&pi, device, "frame, plus shadows");
+        let frame = median(&pi, device, "full frame, mixed content");
+        let row = format!(
+            "| {label} | {ground:.3}{} | {cards:.3} | {shadows:.3} | {frame:.3} | **{:.1}%** |",
+            if device.starts_with("vulkan") {
+                " ms"
+            } else {
+                ""
+            },
+            ground / frame * 100.0,
+        );
+        assert!(
+            text.contains(&row),
+            "on-a-board.md no longer carries the {label} stage row the \
+             baseline records:\n  want {row}"
+        );
+        // The shapes' share, which the prose states to one decimal for each board.
+        let shapes = (shadows - ground) / frame * 100.0;
+        assert!(
+            text.contains(&format!("{shapes:.1}")),
+            "on-a-board.md does not state that the cards and shadows are \
+             {shapes:.1} per cent of the {label} frame"
+        );
+    }
 }

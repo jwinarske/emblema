@@ -1,14 +1,25 @@
-# A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted, idle at 57 C,
-# `vcgencmd get_throttled` clean before and after.
+# A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted, idle at 58.7 C and
+# 65.3 C after three runs, `vcgencmd get_throttled` 0x0 before and after every one,
+# and the clock at 2400000 throughout.
 #
 #   cargo xtask bench --skip llvmpipe --check tests/bench-baselines/raspberry-pi-5-v3d.txt
 #
 # `--skip llvmpipe` because measuring the software rasterizer locks this board
 # up; see docs/on-a-board.md.
 #
-# Checked against three fresh runs on the board it came from: all eight rows
-# within three tenths of a percent in every one of them, which is what says this
-# board can gate at all.
+# Checked against three fresh runs on the board it came from: every device row
+# inside six tenths of a per cent in all three, and no sign of the Vulkan
+# bimodality this file documents below -- which is what that section predicts, the
+# bimodality having been the governor.
+#
+# **Read the clock, not `get_throttled`, to tell whether a run was throttled.**
+# The `has occurred` bits latch until boot, so a board that has ever throttled
+# reads dirty for the rest of its uptime and one throttling right now can read
+# clean in the low bits. This file's rows were recorded after a reboot for exactly
+# that reason: the board had been sitting at 77 C under two graphical applications
+# and read `0xe0000`, and nothing in the low bits said so. What said so was
+# `scaling_cur_freq` at 1700000 against the 2400000 that `arm_freq=2400`
+# configures. `docs/on-a-board.md` has the check.
 #
 # Updating this is a reviewed event, like the shader snapshots: re-record with
 # --record, and the diff is the claim that every row moved for a reason. The
@@ -30,7 +41,41 @@
 # three unnamed rows had the default one per cent and failed on any slow-mode
 # run, which is noise this file was producing rather than catching.
 #
-# Last checked against the board: 8949afc
+# The frame is four rows rather than one, each adding one element to the one before,
+# so a difference between two of them is what that element cost. On this board:
+#
+#   route     ground    cards   shadows    frame    ground's share
+#   vulkan    10.427   11.066    11.913   13.911        75.0%
+#   gles      11.766   12.444    13.328   14.866        79.1%
+#
+# **Three quarters of the frame is the gradient ground, in one draw.** The three
+# cards cost 0.639 over it and their three shadows another 0.847; the blurred layer
+# on top is 1.998 under Vulkan. That is the same shape the VisionFive 2 records at
+# 67.4 per cent, on an unrelated tile architecture, so it is not a PowerVR quirk --
+# and V3D leans on it harder. `docs/non-parity.md` 1 and 19 are where that leads:
+# this gradient has five stops, so it is tabulated into a ramp texture and sampled
+# per fragment, where upstream would walk uniforms and, for an axis-aligned one,
+# interpolate across vertices instead.
+#
+# The three new rows carry tolerances derived from the same three runs. The device
+# rows moved 0.09 to 0.11 per cent, so the Vulkan ones take this section's 2.0 and
+# the GLES ones take none, which leaves them on the 1.0 default. The `recording`
+# stage rows take 15.0, and that number is about the printer rather than the board:
+# they measured a spread of exactly zero, but at 0.009 ms a single least-significant
+# digit is eleven per cent, so nothing tighter than that can be asserted about a
+# figure printed to three decimals. A row whose value is nine microseconds is not a
+# row this file can gate; it is recorded so the decomposition is complete.
+#
+# **Four rows came back faster than the last recording, all of them analytic.** The
+# Vulkan distance field went 8.852 to 8.205, -7.3 per cent, and the stroked field
+# 9.431 to 8.779, -6.9; under GLES the same two moved -3.9 and -3.6. Those are the
+# rows the rounded rectangle's move onto its vertices was meant to reach, taking the
+# grid from 160 draws to 44. `docs/on-a-board.md` records that change as worth about
+# five per cent on an Adreno 640 and nothing at all on a PowerVR BXE-4-32; on V3D it
+# is worth seven. Three tile architectures, three different answers, which is the
+# entry's point rather than a contradiction of it.
+#
+# Last checked against the board: 50b64f4
 #
 # That line names the commit whose state a board run passed against, which is
 # never the commit that writes the line -- a hash cannot be recorded inside the
@@ -330,31 +375,32 @@
 # running it too, so a shared mistake would pass every comparison the suite
 # makes.
 #
-#
-# The frame is measured in four stages as of this commit, and the three new rows
-# -- `frame, gradient ground`, `frame, plus cards`, `frame, plus shadows` -- are
-# not in this file. Nothing invented them: they want a run on the board. Until
-# that run, `--check` against this file reports them unmatched and exits
-# non-zero, which is the honest result and not a regression. `full frame, mixed
-# content` is unchanged and still the whole frame.
-#
+# cargo xtask bench --record
 # device	configuration	median in milliseconds	[tolerance %]
-#
-recording	distance field, 1 sample	0.099	5.0
-recording	tessellated, 4 samples	0.235	5.0
-recording	tessellated, 1 sample	0.240	5.0
-recording	stroked field, 1 sample	0.098	5.0
-recording	stroked path, 1 sample	0.739	5.0
+recording	distance field, 1 sample	0.098	5.0
+recording	tessellated, 4 samples	0.225	5.0
+recording	tessellated, 1 sample	0.236	5.0
+recording	stroked field, 1 sample	0.100	5.0
+recording	stroked path, 1 sample	0.724	5.0
+recording	frame, gradient ground	0.009	15.0
+recording	frame, plus cards	0.011	15.0
+recording	frame, plus shadows	0.015	15.0
 recording	full frame, mixed content	0.018	10.0
-vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.852	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.525	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.688	2.0
-vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	9.431	2.0
-vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.184	3.0
-vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.908	2.0
-gles V3D 7.1.7.0	distance field, 1 sample	8.899
-gles V3D 7.1.7.0	tessellated, 4 samples	5.460
-gles V3D 7.1.7.0	tessellated, 1 sample	3.644
-gles V3D 7.1.7.0	stroked field, 1 sample	9.483
-gles V3D 7.1.7.0	stroked path, 1 sample	1.319	2.0
-gles V3D 7.1.7.0	full frame, mixed content	14.748
+vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.205	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.692	2.0
+vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.779	2.0
+vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.193	3.0
+vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.427	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus cards	11.066	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.913	2.0
+vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.911	2.0
+gles V3D 7.1.7.0	distance field, 1 sample	8.551
+gles V3D 7.1.7.0	tessellated, 4 samples	5.465
+gles V3D 7.1.7.0	tessellated, 1 sample	3.642
+gles V3D 7.1.7.0	stroked field, 1 sample	9.145
+gles V3D 7.1.7.0	stroked path, 1 sample	1.305	2.0
+gles V3D 7.1.7.0	frame, gradient ground	11.766
+gles V3D 7.1.7.0	frame, plus cards	12.444
+gles V3D 7.1.7.0	frame, plus shadows	13.328
+gles V3D 7.1.7.0	full frame, mixed content	14.866
