@@ -73,19 +73,72 @@
 # the frame in one full-screen draw -- and the blurred layer is the next 15.3.
 # The three cards and their shadows together are 5.6.
 #
-# Last checked against the board: 1ef0205
+# A second frame joined this file on 2026-09-30: an interface's shape rather than a
+# sampler of operations, and the only frame here with overdraw in it. Same conditions
+# as the rows above -- desktop stopped, all four governors pinned, 50.1 C before and
+# 53.1 C after, load 0.16, three runs and `--check` three times over. Every device row
+# inside 0.06 per cent across the three.
 #
-# cargo xtask bench --record
-# device	configuration	median in milliseconds	[tolerance %]
+#   stacked, wash            43.190   one axis-aligned gradient over the whole target
+#   stacked, plus panels     74.078   a bar, a sidebar and a panel hiding 94.1% of it
+#   stacked interface        93.966   eight list rows hiding most of the panel again
+#
+# **This is the frame that makes `non-parity.md` 21 worth something.** The three
+# opaque rectangles add 30.888 ms while covering 94.1 per cent of the wash beneath
+# them, so an opaque reordering that let them cull it would save about 40.6 ms of a
+# 93.966 ms frame -- forty-three per cent. On `full frame, mixed content` the same
+# arithmetic gives five, because three cards cover 6.6 per cent of that ground. The
+# entry's value was never a property of the renderer; it was a property of what this
+# bench happened to draw.
+#
+# It also gives `non-parity.md` 19 its case: the wash is vertical with its endpoints
+# on the covered rectangle's edges, which is what upstream's `CanApplyFastGradient`
+# requires, and nothing here had that before.
+#
+# One cross-check while the rows are new. `stacked, wash` is 43.190 and `frame,
+# gradient ground` is 43.149 -- the same cost for the same kind of draw, one vertical
+# and one diagonal, which says the second frame's wash is not doing something
+# different from the first's.
+#
+# **One row above moved for a reason that is not the renderer, and it is recorded
+# rather than tolerated.** `recording / stroked path` went 6.376 to 6.975 -- nine per
+# cent -- when the stacked frame was added, and nothing about building a stroked path
+# changed: `emblema-geometry/src/stroke.rs` is byte-identical across the commits, and
+# the commit that moved it only *appends* loops to `gather` after the row is measured,
+# so none of the new code has run by then. Interleaved on the board, alternating
+# binaries in one session: 6.311, 6.993, 6.306, 7.012. On x86-64 the same pair reads
+# 0.237 against 0.241, which is noise.
+#
+# So it is code layout. Adding a scene to `xtask/src/bench/frames.rs` shifted the
+# stroker's hot loop in the binary, and on this board's in-order core that is worth
+# nine per cent. What that says about the row is worth more than the row: **a
+# `recording` figure here is measuring the binary's layout as well as the renderer's
+# work**, so a move in one is not by itself evidence about the other. Bisect against an
+# older binary on the board before believing one, which is what found this.
+#
+# The tolerance is left at 5.0 deliberately rather than widened to cover it. A layout
+# shift is a step rather than noise, and the next one should fail this check and make
+# somebody look, which is what this one did.
+#
+# The rows above the stacked ones were not re-recorded. They were measured again in
+# the same run and came back 0.03 to 0.05 per cent higher, which is this board's
+# run-to-run noise and not a change in what they measure -- writing those values in
+# would have moved figures `on-a-board.md` derives from them for no reason. A row is
+# re-recorded here when what it measures changes.
+#
+# Last checked against the board: 3a33030
 recording	distance field, 1 sample	0.864	5.0
 recording	tessellated, 4 samples	1.914	5.0
 recording	tessellated, 1 sample	2.154	5.0
 recording	stroked field, 1 sample	0.881	5.0
-recording	stroked path, 1 sample	6.376	5.0
+recording	stroked path, 1 sample	6.975	5.0
 recording	frame, gradient ground	0.079	5.0
 recording	frame, plus cards	0.098	5.0
 recording	frame, plus shadows	0.130	5.0
 recording	full frame, mixed content	0.159	5.0
+recording	stacked, wash	0.079	5.0
+recording	stacked, plus panels	0.096	5.0
+recording	stacked interface	0.139	5.0
 vulkan:0 PowerVR B-Series BXE-4-32	distance field, 1 sample	26.790
 vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 4 samples	26.844
 vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 1 sample	10.164
@@ -95,3 +148,6 @@ vulkan:0 PowerVR B-Series BXE-4-32	frame, gradient ground	43.149	2.0
 vulkan:0 PowerVR B-Series BXE-4-32	frame, plus cards	45.498
 vulkan:0 PowerVR B-Series BXE-4-32	frame, plus shadows	48.717
 vulkan:0 PowerVR B-Series BXE-4-32	full frame, mixed content	64.019
+vulkan:0 PowerVR B-Series BXE-4-32	stacked, wash	43.190	2.0
+vulkan:0 PowerVR B-Series BXE-4-32	stacked, plus panels	74.078	2.0
+vulkan:0 PowerVR B-Series BXE-4-32	stacked interface	93.966	2.0

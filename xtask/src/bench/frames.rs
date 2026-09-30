@@ -247,6 +247,160 @@ impl Frame {
 pub(super) const FRAME_STAGES: [Frame; 4] =
     [Frame::Ground, Frame::Cards, Frame::Shadows, Frame::All];
 
+/// How the stacked-interface row names itself.
+pub(super) const STACKED: &str = "stacked interface";
+
+/// An interface's shape rather than a sampler of operations, and the one frame
+/// here with overdraw in it.
+///
+/// `FRAME` is a mixed frame: it reaches a ramp, a blur, a layer and an analytic
+/// rounded rectangle, which is what makes it a budget worth quoting. What it is
+/// not is an interface. Its ground is a full-screen gradient that almost nothing
+/// covers, so 94 per cent of what it paints it also shows, and two recorded
+/// differences from upstream turned out to be unmeasurable against it for that
+/// reason -- `non-parity.md` 19, which wants an axis-aligned gradient, and 21,
+/// which wants opaque content stacked over opaque content.
+///
+/// This frame is those two cases. A top bar, a sidebar and a content panel cover
+/// 94 per cent of the wash beneath them, eight list rows cover most of the panel
+/// again, and the whole frame paints 2.53 times its own area -- so a little over
+/// one and a half frames of fill is spent on pixels that are never seen. That is
+/// what an interface does, and none of it was measurable here before.
+///
+/// The wash is vertical and its endpoints are the covered rectangle's top and
+/// bottom edges, which is what upstream's `CanApplyFastGradient` requires. The
+/// existing frame's ground is diagonal and would not qualify.
+///
+/// **Added beside `FRAME` rather than replacing it.** Every timing in
+/// `on-a-board.md`, both ratio tables in `architecture.md` and both baselines'
+/// histories were measured against that frame, so changing it would silently
+/// change what a year of recorded numbers meant. A new frame costs a re-recording
+/// on each board and costs nothing else.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stacked {
+    /// The wash alone: one axis-aligned gradient over the whole target, and the
+    /// only stage here that draws no opaque content.
+    Wash,
+    /// Plus the bar, the sidebar and the content panel -- 94 per cent of the wash
+    /// covered by three opaque rectangles.
+    Panels,
+    /// Plus the list rows inside the panel, which is a second layer of opaque
+    /// over opaque and what takes the painted area past twice the frame.
+    All,
+}
+
+impl Stacked {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Wash => "stacked, wash",
+            Self::Panels => "stacked, plus panels",
+            Self::All => STACKED,
+        }
+    }
+
+    fn panels(self) -> bool {
+        !matches!(self, Self::Wash)
+    }
+
+    fn rows(self) -> bool {
+        matches!(self, Self::All)
+    }
+}
+
+/// The stacked frame's geometry, at module scope so a test can recompute the
+/// coverage the documentation above claims rather than take it on trust. The
+/// numbers in that prose are the whole reason the scene exists, and prose is where
+/// this tree's mistakes live.
+pub(super) const BAR_H: f32 = 80.0;
+pub(super) const SIDE_W: f32 = 320.0;
+pub(super) const INSET: f32 = 24.0;
+pub(super) const GAP: f32 = 16.0;
+pub(super) const ROWS: usize = 8;
+
+/// Every stage of the stacked frame, in the order they build on each other.
+pub(super) const STACKED_STAGES: [Stacked; 3] = [Stacked::Wash, Stacked::Panels, Stacked::All];
+
+/// One stage of the stacked interface. `Stacked::All` is the whole of it.
+///
+/// Solid fills throughout, deliberately. The question this frame asks is what
+/// covering a pixel repeatedly costs, so every occluder is opaque and as plain as
+/// a draw can be -- an occluder that carried a gradient or a blur would answer a
+/// different question and answer it less clearly.
+pub(super) fn stacked(stage: Stacked) -> Recording {
+    let (w, h) = (EXTENT.width as f32, EXTENT.height as f32);
+    let (bar_h, side_w, inset) = (BAR_H, SIDE_W, INSET);
+    let mut canvas = Canvas::new(EXTENT);
+    canvas.clear(Color::srgb(0.04, 0.05, 0.07, 1.0));
+
+    // A vertical wash over the whole target. Axis-aligned with its endpoints on
+    // the covered rectangle's edges, which is the case `non-parity.md` 19 is
+    // about and the case nothing here had.
+    canvas
+        .draw_rect(
+            Rect::new(0.0, 0.0, w, h),
+            &Paint::default().with_shader(Shader::LinearGradient {
+                start: Vec2::new(0.0, 0.0),
+                end: Vec2::new(0.0, h),
+                stops: (0..5)
+                    .map(|i| {
+                        let t = i as f32 / 4.0;
+                        GradientStop {
+                            offset: t,
+                            color: Color::srgb(0.10 + 0.06 * t, 0.11, 0.20 - 0.04 * t, 1.0),
+                        }
+                    })
+                    .collect(),
+                tile: TileMode::Clamp,
+            }),
+        )
+        .expect("the wash");
+
+    if !stage.panels() {
+        return canvas.finish();
+    }
+
+    // The bar, the sidebar and the content panel, in the order an interface
+    // composites them: each is opaque and each hides what it covers.
+    canvas
+        .draw_rect(
+            Rect::new(0.0, 0.0, w, bar_h),
+            &Paint::fill(Color::srgb(0.14, 0.15, 0.22, 1.0)),
+        )
+        .expect("the bar");
+    canvas
+        .draw_rect(
+            Rect::new(0.0, bar_h, side_w, h),
+            &Paint::fill(Color::srgb(0.11, 0.12, 0.18, 1.0)),
+        )
+        .expect("the sidebar");
+    let content = Rect::new(side_w + inset, bar_h + inset, w - inset, h - inset);
+    canvas
+        .draw_rect(content, &Paint::fill(Color::srgb(0.16, 0.17, 0.24, 1.0)))
+        .expect("the content panel");
+
+    if !stage.rows() {
+        return canvas.finish();
+    }
+
+    // Eight rows inside the panel, each opaque over the panel that is itself
+    // opaque over the wash. This is the stage that takes the painted area past
+    // twice the frame.
+    let gap = GAP;
+    let row_h = (content.height() - gap * (ROWS as f32 + 1.0)) / ROWS as f32;
+    for i in 0..ROWS {
+        let top = content.top + gap * (i as f32 + 1.0) + row_h * i as f32;
+        let shade = 0.19 + 0.01 * (i % 2) as f32;
+        canvas
+            .draw_rect(
+                Rect::new(content.left + gap, top, content.right - gap, top + row_h),
+                &Paint::fill(Color::srgb(shade, shade + 0.01, shade + 0.07, 1.0)),
+            )
+            .expect("a list row");
+    }
+
+    canvas.finish()
+}
+
 /// One stage of the mixed frame; `Frame::All` is the whole of it, and what a
 /// whole frame of mixed content costs is a budget rather than a comparison.
 ///

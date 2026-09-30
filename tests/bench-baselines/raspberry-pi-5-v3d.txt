@@ -380,6 +380,14 @@
 # running it too, so a shared mistake would pass every comparison the suite
 # makes.
 #
+#
+# A second frame arrived with this commit and its rows are not in this file. The
+# three `stacked` rows -- an interface-shaped frame whose opaque content hides 94
+# per cent of its own wash -- want a run on the board, and nothing invented them.
+# Until that run `--check` against this file reports them unmatched and exits
+# non-zero, which is the honest result and not a regression. Every row already here
+# is unchanged: the new frame was added beside `full frame, mixed content` rather
+# than replacing it, so nothing this file already recorded means anything different.
 # cargo xtask bench --record
 # device	configuration	median in milliseconds	[tolerance %]
 recording	distance field, 1 sample	0.098	5.0

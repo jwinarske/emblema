@@ -81,7 +81,9 @@ use emblema_hal_gles::{DisplayTarget, GlesContext, GlesHal};
 use emblema_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
 mod frames;
 
-use frames::{frame, Frame, EXTENT, FRAMES, FRAME_STAGES, SHAPES, WARMUP};
+use frames::{
+    frame, stacked, Frame, Stacked, EXTENT, FRAMES, FRAME_STAGES, SHAPES, STACKED_STAGES, WARMUP,
+};
 pub use frames::{recording, Path};
 
 use std::io::{self, Write};
@@ -348,6 +350,16 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 },
             )));
         }
+        for stage in STACKED_STAGES {
+            report(Event::Measured(time_building(
+                stage.name(),
+                match stage {
+                    Stacked::Wash => || stacked(Stacked::Wash),
+                    Stacked::Panels => || stacked(Stacked::Panels),
+                    Stacked::All => || stacked(Stacked::All),
+                },
+            )));
+        }
     }
 
     for index in 0.. {
@@ -376,6 +388,13 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 time_frames::<VulkanHal>(&mut ctx, stage.name(), &recording, |_| {}),
             ));
         }
+        for stage in STACKED_STAGES {
+            let recording = stacked(stage);
+            report(outcome(
+                stage.name(),
+                time_frames::<VulkanHal>(&mut ctx, stage.name(), &recording, |_| {}),
+            ));
+        }
     }
 
     if let Ok(mut ctx) = GlesContext::new(DisplayTarget::Surfaceless) {
@@ -395,6 +414,14 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
         }
         for stage in FRAME_STAGES {
             let recording = frame(stage);
+            let timed = time_frames::<GlesHal>(&mut ctx, stage.name(), &recording, |ctx| {
+                // SAFETY: a context is current on this thread.
+                unsafe { glow::HasContext::finish(ctx.raw_gl()) }
+            });
+            report(outcome(stage.name(), timed));
+        }
+        for stage in STACKED_STAGES {
+            let recording = stacked(stage);
             let timed = time_frames::<GlesHal>(&mut ctx, stage.name(), &recording, |ctx| {
                 // SAFETY: a context is current on this thread.
                 unsafe { glow::HasContext::finish(ctx.raw_gl()) }
@@ -447,11 +474,12 @@ const NOTHING: &str = "no device on this machine could render the frame\n";
 fn header() -> String {
     format!(
         "{SHAPES} rounded rectangles at {}x{}, then one frame of mixed \
-         content at the same size in {} stages.\n{FRAMES} frames each after \
-         {WARMUP} warm-up{}\n",
+         content at the same size in {} stages, then an interface that \
+         overdraws in {}.\n{FRAMES} frames each after {WARMUP} warm-up{}\n",
         EXTENT.width,
         EXTENT.height,
         FRAME_STAGES.len(),
+        STACKED_STAGES.len(),
         governor()
             .map(|g| format!(", cpu governor {g}"))
             .unwrap_or_default()
@@ -556,7 +584,7 @@ fn render(event: &Event) -> String {
 }
 
 fn epilogue() -> &'static str {
-    "\nEach device's lines are two comparisons and a budget. The first three \n\
+    "\nEach device's lines are two comparisons and two budgets. The first three \n\
      are one shape filled two ways and the next two are the same shape \n\
      stroked two ways, so within a group the difference is the route and not \n\
      the content -- and a fill's cost is not an outline's, which is why they \n\
@@ -575,6 +603,16 @@ fn epilogue() -> &'static str {
      the cards cover a fraction of it, so the two are not comparable per \n\
      element. And the shadows row moves with the cards above it, since a \n\
      shadow is drawn under each card that exists.\n\
+     \n\
+     The last three are a second frame and answer what the first cannot. That \n\
+     one's ground is a full-screen gradient almost nothing covers, so it has \n\
+     no overdraw to speak of and its wash is diagonal. This one is an \n\
+     interface's shape: a vertical wash, then a bar, a sidebar and a content \n\
+     panel hiding 94 per cent of it, then eight rows hiding most of the panel \n\
+     again -- 2.53 frames of paint for one frame of picture. Read the \n\
+     differences the same way, and read them against the mixed frame only as \n\
+     two budgets rather than as a comparison: they draw different things. \n\
+     Solid fills throughout, so what the deltas measure is coverage.\n\
      \n\
      The `recording` section is the other half, and it needs no device: it is \n\
      what building each of those frames costs before anything is submitted, \n\
@@ -595,11 +633,11 @@ fn epilogue() -> &'static str {
      -- see the distance-field section of docs/architecture.md.\n\
      \n\
      The rate is what a median frame would sustain with nothing else in it: \n\
-     no present, no vertical blank, and a scene that is a hundred and sixty \n\
-     rectangles rather than an interface. So it is a number to read against the \n\
-     other paths here, and not against any figure for what a frame should \n\
-     cost -- one of those names a scene and counts a present, and this counts \n\
-     neither.\n\
+     no present and no vertical blank. On the comparison rows the scene is a \n\
+     hundred and sixty rectangles rather than an interface, so those rates are \n\
+     numbers to read against each other. The stacked rows are shaped like an \n\
+     interface and still are not a frame rate: a figure for what a frame costs \n\
+     names a scene and counts a present, and this counts neither.\n\
      \n\
      Read each p99 against the median on its own line before reading it as \n\
      a renderer's tail. On a machine with a desktop on it a configuration \n\
@@ -1031,6 +1069,68 @@ mod tests {
             fastest: Duration::from_micros(90),
             slowest: Duration::from_micros(110),
         }
+    }
+
+    /// The stacked frame covers what its documentation says it covers.
+    ///
+    /// This scene exists for two numbers -- that opaque content hides 94 per cent
+    /// of the wash beneath it, and that the whole frame paints 2.53 times its own
+    /// area -- and both are stated in prose above `stacked`. Prose is where this
+    /// tree's defects live, so they are recomputed here from the same constants
+    /// the scene draws with. A change to the layout that quietly stopped the frame
+    /// from overdrawing would make it a different scene while still looking like
+    /// this one.
+    #[test]
+    fn the_stacked_frame_overdraws_by_what_its_prose_claims() {
+        let (w, h) = (frames::EXTENT.width as f32, frames::EXTENT.height as f32);
+        let frame = w * h;
+
+        let bar = w * frames::BAR_H;
+        let sidebar = frames::SIDE_W * (h - frames::BAR_H);
+        let cw = w - frames::SIDE_W - 2.0 * frames::INSET;
+        let ch = h - frames::BAR_H - 2.0 * frames::INSET;
+        let content = cw * ch;
+
+        let covered = (bar + sidebar + content) / frame * 100.0;
+        assert!(
+            (covered - 94.1).abs() < 0.1,
+            "the bar, sidebar and panel should hide 94.1 per cent of the wash, \
+             not {covered:.1}"
+        );
+
+        let rows = frames::ROWS as f32;
+        let row_h = (ch - frames::GAP * (rows + 1.0)) / rows;
+        let row_area = (cw - 2.0 * frames::GAP) * row_h * rows;
+        let painted = (frame + bar + sidebar + content + row_area) / frame;
+        assert!(
+            (painted - 2.53).abs() < 0.01,
+            "the frame should paint 2.53 times its own area, not {painted:.2}"
+        );
+
+        // And the stages are what they say: one draw for the wash, three opaque
+        // rectangles over it, then the rows.
+        let draws = |stage| frames::stacked(stage).draw_count();
+        assert_eq!(draws(frames::Stacked::Wash), 1, "the wash alone");
+        assert_eq!(
+            draws(frames::Stacked::Panels),
+            4,
+            "bar, sidebar, panel over it"
+        );
+        assert_eq!(
+            draws(frames::Stacked::All),
+            4 + frames::ROWS,
+            "one draw per list row on top"
+        );
+
+        // No layer anywhere in it, which is what keeps the frame a fill
+        // measurement. A blur or a group would make the deltas answer a different
+        // question, and `FRAME` is already the scene that asks that one.
+        assert_eq!(
+            frames::stacked(frames::Stacked::All).passes.len(),
+            1,
+            "the stacked frame opens no layer"
+        );
+        assert_eq!(frames::Stacked::All.name(), frames::STACKED);
     }
 
     /// Each stage of the frame adds what it says, and the last is the frame.
