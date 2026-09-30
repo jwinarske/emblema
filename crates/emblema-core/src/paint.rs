@@ -388,10 +388,11 @@ impl ImageFilter {
     ///   on upstream having no morphology, which was wrong, and both now scale.
     ///   `Layer::scaled_by` does the same to the fields a `Copy` layer carries,
     ///   so the two spellings of a dilation agree -- including which factor each
-    ///   takes. A radius is converted per axis and a deviation by the single
-    ///   largest factor, which is a defect on the blur's side that
-    ///   `non-parity.md` 20 records and measures; the two spellings have to agree
-    ///   with each other before either is worth fixing, and they do.
+    ///   takes. Both pairs are converted per axis, each component by the length of
+    ///   its own transformed basis vector, which is what upstream takes. A
+    ///   deviation took the single largest factor until `non-parity.md` 20 was
+    ///   closed, and `Layer::backdrop_blur` still does because it is one number
+    ///   rather than a pair.
     /// - A matrix is not a length. It moves a finished image, and the transform
     ///   is already in the space the image is in.
     /// - A color filter and a caller's program carry no lengths at all.
@@ -405,8 +406,8 @@ impl ImageFilter {
         }
         match self {
             Self::Blur { sigma_x, sigma_y } => Self::Blur {
-                sigma_x: sigma_x * scale,
-                sigma_y: sigma_y * scale,
+                sigma_x: sigma_x * axes.x,
+                sigma_y: sigma_y * axes.y,
             },
             Self::Dilate { radius_x, radius_y } => Self::Dilate {
                 radius_x: radius_x * axes.x,
