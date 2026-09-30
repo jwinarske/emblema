@@ -1,17 +1,22 @@
 //! What space a morphology radius is in, pinned.
 //!
-//! `dilate` and `erode` take a radius, and the two renderers disagree about what
-//! it measures. Here it is device pixels and nothing scales it. Upstream's is a
-//! local length that `entity.GetTransform() * effect_transform.Basis()` scales at
-//! the pass, so a dilated layer under a scale of three spreads three times as
-//! far there and the same distance here. `docs/non-parity.md` 17 is the entry,
-//! with what a fix costs and why it is not the multiplication it looks like.
+//! `dilate` and `erode` take a radius, and it is a length in the caller's space
+//! in both renderers -- since 2026-09-29 here, and always upstream, where
+//! `entity.GetTransform() * effect_transform.Basis()` scales it at the pass. It
+//! used to be device pixels here, which is what the first test below was written
+//! backwards to pin and now pins forwards.
 //!
-//! This file exists so that flipping the convention is *visible*. The corpus has
-//! a pair of scenes built to differ in nothing but the transform -- the same
-//! cross at half the size under a scale of two, landing on exactly the pixels the
-//! unscaled one covers -- so the dilation distance is the only thing left that
-//! can separate them.
+//! What still differs is the *shape* of the conversion, not its units: one factor
+//! here against a transformed direction vector per pass upstream. That is the
+//! remaining half of `docs/non-parity.md` 17, and the second test below is its
+//! pin.
+//!
+//! This file exists so that changing either is *visible*. The corpus has a pair
+//! of scenes built to differ in nothing but the transform -- the same cross at
+//! half the size under a scale of two, landing on exactly the pixels the unscaled
+//! one covers -- so the dilation distance is the only thing left that can
+//! separate them, and a third under an anisotropic scale for the axis a single
+//! factor cannot carry.
 //!
 //! # Why it is not the cost baseline that catches this
 //!
@@ -121,5 +126,57 @@ fn the_dilation_under_a_scale_reaches_twice_as_far() {
         reached(&scaled),
         vec![6.0, 16.0],
         "the same radii under a scale of two are sixteen and six"
+    );
+}
+
+/// An anisotropic scale is carried by one factor here, and by two upstream.
+///
+/// `scale(2, 5)` on radii of eight and three. Upstream transforms one direction
+/// vector per pass and takes a length from each -- `TransformDirection((1,0) * 8)`
+/// is sixteen long, `TransformDirection((0,1) * 3)` is fifteen -- so it reaches
+/// sixteen along x and fifteen along y. Here the conversion is `max_scale_of`,
+/// the larger of the two basis lengths, which is five, so both radii are
+/// multiplied by five: forty along x and fifteen along y. The y axis agrees
+/// because five is the factor the larger axis wanted; x is where one number
+/// cannot do the work of two.
+///
+/// **This asserts today's behavior, deliberately.** `docs/non-parity.md` 17 says
+/// the scene comes before the fix or the change is unmeasured, and this is that
+/// scene's pin: the per-axis conversion has to fail this test and say what it is
+/// replacing, the way the radius flip failed the test that stood before it.
+///
+/// Summed per axis rather than compared per pass, because x arrives in two
+/// passes. `MORPHOLOGY_TAPS` is thirty-two and forty does not fit in one, so the
+/// recording splits it thirty-two and eight -- which is itself a difference the
+/// fix removes, and the reason this scene is one the *cost* baseline can see.
+#[test]
+fn the_dilation_under_an_anisotropic_scale_uses_one_factor() {
+    let rows = radii("layer-dilated-under-anisotropic-scale");
+    assert!(
+        !rows.is_empty(),
+        "no morphology material in the scene, so this compared nothing"
+    );
+
+    let along = |axis: usize| -> f32 { rows.iter().map(|pair| pair[axis]).sum() };
+    let (x, y) = (along(0), along(1));
+
+    assert_eq!(
+        [x, y],
+        [40.0, 15.0],
+        "a radius of eight and three under scale(2, 5) reaches {x} along x and {y} \
+         along y. Both times five is what a single `max_scale_of` gives. If this \
+         now reads sixteen and fifteen, the per-axis conversion landed -- which is \
+         the intended change: assert that instead, and rewrite docs/non-parity.md \
+         17, whose remaining half this was the whole subject of."
+    );
+
+    // The pass split is part of what the fix removes, so it is stated rather than
+    // left implicit in the sum: a reader who sees this test fail on the count
+    // should know the count was deliberate.
+    assert_eq!(
+        rows.len(),
+        3,
+        "expected three morphology passes -- x split thirty-two and eight because \
+         forty exceeds MORPHOLOGY_TAPS, then y in one: {rows:?}"
     );
 }
