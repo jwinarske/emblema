@@ -3539,14 +3539,15 @@ pub fn corpus() -> Vec<Scene> {
         // how far the dilation reached.
         //
         // Which makes this a pin on the radius convention rather than a picture.
-        // The radius here is in device pixels and nothing scales it, so the two
-        // scenes come out identical. Upstream's radius is a local length scaled
-        // by the transform at the pass, so upstream's pair would differ: eight
-        // and three against sixteen and six. `non-parity.md` 17 has the case.
-        // Flipping this renderer's convention is therefore visible here and only
-        // here -- `the_dilation_under_a_scale_reaches_the_same_distance` fails
-        // the moment it is flipped, which is the point of writing the scene
-        // before the change rather than after it.
+        // The radius is a local length scaled by the transform at the pass, as
+        // upstream's is, so the pair differs: eight and three against sixteen and
+        // six. It did not until 2026-09-29, when the convention was flipped to
+        // match upstream, and this scene is what made the flip visible --
+        // `the_dilation_under_a_scale_reaches_twice_as_far` is the assertion, and
+        // it is the inverse of the one that stood here before. `non-parity.md` 17
+        // has what remains, which is the conversion's shape rather than its units.
+        // Writing the scene before the change is what let either direction fail
+        // loudly.
         Scene::tree(
             "layer-dilated-under-scale",
             vec![Node::Layer {
@@ -3573,6 +3574,70 @@ pub fn corpus() -> Vec<Scene> {
                         Shape::Rect {
                             min: [12.0, 28.0],
                             max: [52.0, 36.0],
+                        },
+                        [1.0, 1.0, 1.0, 1.0],
+                    )
+                    .with_blend(BlendMode::SrcOver)
+                    .into(),
+                ],
+            }],
+        )
+        .with_background(DARK_GROUND),
+        // The same cross under an *anisotropic* scale, which is the case a single
+        // conversion factor cannot carry. `non-parity.md` 17 is about the shape of
+        // that conversion rather than its units: upstream transforms one direction
+        // vector per pass and takes a length from each, so `scale(2, 5)` on radii
+        // of eight and three reaches sixteen along x and fifteen along y. Here the
+        // factor is `max_scale_of`, the larger of the two, so both radii are
+        // multiplied by five and x reaches forty.
+        //
+        // Drawn at a fifth the height and half the width so the cross lands on
+        // device pixels comparable to the pair above, and sized to keep forty
+        // clear of `applied_radius`'s clamp -- which is the target extent, so a
+        // radius that clamped would report the clamp instead of the convention and
+        // the test below would pass for the wrong reason.
+        //
+        // **This scene cannot be checked by rendering it.** The comment on the
+        // next scene says why in full: every comparison the corpus makes is
+        // between two backends or two devices, and the conversion happens above
+        // both, so both sides are wrong together and agree. What makes this scene
+        // worth having is `the_dilation_under_an_anisotropic_scale_uses_one_factor`
+        // reading the radii out of the recording -- and that test asserts today's
+        // behavior, so the per-axis change fails it and has to say so.
+        //
+        // Unlike the pair above, this one the *cost* baseline sees. A pass covers
+        // `MORPHOLOGY_TAPS` texels and that is thirty-two, so the inflated forty
+        // along x arrives as two passes where sixteen would arrive as one: five
+        // passes here against the four the pair records, and four again once the
+        // conversion is per axis. The pair could not show that because eight and
+        // sixteen both fit in one pass. So the scene is pinned twice, and the cost
+        // table is the one that moves without anybody reading a radius.
+        Scene::tree(
+            "layer-dilated-under-anisotropic-scale",
+            vec![Node::Layer {
+                layer: Box::new(LayerSpec {
+                    morphology: Some(MorphologySpec {
+                        radius: [8.0, 3.0],
+                        dilate: true,
+                    }),
+                    ..LayerSpec::default()
+                }),
+                bounds: None,
+                transform: Transform::scale(2.0, 5.0),
+                children: vec![
+                    Item::fill(
+                        Shape::Rect {
+                            min: [28.0, 6.0],
+                            max: [36.0, 20.0],
+                        },
+                        [1.0, 1.0, 1.0, 1.0],
+                    )
+                    .with_blend(BlendMode::SrcOver)
+                    .into(),
+                    Item::fill(
+                        Shape::Rect {
+                            min: [14.0, 11.0],
+                            max: [50.0, 15.0],
                         },
                         [1.0, 1.0, 1.0, 1.0],
                     )

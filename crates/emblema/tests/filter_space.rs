@@ -28,7 +28,7 @@
 //!
 //! A morphology radius is device pixels in every spelling, which is a divergence
 //! from upstream recorded as `docs/non-parity.md` 17 and pinned by
-//! `emblema-testkit`'s `the_dilation_under_a_scale_reaches_the_same_distance`.
+//! `emblema-testkit`'s `the_dilation_under_a_scale_reaches_twice_as_far`.
 //! `ImageFilter::scaled_by` leaves it alone on purpose: scaling it here while
 //! `Layer::scaled_by` does not would trade a stated divergence for an unstated
 //! inconsistency. So this file asserts the radii *agree across spellings* without

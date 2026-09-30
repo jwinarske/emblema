@@ -710,10 +710,32 @@ dilates to a square in the wrong orientation.
 `the_dilation_under_a_scale_reaches_twice_as_far` pins the part that is fixed,
 over the corpus pair `layer-dilated` and `layer-dilated-under-scale`, and
 `a_morphology_radius_is_the_same_length_either_way_and_scales` pins that both
-spellings agree. Neither covers the anisotropic or rotated case: closing that
-wants a corpus scene with a non-uniform transform, which does not exist yet, and
-the same reasoning as before applies -- write the scene before the fix or the
-change is unmeasured.
+spellings agree.
+
+The anisotropic case now has its scene, written before the fix for the reason the
+radius flip established: `layer-dilated-under-anisotropic-scale` puts the same
+cross under `scale(2, 5)`, and
+`the_dilation_under_an_anisotropic_scale_uses_one_factor` asserts what this
+renderer does today -- forty along x and fifteen along y, both radii times the
+larger basis length -- so the per-axis conversion cannot land quietly. It has to
+fail that test and replace the assertion with sixteen and fifteen.
+
+That scene is pinned twice, and the second pin was not designed. A pass covers
+`MORPHOLOGY_TAPS` texels, which is thirty-two, so an inflated forty arrives as two
+passes where sixteen arrives as one: the scene records five passes against the
+pair's four, and the cost baseline moves on the fix without anyone reading a
+radius out of a material. The existing pair could not show that, because eight and
+sixteen both fit in one pass -- which is why this file used to say the cost table
+cannot catch a morphology convention. For the anisotropic scene it can.
+
+**The rotated case still has no scene, and a scene is not what would catch it.**
+Under a pure rotation `max_scale_of` is one, so the radii are unchanged and
+nothing a material carries differs; what differs is the direction each pass walks,
+which is `[1/width, 0]` and `[0, 1/height]` here against the transformed
+directions upstream. The corpus cannot see it either -- every comparison it makes
+is between two backends or two devices, and the conversion sits above both, so
+both sides are wrong together and agree. Catching a rotation wants an assertion on
+the `step` a recording carries, not a picture.
 
 
 ## 18. A filled path is triangulated here; upstream stencils and covers it
