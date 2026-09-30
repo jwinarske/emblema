@@ -387,7 +387,11 @@ impl ImageFilter {
     ///   that its radius was device pixels here on purpose; that reading rested
     ///   on upstream having no morphology, which was wrong, and both now scale.
     ///   `Layer::scaled_by` does the same to the fields a `Copy` layer carries,
-    ///   so the two spellings of a dilation agree.
+    ///   so the two spellings of a dilation agree -- including which factor each
+    ///   takes. A radius is converted per axis and a deviation by the single
+    ///   largest factor, which is a defect on the blur's side that
+    ///   `non-parity.md` 20 records and measures; the two spellings have to agree
+    ///   with each other before either is worth fixing, and they do.
     /// - A matrix is not a length. It moves a finished image, and the transform
     ///   is already in the space the image is in.
     /// - A color filter and a caller's program carry no lengths at all.
@@ -395,7 +399,7 @@ impl ImageFilter {
     /// Matched arm by arm with no wildcard, so a variant added later fails to
     /// compile here instead of silently not being converted. That is the whole
     /// reason this is written out rather than done with an `if let`.
-    pub(crate) fn scaled_by(self, scale: f32) -> Self {
+    pub(crate) fn scaled_by(self, scale: f32, axes: Vec2) -> Self {
         if !scale.is_finite() || scale <= 0.0 {
             return self;
         }
@@ -405,16 +409,16 @@ impl ImageFilter {
                 sigma_y: sigma_y * scale,
             },
             Self::Dilate { radius_x, radius_y } => Self::Dilate {
-                radius_x: radius_x * scale,
-                radius_y: radius_y * scale,
+                radius_x: radius_x * axes.x,
+                radius_y: radius_y * axes.y,
             },
             Self::Erode { radius_x, radius_y } => Self::Erode {
-                radius_x: radius_x * scale,
-                radius_y: radius_y * scale,
+                radius_x: radius_x * axes.x,
+                radius_y: radius_y * axes.y,
             },
             Self::Compose { outer, inner } => Self::Compose {
-                outer: Box::new(outer.scaled_by(scale)),
-                inner: Box::new(inner.scaled_by(scale)),
+                outer: Box::new(outer.scaled_by(scale, axes)),
+                inner: Box::new(inner.scaled_by(scale, axes)),
             },
             Self::None | Self::Matrix { .. } | Self::Color(_) | Self::Runtime { .. } => self,
         }

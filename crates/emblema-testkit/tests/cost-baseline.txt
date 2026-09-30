@@ -66,7 +66,7 @@
   mesh-interpolated                            1      1        4        6       0     0
   layer-dilated                                4      4       20       30       3     0
   layer-dilated-under-scale                    4      4       20       30       3     0
-  layer-dilated-under-anisotropic-scale        5      5       24       36       4     0
+  layer-dilated-under-anisotropic-scale        4      4       20       30       3     0
   layer-composed-filter-under-scale            5      6       48      108       4     0
   atlas-turned-sprites                         1      1       16       24       1     0
   layer-resampled-by-its-matrix                2      3       32       78       1     0

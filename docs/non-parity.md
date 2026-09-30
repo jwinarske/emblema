@@ -68,9 +68,9 @@ saying what this file says they say" is. The same lesson is written out at
 length beside the timing baseline, which went eight commits pointing at a state
 no run had passed against, for want of exactly this.
 
-Seven entries name something in upstream specific enough to re-read. Six were
-read on the date above; §1 was read again and §19 for the first time at tip on
-**2026-09-29**, which is why those two rows carry their own date and the others
+Eight entries name something in upstream specific enough to re-read. Six were
+read on the date above; §1 was read again, and §19 and §20 for the first time, at
+tip on **2026-09-29**, which is why those rows carry their own date and the others
 do not:
 
 | | claim | what was read | still true |
@@ -82,6 +82,7 @@ do not:
 | §8 | the blurred rectangle's asymmetric term | `solid_rrect_like_blur_contents.cc`, `NegPos` and `1.25 * sigma * (eccentricV.x - eccentricV.y)` under the comment "Pull in long end" | yes |
 | §10 | the squircle's conic-weight sawtooth | `round_superellipse_param.cc`, `frac * kPrecomputedVariables[left + 1][0] * sqrt(n)` | yes |
 | §19 | a vertex-interpolated gradient path | `linear_gradient_contents.cc`, `CanApplyFastGradient` and `FastLinearGradient`, reached before the uniform path in `Render` | yes, read 2026-09-29 |
+| §20 | a blur's deviations scale per axis | `gaussian_blur_filter_contents.cc`, `ExtractScale` taking the lengths of the transformed basis vectors, which §14 cites for the same call | yes, read 2026-09-29 |
 
 Two of those six are upstream defects rather than differences of design -- §8's
 asymmetry and §10's sawtooth -- and both are still there. §10 is the sharper
@@ -663,20 +664,20 @@ the clamp is invisible, because the attachment would have clipped the sum anyway
 written to fail if the clamp comes out again so that whoever notices the
 inconsistency finds the cost recorded rather than rediscovering it.
 
-## 17. A morphology radius turns and stretches with the transform upstream; here it only scales
+## 17. A morphology radius turns and stretches with the transform, and the shape of that is now upstream's
 
-**What differs.** The larger half of this entry is closed. A dilate or erode
-radius used to be device pixels here while upstream's was a local length, so a
-dilated layer under a scale of two spread twice as far there and the same
-distance here. Since 2026-09-29 the radius is a local length in both:
-`Layer::scaled_by` converts it with the sigmas, `ImageFilter::scaled_by` converts
-a dilation handed over as a filter, and `Morphology::applied_radius` rounds to
-whole device texels where the device radius is known.
+**Closed, in two halves, and kept because the second half is a worked example of
+how this file is meant to be used.** A dilate or erode radius used to be device
+pixels here while upstream's was a local length, so a dilated layer under a scale
+of two spread twice as far there and the same distance here. That was the first
+half, fixed 2026-09-29: `Layer::scaled_by` converts it, `ImageFilter::scaled_by`
+converts a dilation handed over as a filter, and `Morphology::applied_radius`
+rounds to whole device texels where the device radius is known.
 
-What remains is the *shape* of the conversion. Read at `flutter/flutter` master
-`fab99153`, upstream builds two directional passes -- X carrying `radius_x` with
-direction `Point(1, 0)`, Y carrying `radius_y` with `Point(0, 1)` -- and each one
-transforms its own direction vector:
+The second half was the *shape* of the conversion, and it is fixed too. Read at
+`flutter/flutter` master `fab99153`, upstream builds two directional passes -- X
+carrying `radius_x` with direction `Point(1, 0)`, Y carrying `radius_y` with
+`Point(0, 1)` -- and each transforms its own direction vector:
 
 ```
 transform          = entity.GetTransform() * effect_transform.Basis()
@@ -685,58 +686,49 @@ frag_info.radius   = round(transformed_radius.GetLength())
 frag_info.uv_offset = ...TransformDirection(transformed_radius).Normalize() / extent
 ```
 
-So upstream takes a *length per axis* from the transformed vector, and walks each
-pass along the transformed *direction*. Here the conversion is a single scalar --
-`max_scale_of(transform)`, the same factor the blur uses -- and
-`morphology_passes` steps along `[1/width, 0]` and `[0, 1/height]`, which are the
-target's own axes rather than the caller's.
+So upstream takes a *length per axis* from the transformed vector and walks each
+pass along the transformed *direction*. This renderer now does both:
+`axis_scales_of` takes the lengths of the transformed basis vectors, which is what
+upstream's `ExtractScale` takes, and `morphology_passes` walks `BlurBasis`'s
+directions the way `blur_passes` does.
 
-**Why.** The scalar is what blur already uses, so morphology matching it makes
-the two filters consistent here, which was worth more than matching upstream on a
-third axis of behavior in the same change. The axis-aligned step is the same gap
-`non-parity.md` 14 records for the blur, except the blur closed it:
-`BlurBasis::of` gives the transformed unit directions and the blur walks them.
-Morphology could use the same basis; it does not yet, and that is the work this
-entry now describes rather than the radius.
+**What is left, and it is shared with the blur.** Under a shear or a perspective
+transform `BlurBasis` refuses to decompose and falls back to the target's own
+axes, so a sheared dilation does not turn. Entry 14 records the same limit for the
+blur and why: separability is a property of orthogonal directions, and running two
+passes along oblique ones is not a wrong dilation so much as not a dilation.
+Upstream's morphology has no such fallback -- `TransformDirection` takes the shear
+-- so this is a real remaining difference, narrower than the one this entry started
+with and bounded to transforms the corpus does not contain.
 
-**Impact.** The two agree under a uniform scale, which is nearly every use and is
-what the corpus pair exercises. They part in two cases. Under an **anisotropic**
-scale -- `scale(2, 5)` on a radius of 8 -- upstream reaches 16 along one axis and
-40 along the other, where this reaches 40 along both, because a single factor
-cannot carry two. Under a **rotation** the dilation here still spreads along the
-screen's axes while upstream's spreads along the caller's, so a rotated square
-dilates to a square in the wrong orientation.
+**Impact.** Under an anisotropic scale the two now agree: `scale(2, 5)` on radii of
+eight and three reaches sixteen along x and fifteen along y in both. Before, one
+factor -- the larger -- multiplied both, so x reached forty. Under a rotation a
+dilation now spreads along the caller's axes, so a rotated square dilates to a
+square in the right orientation, where before it dilated along the screen's.
 
-`the_dilation_under_a_scale_reaches_twice_as_far` pins the part that is fixed,
-over the corpus pair `layer-dilated` and `layer-dilated-under-scale`, and
+Three tests hold it, and the way they were written is the point. Each asserted the
+*old* behavior first, so the fix could not land quietly:
+
+- `the_dilation_under_a_scale_reaches_twice_as_far` pins the units, over the corpus
+  pair `layer-dilated` and `layer-dilated-under-scale`.
+- `the_dilation_under_an_anisotropic_scale_converts_per_axis` pins the per-axis
+  length, over `layer-dilated-under-anisotropic-scale`. It asserted forty and
+  fifteen until the conversion landed, then failed with sixteen and fifteen and
+  named its own replacement.
+- `a_dilation_walks_the_callers_axes_after_a_quarter_turn` pins the direction, and
+  is built from a `Canvas` rather than a scene because no picture could catch it:
+  a rotation changes nothing a material carries except `step`.
+
 `a_morphology_radius_is_the_same_length_either_way_and_scales` pins that both
-spellings agree.
+spellings agree, including which factor each takes.
 
-The anisotropic case now has its scene, written before the fix for the reason the
-radius flip established: `layer-dilated-under-anisotropic-scale` puts the same
-cross under `scale(2, 5)`, and
-`the_dilation_under_an_anisotropic_scale_uses_one_factor` asserts what this
-renderer does today -- forty along x and fifteen along y, both radii times the
-larger basis length -- so the per-axis conversion cannot land quietly. It has to
-fail that test and replace the assertion with sixteen and fifteen.
-
-That scene is pinned twice, and the second pin was not designed. A pass covers
-`MORPHOLOGY_TAPS` texels, which is thirty-two, so an inflated forty arrives as two
-passes where sixteen arrives as one: the scene records five passes against the
-pair's four, and the cost baseline moves on the fix without anyone reading a
-radius out of a material. The existing pair could not show that, because eight and
-sixteen both fit in one pass -- which is why this file used to say the cost table
-cannot catch a morphology convention. For the anisotropic scene it can.
-
-**The rotated case still has no scene, and a scene is not what would catch it.**
-Under a pure rotation `max_scale_of` is one, so the radii are unchanged and
-nothing a material carries differs; what differs is the direction each pass walks,
-which is `[1/width, 0]` and `[0, 1/height]` here against the transformed
-directions upstream. The corpus cannot see it either -- every comparison it makes
-is between two backends or two devices, and the conversion sits above both, so
-both sides are wrong together and agree. Catching a rotation wants an assertion on
-the `step` a recording carries, not a picture.
-
+**The anisotropic scene is pinned twice, and the second pin was not designed.** A
+pass covers `MORPHOLOGY_TAPS` texels, which is thirty-two, so the inflated forty
+arrived as two passes where sixteen arrives as one. The scene's cost row went from
+five passes to four when the conversion landed. The corpus pair could not have
+shown that, eight and sixteen both fitting one pass -- which is why this file used
+to say a cost table cannot catch a morphology convention. For that scene it can.
 
 ## 18. A filled path is triangulated here; upstream stencils and covers it
 
@@ -922,3 +914,40 @@ from a fill either. Then the path, whose predicate is cheap and whose geometry i
 the sections upstream already describes. The paint block's four stops do not bound
 it — the sections are geometry, so a vertex-interpolated wash is not limited the
 way the fragment walk is, and building it would narrow §1 as well.
+
+## 20. A blur's deviations are scaled by one factor; upstream scales them per axis
+
+**What differs.** `dart:ui` states a deviation per axis in the caller's space, and
+something has to convert the pair into device pixels. Upstream's
+`GaussianBlurFilterContents` uses `ExtractScale`, which takes the lengths of the
+transformed basis vectors -- one length per axis. `Layer::scaled_by` here
+multiplies both deviations by `max_scale_of`, which is the *larger* of those two
+lengths.
+
+**Why.** No reason on record. It is what this renderer has always done, and it is
+the same defect entry 17 records for the morphology radius, which took the same
+factor until 2026-09-29 on the stated grounds of matching the blur. Fixing
+morphology left the two filters inconsistent, and this is the half that is still
+wrong rather than the half that changed.
+
+**Impact.** Measured 2026-09-29. A layer blurred with deviations of eight and three
+records sigmas of ten and fifteen under `scale(2, 5)` -- and **the same ten and
+fifteen under `scale(5, 2)`**. Two transforms that transpose each other produce an
+identical blur, because one number cannot tell them apart. Upstream produces
+transposed results. The ten rather than forty is the reduction of entry 6 doing its
+work on an inflated deviation, which is the other half of the cost: an anisotropic
+blur is downsampled further here than the deviation the caller asked for would
+have needed.
+
+By the rule in this file's own opening, this is not a divergence to keep. It is not
+a question about how the pixels get there -- it is a question about what the
+picture is, and two different transforms giving one picture is not an answer to it.
+
+**It is recorded rather than fixed because nothing pins it.** No corpus scene
+blurs a layer under an anisotropic scale, so the change would be unmeasured, and
+this tree's rule -- set by the radius flip and followed again for the morphology
+conversion -- is that the scene comes before the fix. The scene wants care the
+morphology pair did not: a sigma also drives the reduction in entry 6, so a scene
+whose deviations cross a halving threshold would move its own pass count for a
+second reason and confuse the two. `the_dilation_under_an_anisotropic_scale_converts_per_axis`
+is the shape to copy.
