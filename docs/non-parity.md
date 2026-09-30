@@ -68,9 +68,13 @@ saying what this file says they say" is. The same lesson is written out at
 length beside the timing baseline, which went eight commits pointing at a state
 no run had passed against, for want of exactly this.
 
-Nine entries name something in upstream specific enough to re-read. Six were read
-on the date above. §1 and §19 were read at tip on **2026-09-29**, and §17 and §20 on
-**2026-09-30**, which is why four rows carry their own date.
+Ten entries name something in upstream specific enough to re-read. Six were read on
+the date above. §1 and §19 were read at tip on **2026-09-29**, and §17, §20 and §21 on
+**2026-09-30**, which is why five rows carry their own date.
+
+§21's row says something the others do not, and the distinction is worth keeping in
+this column: the code it cites exists and a search says nothing calls it. "Still true"
+for that row means the mechanism is still there, not that upstream still uses it.
 
 Two things about how those four arrived, because both are the failure this table
 exists to catch. §17 quoted upstream code with a commit in its own text for as long
@@ -90,6 +94,7 @@ before this sentence was written:
 | §19 | a vertex-interpolated gradient path | `linear_gradient_contents.cc`, `CanApplyFastGradient` and `FastLinearGradient`, reached before the uniform path in `Render` | yes, read 2026-09-29 |
 | §20 | a blur's deviations scale per axis | `filters/gaussian_blur_filter_contents.cc`, `Vector2 ExtractScale(...)` and the `Vector2 scaled_sigma` it feeds, which §14 cites for the same call | yes, read 2026-09-30 |
 | §17 | a morphology radius per transformed direction | `filters/morphology_filter_contents.cc`, `transform.TransformDirection(direction_ * radius_.radius)` and `std::round(transformed_radius.GetLength())` | yes, read 2026-09-30 |
+| §21 | opaque draws reordered to cull one another | `draw_order_resolver.h`, "reverse painter's order so that they cull one another"; `color_source_contents.h`, `depth_write_enabled = options.blend_mode == BlendMode::kSrc` | the machinery yes, the wiring no -- read 2026-09-30 |
 
 Two of those six are upstream defects rather than differences of design -- §8's
 asymmetry and §10's sawtooth -- and both are still there. §10 is the sharper
@@ -1028,3 +1033,66 @@ did it. Eighteen was the largest in play against a threshold a little over ninet
 `the_scene_does_not_reach_the_reduction_either_way` pins that, on the whole
 recording's pass count rather than on the blur materials -- a halving is a pass of its
 own, so counting blurs would read two either way and prove nothing.
+
+## 21. Draws go out in painter's order here; upstream has machinery to reorder opaque ones, mostly unwired
+
+**Why this entry is here.** [`on-a-board.md`](on-a-board.md) measured a full-screen
+gradient at three quarters of a frame on V3D and then measured four fifths of *that*
+to be fill rather than gradient evaluation. Fill is now the largest identified cost
+in the bench's frame and no entry in this file addressed it, so the question was what
+upstream does about covering a pixel more than once.
+
+**What differs.** This renderer submits draws in the order they were recorded.
+`Batch`'s own documentation states the constraint: "2D drawing is painter's-algorithm
+ordered: reordering two overlapping draws changes which one ends up on top. Deciding
+when a reorder is safe needs either overlap analysis or a depth buffer, and that
+belongs to the layer that knows what the draws represent." Nothing above it does that
+yet, and no draw here writes or tests depth.
+
+Upstream has the pieces for it, read at tip on 2026-09-30:
+
+- `color_source_contents.h` sets `options.depth_write_enabled = options.blend_mode ==
+  BlendMode::kSrc`, under the comment "Enable depth writing for all opaque entities in
+  order to allow reordering."
+- `draw_order_resolver.h` separates opaque from translucent and keeps the opaque set
+  "order independent, and so we render these elements in reverse painter's order so
+  that they cull one another." `GetSortedDraws` also takes `opaque_skip_count` and
+  `translucent_skip_count` "used for the 'clear color' optimization", which hoists
+  leading full-coverage draws out of the pass entirely.
+- `GeometryResult::Mode::kPreventOverdraw` turns on `depth_write_enabled` with
+  `CompareFunction::kGreater`, and `Entity::GetShaderTransform` puts each element's
+  depth in z, scaled by `kDepthEpsilon`, so z grows with paint order.
+
+**But the scene-level half of that is not wired at tip, and the entry would be wrong
+to imply otherwise.** A code search for `DrawOrderResolver` across `flutter/flutter`
+returns its own header, its own implementation and its own unit tests, and nothing
+else. The comment justifying the opaque depth writes names `EntityPass::AddEntity`,
+and there is no `class EntityPass` upstream any more -- only `EntityPassTarget` and
+`EntityPassClipStack`. So the reordering that would exploit those depth writes looks
+either staged or left behind by a refactor. What is demonstrably live is the narrower
+`kPreventOverdraw`, whose stated purpose is a stroke not painting its own pixels
+twice rather than one draw occluding another.
+
+**Why, on this side.** No reason on record beyond `Batch`'s note, which frames
+reordering as a way to cut pipeline binds rather than as a way to avoid overdraw --
+a smaller prize, and it is the one the comment weighs. The attachment is not the
+obstacle: `emblema-hal-vulkan`'s `stencil.rs` already allocates a combined
+`D24_UNORM_S8_UINT` or `D32_SFLOAT_S8_UINT` image for the clip, so the depth half is
+already allocated and already paid for on every target that clips. What is missing is
+depth state on the pipelines, which every one of them compiles ahead of time, and a
+pass over recorded draws that knows which are opaque.
+
+**Impact, estimated rather than measured, and small for the scene that prompted it.**
+In the bench's frame the only opaque draws are the gradient ground and the three
+cards; both shadows and the blurred highlight are translucent and cull nothing. Three
+rounded rectangles of side 216 with radius 38.88 cover 136,075 of 2,073,600 pixels,
+which is 6.6 per cent of the frame. Culling that much of the ground saves about 0.68
+ms of a 13.911 ms Vulkan frame -- **near five per cent**. The clear-color hoist does
+not apply at all, because the ground is a gradient and a clear is one color.
+
+So this is worth recording and is not worth building for this frame. The prize scales
+with how much opaque content a scene stacks, and nothing here measures a scene that
+stacks much: an interface with opaque panels over opaque backgrounds is where the
+number would be larger, and this repository has no such scene to measure. That is the
+same shape as entry 19 -- a real upstream mechanism whose value here is bounded by
+what the corpus and the bench actually draw.
