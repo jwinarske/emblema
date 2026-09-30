@@ -80,7 +80,44 @@
 # is worth seven. Three tile architectures, three different answers, which is the
 # entry's point rather than a contradiction of it.
 #
-# Last checked against the board: 50b64f4
+# The stacked frame's rows joined this file on 2026-09-30, at 01d7cb2, after a
+# reboot with the governor pinned again: 60.9 C before and 63.1 C after,
+# `throttled=0x0` and the clock at 2400000 throughout, load 0.02.
+#
+#   route    wash    plus panels   interface    the wash's share
+#   vulkan   10.424     18.766       24.509          43%
+#   gles     11.772     20.494       26.351          42%
+#
+# **This is the frame `non-parity.md` 21 needed.** Three opaque rectangles add 8.342
+# ms under Vulkan while covering 94.1 per cent of the wash beneath them, so an opaque
+# reordering that let them cull it would save about 9.81 ms of a 24.509 ms frame --
+# forty per cent, where the same arithmetic on `full frame, mixed content` gives five.
+# The VisionFive 2 says forty-three on its own frame. Two tile architectures, the same
+# answer, and it was never a property of the renderer but of what this bench drew.
+#
+# `stacked, wash` is 10.424 against `frame, gradient ground`'s 10.427 -- the same cost
+# for the same kind of draw, one vertical and one diagonal.
+#
+# **Six runs went into that and two of them were thrown away, which is the part worth
+# copying.** Run four read `distance field` at 17.005 against 8.209 and `stroked
+# field` at 17.438 against 8.780 -- both more than doubled -- because something else
+# was drawing on the V3D at the time; the operator saw a rotating cube flicker in the
+# same minute. Run three was a milder version, the gradient rows alone up seven per
+# cent. **Neither was visible in the row being recorded**: `stacked, wash` read 10.441
+# in run four, a fifth of a per cent off the clean runs. Checking one row for a clean
+# cluster is not checking the run. The four surviving runs agree to 0.06 per cent.
+#
+# One row was re-recorded for a reason that is not the renderer.
+# `recording / tessellated, 4 samples` read 0.225 here and reads 0.242 now, seven and
+# a half per cent up, and the binary from before the stacked frame reads 0.243 on the
+# same board in the same session -- so the code did not do it and the previous boot
+# did. Its tolerance goes to 10.0 on that evidence rather than on convenience. Note
+# what the new value is: `tessellated, 1 sample` also reads 0.242, and those two rows
+# build the same geometry and differ only in a sample count that recording never
+# touches, so agreeing is the self-consistent reading and 0.225 against 0.236 was the
+# odd one.
+#
+# Last checked against the board: 01d7cb2
 #
 # That line names the commit whose state a board run passed against, which is
 # never the commit that writes the line -- a hash cannot be recorded inside the
@@ -379,19 +416,8 @@
 # both backends run the same WGSL, and the software reference is lavapipe
 # running it too, so a shared mistake would pass every comparison the suite
 # makes.
-#
-#
-# A second frame arrived with this commit and its rows are not in this file. The
-# three `stacked` rows -- an interface-shaped frame whose opaque content hides 94
-# per cent of its own wash -- want a run on the board, and nothing invented them.
-# Until that run `--check` against this file reports them unmatched and exits
-# non-zero, which is the honest result and not a regression. Every row already here
-# is unchanged: the new frame was added beside `full frame, mixed content` rather
-# than replacing it, so nothing this file already recorded means anything different.
-# cargo xtask bench --record
-# device	configuration	median in milliseconds	[tolerance %]
 recording	distance field, 1 sample	0.098	5.0
-recording	tessellated, 4 samples	0.225	5.0
+recording	tessellated, 4 samples	0.242	10.0
 recording	tessellated, 1 sample	0.236	5.0
 recording	stroked field, 1 sample	0.100	5.0
 recording	stroked path, 1 sample	0.724	5.0
@@ -399,6 +425,9 @@ recording	frame, gradient ground	0.009	15.0
 recording	frame, plus cards	0.011	15.0
 recording	frame, plus shadows	0.015	15.0
 recording	full frame, mixed content	0.018	10.0
+recording	stacked, wash	0.009	15.0
+recording	stacked, plus panels	0.011	15.0
+recording	stacked interface	0.016	15.0
 vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.205	2.0
 vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
 vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.692	2.0
@@ -408,6 +437,9 @@ vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.427	2.0
 vulkan:0 V3D 7.1.7.0	frame, plus cards	11.066	2.0
 vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.913	2.0
 vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.911	2.0
+vulkan:0 V3D 7.1.7.0	stacked, wash	10.424	2.0
+vulkan:0 V3D 7.1.7.0	stacked, plus panels	18.766	2.0
+vulkan:0 V3D 7.1.7.0	stacked interface	24.509	2.0
 gles V3D 7.1.7.0	distance field, 1 sample	8.551
 gles V3D 7.1.7.0	tessellated, 4 samples	5.465
 gles V3D 7.1.7.0	tessellated, 1 sample	3.642
@@ -417,3 +449,6 @@ gles V3D 7.1.7.0	frame, gradient ground	11.766
 gles V3D 7.1.7.0	frame, plus cards	12.444
 gles V3D 7.1.7.0	frame, plus shadows	13.328
 gles V3D 7.1.7.0	full frame, mixed content	14.866
+gles V3D 7.1.7.0	stacked, wash	11.772
+gles V3D 7.1.7.0	stacked, plus panels	20.494
+gles V3D 7.1.7.0	stacked interface	26.351
