@@ -251,6 +251,60 @@ pub struct BatchDraw {
 }
 
 impl BatchDraw {
+    /// Whether this draw may be moved ahead of earlier draws it covers.
+    ///
+    /// A draw that answers yes replaces every sample it touches, so nothing
+    /// underneath it can show through and the painter's-order guarantee this
+    /// batch otherwise relies on does not apply to it. That is what makes an
+    /// opaque reordering possible: `docs/non-parity.md` 21 has the measurement,
+    /// and on both boards here the covered part of a frame's background is
+    /// around forty per cent of the frame.
+    ///
+    /// **Conservative on purpose, and every condition below is load-bearing.** A
+    /// wrong yes is not a slow frame, it is a wrong picture -- a background
+    /// showing through where it should not, or showing when it should not -- so
+    /// each test is for a property that can be read off the draw rather than
+    /// reasoned about, and anything this cannot prove answers no.
+    ///
+    /// - **`Material::Solid` with an opaque alpha, and nothing else.** A solid
+    ///   fill takes its coverage from the rasterizer, so a sample is either
+    ///   inside the geometry or outside it and there is no partial result. The
+    ///   analytic materials are the case this exists to exclude:
+    ///   `RoundedRect`, `Ellipse` and `RoundedRectBlur` compute coverage in the
+    ///   shader and blend it, so an *opaque* color still leaves a soft edge, and
+    ///   writing depth there would hide the background behind a half-covered
+    ///   pixel. Gradients and images could be opaque and are refused anyway:
+    ///   proving it means reading every stop or every texel.
+    /// - **Alpha at or above one.** Premultiplied and straight color agree
+    ///   there, so the form the material carries does not have to be known.
+    /// - **`Src` or `SrcOver`.** Both put an opaque source through unchanged.
+    ///   Every other mode reads the destination, which is the thing being
+    ///   reordered away.
+    /// - **No color filter.** A matrix or a blend filter can take alpha below
+    ///   one after the material produced it.
+    /// - **`Modulate` tinting.** It is the identity against the white a solid
+    ///   fill carries; another mode is a second color this cannot see.
+    /// - **Unclipped.** A `Narrow` or `Widen` draw writes the stencil rather
+    ///   than color and is sequencing, not content. A clipped `Content` draw
+    ///   writes color but depends on stencil state that the draws around it
+    ///   establish, so moving it past them would change what it is clipped to.
+    ///
+    /// Antialiasing does not appear here, and that is the point rather than an
+    /// omission. It is multisampling in this renderer -- `Canvas::pass_samples`
+    /// raises the whole pass's sample count and no draw blends its own coverage
+    /// -- so an opaque solid fill is binary at every sample whether the pass is
+    /// multisampled or not, which is exactly the case a depth test is built for.
+    /// A renderer that antialiased by blending coverage could not use this
+    /// predicate at all.
+    pub fn occludes(&self) -> bool {
+        self.stencil == ClipState::UNCLIPPED
+            && matches!(self.blend, BlendMode::Src | BlendMode::SrcOver)
+            && self.filter == ColorFilter::None
+            && self.tint_blend == BlendMode::Modulate
+            && !self.paint_at_texture_coords
+            && matches!(self.material, Material::Solid(color) if color[3] >= 1.0)
+    }
+
     /// The uniform block this draw's shader reads.
     ///
     /// The material and the filter are packed together because the shader
@@ -778,5 +832,124 @@ mod tests {
             Vertex::at_projected([3.0, 4.0, 2.0]).position,
             [3.0, 4.0, 2.0]
         );
+    }
+}
+
+#[cfg(test)]
+mod occlusion {
+    use super::*;
+    use crate::material::ToLocal;
+
+    const TRI: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+
+    fn one(material: Material, blend: BlendMode) -> BatchDraw {
+        let mut batch = Batch::new();
+        batch.push(&TRI, &[0, 1, 2], material, blend).unwrap();
+        batch.draws().first().expect("one draw").clone()
+    }
+
+    /// An opaque solid fill is what the predicate exists to admit.
+    #[test]
+    fn an_opaque_solid_fill_occludes() {
+        assert!(one(Material::solid([1.0; 4]), BlendMode::SrcOver).occludes());
+        assert!(one(Material::solid([0.2, 0.3, 0.4, 1.0]), BlendMode::Src).occludes());
+    }
+
+    /// And every reason to refuse is refused, each on its own.
+    ///
+    /// Written out one condition at a time rather than as a table, because the
+    /// point of each row is *why* it is unsafe and a table would carry the
+    /// values without the reason. A wrong yes here is a wrong picture.
+    #[test]
+    fn nothing_the_predicate_cannot_prove_occludes() {
+        // Translucent: the destination shows through, which is the whole
+        // question.
+        assert!(!one(Material::solid([1.0, 1.0, 1.0, 0.5]), BlendMode::SrcOver).occludes());
+        assert!(!one(Material::solid([0.0; 4]), BlendMode::SrcOver).occludes());
+
+        // A mode that reads the destination cannot have the destination moved
+        // out from under it.
+        for blend in [
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::DstOver,
+            BlendMode::Xor,
+            BlendMode::Plus,
+        ] {
+            assert!(
+                !one(Material::solid([1.0; 4]), blend).occludes(),
+                "{blend:?} reads what it is drawn over"
+            );
+        }
+
+        // The analytic materials blend their own coverage, so an opaque color
+        // still leaves a soft edge. This is the case the predicate is really
+        // for: every one of these would pass a naive "is the color opaque" test.
+        let analytic = [
+            Material::RoundedRect {
+                color: [1.0; 4],
+                half_size: [4.0, 4.0],
+                to_local: ToLocal::default(),
+                radius: 1.0,
+                outer_radius: 1.0,
+                stroke: 0.0,
+            },
+            Material::Ellipse {
+                color: [1.0; 4],
+                half_size: [4.0, 4.0],
+                to_local: ToLocal::default(),
+                stroke: 0.0,
+            },
+        ];
+        for material in analytic {
+            assert!(
+                !one(material, BlendMode::SrcOver).occludes(),
+                "an analytic shape computes coverage and blends it"
+            );
+        }
+    }
+
+    /// A filter or a tint can take alpha down after the material produced it.
+    #[test]
+    fn a_filter_or_a_tint_refuses_it() {
+        let mut filtered = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
+        assert!(filtered.occludes(), "the draw is otherwise admissible");
+
+        filtered.filter = ColorFilter::Blend {
+            color: [1.0, 1.0, 1.0, 0.25],
+            mode: BlendMode::SrcOver,
+        };
+        assert!(!filtered.occludes(), "a blend filter can lower alpha");
+
+        let mut tinted = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
+        tinted.tint_blend = BlendMode::Plus;
+        assert!(
+            !tinted.occludes(),
+            "only Modulate is the identity against a solid fill's white"
+        );
+
+        let mut sampled = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
+        sampled.paint_at_texture_coords = true;
+        assert!(
+            !sampled.occludes(),
+            "reading the paint elsewhere is a value this cannot see"
+        );
+    }
+
+    /// A stencil-writing draw is sequencing, and a clipped one depends on it.
+    #[test]
+    fn anything_touching_the_stencil_refuses_it() {
+        for stencil in [
+            ClipState::narrow(0),
+            ClipState::widen(1),
+            ClipState::content(1),
+        ] {
+            let mut draw = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
+            draw.stencil = stencil;
+            assert!(
+                !draw.occludes(),
+                "{stencil:?} either writes the stencil or depends on it"
+            );
+        }
     }
 }
