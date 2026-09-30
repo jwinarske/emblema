@@ -39,10 +39,26 @@ states a local length, so rounding at construction rounded the wrong quantity --
 half. `Morphology::applied_radius` rounds where the device radius is known, and
 is now the one place the value is finalized.
 
-Narrower than parity: the conversion is a single scalar and the passes stay
-axis-aligned, where upstream transforms each axis's direction vector. The two
-agree under a uniform scale and part under an anisotropic one or a rotation,
-which is what `docs/non-parity.md` 17 now records.
+**And the conversion is now per axis, which closes the rest of it.** That radius
+was converted by one factor -- `max_scale_of`, the larger of the two transformed
+basis lengths -- and the passes walked the target's own axes. Upstream transforms
+one direction vector per pass and takes a length from each. `axis_scales_of` now
+takes the lengths separately, as upstream's `ExtractScale` does, and
+`morphology_passes` walks `BlurBasis`'s directions the way `blur_passes` already
+did. **This changes what a dilate or erode draws under an anisotropic scale or a
+rotation**: radii of eight and three under `scale(2, 5)` reach sixteen and fifteen
+rather than forty and fifteen, and a rotated dilation spreads along the caller's
+axes rather than the screen's. Under a shear or perspective the basis does not
+decompose and both fall back to the target's axes, which `docs/non-parity.md` 17
+records as what remains.
+
+**A blur's deviations still take the single factor, and that is now a recorded
+defect rather than a matched pair.** Measured while doing the above: a layer blurred
+with deviations of eight and three records the same sigmas under `scale(2, 5)` as
+under `scale(5, 2)`, because one number cannot tell two transposed transforms apart.
+`docs/non-parity.md` 20 is the entry. It is not fixed in the same change because no
+corpus scene blurs under an anisotropic scale, and a scene comes before a fix here
+or the change is unmeasured.
 
 `emblema_present_drm::pacing` counts the vertical blanks a frame loop did not land
 on, from the sequence the kernel reports with each completed flip -- which the event

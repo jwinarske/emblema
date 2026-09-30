@@ -129,28 +129,26 @@ fn the_dilation_under_a_scale_reaches_twice_as_far() {
     );
 }
 
-/// An anisotropic scale is carried by one factor here, and by two upstream.
+/// An anisotropic scale is carried per axis, as upstream carries it.
 ///
 /// `scale(2, 5)` on radii of eight and three. Upstream transforms one direction
 /// vector per pass and takes a length from each -- `TransformDirection((1,0) * 8)`
-/// is sixteen long, `TransformDirection((0,1) * 3)` is fifteen -- so it reaches
-/// sixteen along x and fifteen along y. Here the conversion is `max_scale_of`,
-/// the larger of the two basis lengths, which is five, so both radii are
-/// multiplied by five: forty along x and fifteen along y. The y axis agrees
-/// because five is the factor the larger axis wanted; x is where one number
-/// cannot do the work of two.
+/// is sixteen long, `TransformDirection((0,1) * 3)` is fifteen -- and since the
+/// conversion here became per axis, so does this: `axis_scales_of` takes the
+/// lengths of the transformed basis vectors, which is what upstream's
+/// `ExtractScale` takes.
 ///
-/// **This asserts today's behavior, deliberately.** `docs/non-parity.md` 17 says
-/// the scene comes before the fix or the change is unmeasured, and this is that
-/// scene's pin: the per-axis conversion has to fail this test and say what it is
-/// replacing, the way the radius flip failed the test that stood before it.
+/// This assertion is the inverse of the one that stood here first, in the same
+/// way the scaled pair's is. That one asserted forty and fifteen -- both radii
+/// times the larger factor -- and existed so the per-axis conversion could not
+/// land quietly. It failed with exactly the pair below and named its own
+/// replacement, which is what writing the scene before the fix buys.
 ///
-/// Summed per axis rather than compared per pass, because x arrives in two
-/// passes. `MORPHOLOGY_TAPS` is thirty-two and forty does not fit in one, so the
-/// recording splits it thirty-two and eight -- which is itself a difference the
-/// fix removes, and the reason this scene is one the *cost* baseline can see.
+/// The pass count is part of it. `MORPHOLOGY_TAPS` is thirty-two, so forty needed
+/// two passes along x and sixteen needs one: three morphology passes became two,
+/// and the cost baseline moved without anyone reading a radius.
 #[test]
-fn the_dilation_under_an_anisotropic_scale_uses_one_factor() {
+fn the_dilation_under_an_anisotropic_scale_converts_per_axis() {
     let rows = radii("layer-dilated-under-anisotropic-scale");
     assert!(
         !rows.is_empty(),
@@ -162,21 +160,101 @@ fn the_dilation_under_an_anisotropic_scale_uses_one_factor() {
 
     assert_eq!(
         [x, y],
-        [40.0, 15.0],
-        "a radius of eight and three under scale(2, 5) reaches {x} along x and {y} \
-         along y. Both times five is what a single `max_scale_of` gives. If this \
-         now reads sixteen and fifteen, the per-axis conversion landed -- which is \
-         the intended change: assert that instead, and rewrite docs/non-parity.md \
-         17, whose remaining half this was the whole subject of."
+        [16.0, 15.0],
+        "a radius of eight and three under scale(2, 5) should reach eight times \
+         two along x and three times five along y. This reads {x} and {y}. Forty \
+         and fifteen means the conversion went back to a single factor -- the \
+         larger of the two -- which is what docs/non-parity.md 17 was about."
     );
 
-    // The pass split is part of what the fix removes, so it is stated rather than
-    // left implicit in the sum: a reader who sees this test fail on the count
-    // should know the count was deliberate.
     assert_eq!(
         rows.len(),
-        3,
-        "expected three morphology passes -- x split thirty-two and eight because \
-         forty exceeds MORPHOLOGY_TAPS, then y in one: {rows:?}"
+        2,
+        "expected one morphology pass per axis: sixteen and fifteen both fit in \
+         MORPHOLOGY_TAPS, where the forty a single factor gave did not: {rows:?}"
+    );
+}
+
+/// A dilation turns with its caller, which no picture here could have caught.
+///
+/// The radius is unchanged under a rotation -- `axis_scales_of` takes the lengths
+/// of the transformed basis vectors and a rotation stretches neither -- so nothing
+/// a material carries differs except the direction each pass walks. That is why
+/// this is an assertion on `step` and not a scene: `docs/non-parity.md` 17 says
+/// the corpus cannot see a conversion at all, since every comparison it makes is
+/// between two backends or two devices and the conversion sits above both, so both
+/// sides would be wrong together and agree.
+///
+/// Built from a `Canvas` rather than the corpus for the same reason the corpus
+/// cannot check it. A scene would only be a picture.
+///
+/// Under a quarter turn the caller's x points along device y and the caller's y
+/// along device negative x, so the radii stay eight and three and travel there
+/// instead. Before this, both passes walked the target's own axes and a rotated
+/// square dilated to a square in the wrong orientation.
+#[test]
+fn a_dilation_walks_the_callers_axes_after_a_quarter_turn() {
+    use emblema_core::{Canvas, Color, Extent2D, Layer, Morphology, Paint, Rect};
+
+    let mut canvas = Canvas::new(Extent2D {
+        width: 256,
+        height: 256,
+    });
+    canvas.save();
+    canvas.rotate(std::f32::consts::FRAC_PI_2);
+    let mut layer = Layer::opacity(1.0);
+    layer.morphology = Some(Morphology::dilate(8.0, 3.0));
+    canvas.save_layer(layer);
+    canvas
+        .draw_rect(
+            Rect::new(-60.0, 20.0, -20.0, 60.0),
+            &Paint::fill(Color::WHITE),
+        )
+        .expect("a rect inside the turned space");
+    canvas.restore();
+    canvas.restore();
+
+    let recording = canvas.finish();
+    let passes: Vec<([f32; 2], f32)> = recording
+        .passes
+        .iter()
+        .flat_map(|pass| pass.batch.draws())
+        .filter_map(|draw| match draw.material {
+            Material::Morphology { step, radius, .. } => Some((step, radius)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        passes.len(),
+        2,
+        "one pass per axis, eight and three both inside MORPHOLOGY_TAPS: {passes:?}"
+    );
+
+    // The step is a direction divided componentwise by the extent, so its
+    // *orientation* is what carries the turn. Compared by which component
+    // dominates rather than against a number, because the extent that divides it
+    // is the layer's and not the frame's.
+    let dominant = |step: [f32; 2]| {
+        if step[0].abs() > step[1].abs() {
+            'x'
+        } else {
+            'y'
+        }
+    };
+    assert_eq!(
+        (dominant(passes[0].0), passes[0].1),
+        ('y', 8.0),
+        "the caller's x axis points along device y after a quarter turn, and \
+         carries the x radius: {passes:?}"
+    );
+    assert_eq!(
+        (dominant(passes[1].0), passes[1].1),
+        ('x', 3.0),
+        "and the caller's y axis points along device x: {passes:?}"
+    );
+    assert!(
+        passes[1].0[0] < 0.0,
+        "along device negative x, since a quarter turn takes y to -x: {passes:?}"
     );
 }

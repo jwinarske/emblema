@@ -644,11 +644,22 @@ impl BlurBasis {
     /// The bounding box of the two reaches laid along the two directions,
     /// which for the target's own axes is the pair of reaches unchanged.
     fn reach(&self, sigma: Vec2) -> Vec2 {
+        self.box_of(Vec2::new(blur_reach(sigma.x), blur_reach(sigma.y)))
+    }
+
+    /// The target-axis bounding box of two distances laid along these directions.
+    ///
+    /// Shared with the morphology reach rather than written twice, because the
+    /// two have to agree with the passes to the pixel: a pass walks `u` and `v`
+    /// and whatever room is reserved has to contain where that walk ends. It was
+    /// written twice for a while, and the morphology copy did not turn -- so a
+    /// rotated dilation ran along the caller's axes and was clipped by an outset
+    /// laid along the target's.
+    fn box_of(&self, along: Vec2) -> Vec2 {
         let [u, v] = self.directions;
-        let (ru, rv) = (blur_reach(sigma.x), blur_reach(sigma.y));
         Vec2::new(
-            u.x.abs() * ru + v.x.abs() * rv,
-            u.y.abs() * ru + v.y.abs() * rv,
+            u.x.abs() * along.x + v.x.abs() * along.y,
+            u.y.abs() * along.x + v.y.abs() * along.y,
         )
     }
 }
@@ -974,9 +985,17 @@ impl Layer {
     /// each use -- the transform that decides it is the one in force when the
     /// layer is opened, and it may be gone by the time the layer is composited.
     ///
-    /// The morphology is left alone: it is stated in device pixels and says so,
-    /// and upstream has no morphology to be in parity with.
-    fn scaled_by(self, scale: f32) -> Self {
+    /// **The two filters take different factors, and the difference is a defect
+    /// on the blur's side rather than a design.** A morphology radius is
+    /// converted per axis, as upstream converts it; a blur's deviations are
+    /// converted by the single largest factor, which is what this renderer has
+    /// always done and is wrong the same way morphology's was. `non-parity.md`
+    /// 20 has the measurement -- under `scale(2, 5)` and `scale(5, 2)` a blur
+    /// here comes out *identical*, because one number cannot tell the two
+    /// transforms apart. It is not fixed in the same change because no corpus
+    /// scene pins an anisotropically scaled blur yet, and this tree's rule is
+    /// that the scene comes first or the change is unmeasured.
+    fn scaled_by(self, scale: f32, axes: Vec2) -> Self {
         if !scale.is_finite() || scale <= 0.0 {
             return self;
         }
@@ -988,7 +1007,7 @@ impl Layer {
             // grounds that upstream had no morphology to be in parity with,
             // which was wrong. See `non-parity.md` 17.
             morphology: self.morphology.map(|m| Morphology {
-                radius: [m.radius[0] * scale, m.radius[1] * scale],
+                radius: [m.radius[0] * axes.x, m.radius[1] * axes.y],
                 ..m
             }),
             ..self
@@ -998,7 +1017,10 @@ impl Layer {
     fn reach(&self, basis: BlurBasis) -> Vec2 {
         let blur = basis.reach(self.blur);
         match self.morphology {
-            Some(m) if m.dilate => blur + Vec2::new(m.radius[0], m.radius[1]),
+            // Turned with the same basis the passes walk. An axis-aligned outset
+            // would be the right box only while the directions are the axes, and
+            // a rotated dilation would lose its corners to the scissor.
+            Some(m) if m.dilate => blur + basis.box_of(Vec2::new(m.radius[0], m.radius[1])),
             _ => blur,
         }
     }
@@ -1550,7 +1572,7 @@ impl Canvas {
         // here. Both are the same conversion at the same moment -- the layer is
         // opened under the transform the caller drew in, which is the one its
         // sigma is stated against.
-        let layer = layer.scaled_by(max_scale_of(self.transform));
+        let layer = layer.scaled_by(max_scale_of(self.transform), axis_scales_of(self.transform));
         let widened = self.matrix_preimage(&layer);
         let pending = self.open_layer(layer, None, None, None).unwrap_or(None);
         if let Some(target) = widened {
@@ -2150,14 +2172,17 @@ impl Canvas {
         // that decides it is still the one the caller drew under.
         let basis = BlurBasis::of(self.transform);
         let scale = max_scale_of(self.transform);
-        let layer = layer.scaled_by(scale);
+        let axes = axis_scales_of(self.transform);
+        let layer = layer.scaled_by(scale, axes);
         // And the filters beside it, which this line did not touch for as long as
         // it has existed. The comment above said the conversion happens once here
         // and it happened to the layer only, so `save_layer_filtered` with a blur
         // took a device sigma while the same filter through
         // `Paint::with_image_filter` -- which becomes a layer -- took a local one.
-        let filter = filter.map(|filter| filter.scaled_by(scale));
-        let backdrop = backdrop.cloned().map(|filter| filter.scaled_by(scale));
+        let filter = filter.map(|filter| filter.scaled_by(scale, axes));
+        let backdrop = backdrop
+            .cloned()
+            .map(|filter| filter.scaled_by(scale, axes));
         let backdrop = backdrop.as_ref();
         let reach = layer.reach(basis);
         // A layer opened under a clip cannot draw outside it, and neither can
@@ -5376,7 +5401,7 @@ impl Canvas {
         // when a layer asks for both: the blur softens the content and the
         // morphology then works on what the blur produced.
         if let Some(morphology) = frame.paint.morphology {
-            index = self.morphology_passes(index, layer, morphology);
+            index = self.morphology_passes(index, layer, morphology, frame.blur_basis);
         }
         // Last, so a filter given to the layer as a whole sees whatever the
         // layer's own fields produced rather than the other way round. That is
@@ -5507,12 +5532,18 @@ impl Canvas {
             ImageFilter::Blur { sigma_x, sigma_y } => {
                 self.blur_passes(source, target, Vec2::new(*sigma_x, *sigma_y), basis)
             }
-            ImageFilter::Dilate { radius_x, radius_y } => {
-                self.morphology_passes(source, target, Morphology::dilate(*radius_x, *radius_y))
-            }
-            ImageFilter::Erode { radius_x, radius_y } => {
-                self.morphology_passes(source, target, Morphology::erode(*radius_x, *radius_y))
-            }
+            ImageFilter::Dilate { radius_x, radius_y } => self.morphology_passes(
+                source,
+                target,
+                Morphology::dilate(*radius_x, *radius_y),
+                basis,
+            ),
+            ImageFilter::Erode { radius_x, radius_y } => self.morphology_passes(
+                source,
+                target,
+                Morphology::erode(*radius_x, *radius_y),
+                basis,
+            ),
             ImageFilter::Runtime { program, uniforms } => {
                 self.runtime_pass(source, target, *program, uniforms)
             }
@@ -5670,6 +5701,7 @@ impl Canvas {
         source: usize,
         target: Target,
         morphology: Morphology,
+        basis: BlurBasis,
     ) -> usize {
         // A filter pass covers the whole target, so its mapping is the fixed
         // one from clip space to the unit square and carries no transform of
@@ -5686,9 +5718,24 @@ impl Canvas {
         // `Morphology::applied_radius` has the arithmetic and the case that
         // found it.
         let radius = morphology.applied_radius(target.extent);
+        // Along the caller's axes once the transform has turned them, not the
+        // target's -- the same arrangement and the same arithmetic as
+        // `blur_passes`, for the same reason `non-parity.md` 14 gives: a layer's
+        // content cannot be re-rendered into a space of its own choosing after
+        // the fact, so the passes turn instead of the space. A unit device
+        // direction moves `d.x` texels across and `d.y` down, so in normalized
+        // coordinates it is `d` divided componentwise by the extent, which
+        // reduces to the pair of axis steps this used to state whenever the
+        // directions are the axes.
+        //
+        // A dilation is a maximum over a set of sample positions, and turning
+        // the set is what makes a rotated square dilate to a square rather than
+        // to one standing on the screen's axes.
+        let (w, h) = (target.extent.width as f32, target.extent.height as f32);
+        let [u, v] = basis.directions;
         let axes = [
-            ([1.0 / target.extent.width as f32, 0.0], radius[0]),
-            ([0.0, 1.0 / target.extent.height as f32], radius[1]),
+            ([u.x / w, u.y / h], radius[0]),
+            ([v.x / w, v.y / h], radius[1]),
         ];
 
         let mut sampled = source;
@@ -5973,6 +6020,36 @@ fn max_scale_of(transform: Transform2D) -> f32 {
         Some(affine) => max_scale(&affine),
         None => 1.0,
     }
+}
+
+/// How far each of the caller's own axes is stretched, separately.
+///
+/// `max_scale_of` answers the same question with one number, which is the right
+/// answer for a length that has no axis -- a stroke's width, a tessellation
+/// tolerance -- and the wrong one for a pair of lengths that do. Under
+/// `scale(2, 5)` it reports five for both, so a radius stated per axis comes out
+/// five times too long on one of them.
+///
+/// The lengths of the transformed basis vectors, which is what upstream's
+/// `ExtractScale` takes. A rotation therefore contributes nothing to either,
+/// which is correct: it turns the axes rather than stretching them, and
+/// `BlurBasis` is what carries the turn.
+///
+/// Falls back to the single factor where there is no basis to read -- a
+/// transform with perspective has no constant one -- so the axis-free answer is
+/// what a filter gets exactly where a per-axis answer would be invented.
+fn axis_scales_of(transform: Transform2D) -> Vec2 {
+    let Some(affine) = transform.to_affine() else {
+        return Vec2::splat(max_scale_of(transform));
+    };
+    let lengths = Vec2::new(
+        affine.matrix2.x_axis.length(),
+        affine.matrix2.y_axis.length(),
+    );
+    if !lengths.x.is_finite() || !lengths.y.is_finite() || lengths.min_element() <= 0.0 {
+        return Vec2::splat(max_scale_of(transform));
+    }
+    lengths
 }
 
 /// The constant that makes four cubics approximate a circle.
