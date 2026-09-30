@@ -76,7 +76,7 @@ fn rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
 
 /// Every scene name a citation could refer to.
 fn scene_names() -> BTreeSet<String> {
-    impeller_testkit::corpus()
+    emblema_testkit::corpus()
         .into_iter()
         .map(|scene| scene.name.to_owned())
         .collect()
@@ -286,7 +286,7 @@ fn the_architecture_states_the_material_size_the_code_enforces() {
     // question, the reason a conical gradient had to find a spare float. A
     // reader checking that argument against the wrong figure would conclude
     // there was room to spare.
-    let bytes = impeller_hal::MATERIAL_FLOATS * 4;
+    let bytes = emblema_hal::MATERIAL_FLOATS * 4;
     let stated = format!("packed into {bytes} bytes");
     let flattened = doc("architecture.md")
         .split_whitespace()
@@ -306,7 +306,7 @@ fn the_playground_inventory_counts_the_catalog_correctly() {
     // repository does not contain, and it says so. This one describes the
     // collection right here, which makes it the one number a reader would be
     // entitled to trust -- so it is the one that is checked.
-    let total = impeller_testkit::catalog().len();
+    let total = emblema_testkit::catalog().len();
     let flattened = doc("playground-parity.md")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -331,7 +331,7 @@ fn the_playground_inventory_counts_each_file_correctly() {
     // describes this repository is checked here, so the table cannot be
     // partially true.
     let by_topic = |topic: &str| {
-        impeller_testkit::catalog()
+        emblema_testkit::catalog()
             .iter()
             .filter(|scene| {
                 scene
@@ -382,7 +382,7 @@ fn the_playground_inventory_counts_each_file_correctly() {
         );
         counted += actual;
     }
-    let total = impeller_testkit::catalog().len();
+    let total = emblema_testkit::catalog().len();
     assert_eq!(
         counted, total,
         "the catalog holds {total} scenes but only {counted} fall under a topic \
@@ -502,7 +502,12 @@ fn the_tree_is_written_in_american_english() {
     // same reading turned up "licence", which is the noun in British English
     // and "license" in American for both parts of speech, and four test names
     // spelled in the wrong one.
-    const BRITISH: [&str; 24] = [
+    //
+    // "travell" and "signall" are stems on the same grounds as the rest: the
+    // doubled consonant is the difference, so neither is a substring of the
+    // American spelling. "judgement" and "analogue" are whole words, since
+    // "judgment" and "analog" do not contain them.
+    const BRITISH: [&str; 28] = [
         "colour",
         "neighbour",
         "centre",
@@ -527,11 +532,31 @@ fn the_tree_is_written_in_american_english() {
         "modelled",
         "labelled",
         "cancelled",
+        "travell",
+        "signall",
+        "judgement",
+        "analogue",
     ];
     // Everything tracked that a reader or a caller sees. The two untracked
     // files are excluded by not being here.
-    let roots = ["crates", "xtask", "docs", "playground", "tests"];
+    let roots = ["crates", "xtask", "docs", "playground", "tests", ".github"];
+    // The walk starts below the repository root, so nothing at the root was
+    // read. Named rather than reached by walking the root, which would descend
+    // into `.git`.
+    let root_files = ["README.md", "CHANGELOG.md", "Cargo.toml", "clippy.toml"];
     let mut found = Vec::new();
+    for name in root_files {
+        let path = repo_root().join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let lower = text.to_lowercase();
+        for word in BRITISH {
+            if lower.contains(word) {
+                found.push(format!("{}: {word}", path.display()));
+            }
+        }
+    }
     for root in roots {
         let mut stack = vec![repo_root().join(root)];
         while let Some(dir) = stack.pop() {
@@ -601,7 +626,7 @@ fn the_scanout_trait_names_nothing_from_the_library_behind_it() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root")
-        .join("crates/impeller-present-drm/src");
+        .join("crates/emblema-present-drm/src");
 
     // Where the binding may be named: the implementation of the trait, and the
     // device handling underneath it. Everything else is the seam.
@@ -662,7 +687,7 @@ fn the_scanout_trait_names_nothing_from_the_library_behind_it() {
 /// without was the swapchain the facade had no route to.
 ///
 /// So the rule is that it names the facade and nothing else from here, with one
-/// exception. `impeller-testkit` is the scene corpus this tool exists to look
+/// exception. `emblema-testkit` is the scene corpus this tool exists to look
 /// at, not part of the renderer's surface, and a consumer who is not a test
 /// harness would never want it.
 #[test]
@@ -674,7 +699,7 @@ fn the_playground_reaches_everything_through_the_facade() {
     let source = std::fs::read_to_string(&manifest)
         .unwrap_or_else(|e| panic!("reading {}: {e}", manifest.display()));
 
-    let allowed = ["impeller", "impeller-testkit"];
+    let allowed = ["emblema", "emblema-testkit"];
     let mut named = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim_start();
@@ -685,7 +710,7 @@ fn the_playground_reaches_everything_through_the_facade() {
             continue;
         };
         let name = name.trim();
-        if name.starts_with("impeller") {
+        if name.starts_with("emblema") {
             named.push(name.to_string());
         }
     }
@@ -697,7 +722,7 @@ fn the_playground_reaches_everything_through_the_facade() {
         assert!(
             allowed.contains(&name.as_str()),
             "the playground depends on {name}, reaching past the facade.\n\
-             Whatever it needed from there is missing from `impeller`, and \
+             Whatever it needed from there is missing from `emblema`, and \
              adding the dependency hides that instead of fixing it."
         );
     }
@@ -970,7 +995,7 @@ fn the_readme_snippet_is_the_crate_doctest() {
     }
 
     let readme = fenced(&doc("../README.md"), "```rust");
-    let lib = std::fs::read_to_string(repo_root().join("crates/impeller/src/lib.rs"))
+    let lib = std::fs::read_to_string(repo_root().join("crates/emblema/src/lib.rs"))
         .expect("reading the facade crate");
     // Stripped back to what rustdoc compiles: the `//!` that makes it a doc
     // comment, and the `#` lines it hides from a reader. Those hidden lines are
@@ -994,7 +1019,7 @@ fn the_readme_snippet_is_the_crate_doctest() {
     assert_eq!(
         readme,
         doctest.join("\n"),
-        "README.md's Rust block and the doctest in crates/impeller/src/lib.rs \
+        "README.md's Rust block and the doctest in crates/emblema/src/lib.rs \
          have drifted apart. They are one snippet in two places and only the \
          doctest is compiled, so the README is the copy that can be wrong. \
          Change both, or neither."
@@ -1503,7 +1528,7 @@ fn every_path_the_documents_name_is_there() {
 
 /// The documents count the DRM crate's tests correctly.
 ///
-/// Two documents state how many tests `impeller-present-drm` has, split three
+/// Two documents state how many tests `emblema-present-drm` has, split three
 /// ways, because the split is the claim: the ones taking DRM master are the ones
 /// that need a card, and a reader deciding whether a board run was complete
 /// counts them. Nothing checked those numbers, so they went stale in the
@@ -1522,7 +1547,7 @@ fn the_documents_count_the_drm_tests_correctly() {
             .count()
     }
 
-    let crate_root = repo_root().join("crates/impeller-present-drm");
+    let crate_root = repo_root().join("crates/emblema-present-drm");
     let master = tests_in(&crate_root.join("tests/kms.rs"));
     let scanout = tests_in(&crate_root.join("tests/scanout.rs"));
     let unit = {
@@ -1569,7 +1594,7 @@ fn the_documents_count_the_drm_tests_correctly() {
         (
             "docs/architecture.md",
             &architecture,
-            format!("{} tests in `impeller-present-drm`", spell(master)),
+            format!("{} tests in `emblema-present-drm`", spell(master)),
         ),
         (
             "docs/architecture.md",
@@ -1584,7 +1609,7 @@ fn the_documents_count_the_drm_tests_correctly() {
             "docs/on-a-board.md",
             &board,
             format!(
-                "{} tests in `impeller-present-drm` pass on the pi 5",
+                "{} tests in `emblema-present-drm` pass on the pi 5",
                 spell(total)
             ),
         ),

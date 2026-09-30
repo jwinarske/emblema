@@ -1,0 +1,43 @@
+[package]
+name = "emblema-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+# Exists to test this workspace, and its API is shaped by that: the catalog, the
+# corpus, the scene model and the comparison tolerances are all answers to "how do
+# these crates check themselves". Publishing it would commit that shape to
+# semantic versioning for the benefit of callers who have not asked for it.
+#
+# That is not theoretical. On 2026-09-22 `Scene::tolerance` gained a term and grew a
+# helper, and a catalog assertion's bound changed, all three because a Raspberry Pi 5
+# measured something a software rasterizer cannot. An API still moving in answer to
+# hardware is one to keep out of semantic versioning.
+#
+# Flip this to `true` if that changes. It is one line here and one consequence
+# elsewhere: `the_documents_count_the_publishing_crates_correctly` holds the counts
+# in README.md and CHANGELOG.md to these manifests.
+publish = false
+license.workspace = true
+repository.workspace = true
+description = "Shared test harness for emblema: scene corpus and cross-backend comparison."
+keywords = ["testing", "graphics", "harness", "golden"]
+categories = ["development-tools::testing", "graphics"]
+
+[lints]
+workspace = true
+
+[dependencies]
+half.workspace = true
+glam = { workspace = true }
+emblema-core = { workspace = true }
+emblema-geometry = { workspace = true }
+emblema-text = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-shaders = { workspace = true }
+emblema-renderer = { workspace = true }
+
+[dev-dependencies]
+googletest = { workspace = true }
+emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
+emblema-hal-gles = { path = "../emblema-hal-gles" }

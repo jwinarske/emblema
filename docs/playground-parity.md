@@ -1806,6 +1806,6 @@ is not something any of them ever made.
 Named for the test each mirrors, in the form `topic/CppTestName` reduced to
 kebab case, so the original can be found by its name and a scene here with no
 counterpart there would be visible as one. `catalog()` in
-`crates/impeller-testkit/src/catalog.rs` is the list; the playground shows it
-after the corpus, and `cargo test -p impeller-testkit --test catalog` renders
+`crates/emblema-testkit/src/catalog.rs` is the list; the playground shows it
+after the corpus, and `cargo test -p emblema-testkit --test catalog` renders
 every one of them on both backends and compares.

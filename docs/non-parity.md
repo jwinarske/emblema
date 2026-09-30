@@ -754,9 +754,9 @@ antialiasing -- and absorbs a symmetrically mask-blurred rounded rectangle into 
 closed form in `rrect_blur.frag`, which is the same approximation this renderer
 cites where it does the same thing. Its wider signed-distance family
 (`uber_sdf.frag`, covering rect, oval, rounded rect and symmetric round
-superellipse, filled and stroked) is **off by default**: `impeller::Flags`
+superellipse, filled and stroked) is **off by default**: `emblema::Flags`
 declares `bool use_sdfs = false`, every one of the six call sites in
-`display_list/canvas.cc` is gated on it, and only `--impeller-use-sdfs` turns it
+`display_list/canvas.cc` is gated on it, and only `--emblema-use-sdfs` turns it
 on. So an unblurred rounded rectangle is a CPU polygon upstream today, where here
 it is a field -- under a gate of nearly the same shape, both requiring
 antialiasing, a solid color and no perspective.

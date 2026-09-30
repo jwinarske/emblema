@@ -1,0 +1,57 @@
+[package]
+name = "emblema-capi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+# Produces a shared library for C consumers, who obtain it from a build rather than
+# from cargo -- so the thing this crate is *for* is not what crates.io distributes.
+#
+# Asked again after 0.1.0 shipped, on the argument that publishing the source would
+# at least put the C API on docs.rs and let a consumer build the library from a
+# version rather than a git ref. Neither holds, and the reasons are two settings a
+# few lines below this one. `doc = false`, so docs.rs would render an empty page:
+# this crate's contract is a C header rather than a Rust API. And the crate-type
+# has no `rlib`, so a Rust caller adding this as a dependency gets nothing it can
+# name -- the artifact is the shared library, which a cargo dependency does not
+# hand anyone.
+#
+# What publishing would genuinely add is a citable version and vendorable source.
+# That is real and is not worth an empty documentation page and a second published
+# crate whose lib name collides with the facade's, so it stays false deliberately
+# rather than pending a decision.
+#
+# Flipping it is still one line here, but no longer only that:
+# `the_documents_count_the_publishing_crates_correctly` holds the counts in
+# README.md and CHANGELOG.md to these manifests, so those sentences have to follow.
+publish = false
+license.workspace = true
+repository.workspace = true
+description = "Impeller C API (libimpeller) for emblema, ABI-compatible with the Flutter Engine's."
+keywords = ["ffi", "capi", "impeller", "flutter", "bindings"]
+categories = ["external-ffi-bindings", "graphics"]
+
+[lib]
+# Produces libimpeller.so / .dylib / impeller.dll, the artifact a C API
+# consumer links against in place of the upstream build. The name is the whole
+# point: a drop-in has to be findable under the name the linker expects.
+#
+# `impeller`, and not renamed with the rest of the workspace: this is the name of
+# the artifact upstream's header expects to link against, so it is an ABI fact
+# rather than a project one. `libimpeller.so` is what a consumer of
+# `impeller.h` looks for, whatever the project around it is called.
+#
+# Deliberately no rlib. Nothing depends on this crate from Rust — it exists to
+# emit the C artifact.
+name = "impeller"
+crate-type = ["cdylib", "staticlib"]
+# Not documented by `cargo doc` either. This crate's contract is upstream's
+# `impeller.h` rather than anything a Rust reader would browse, and its module
+# documentation stays where its readers are, in the source.
+doc = false
+
+[lints]
+workspace = true
+
+[dependencies]
+emblema-core = { workspace = true }

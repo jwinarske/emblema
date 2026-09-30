@@ -1,0 +1,20 @@
+[package]
+name = "emblema-entity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Entity and contents layer for emblema: coverage computation for culling and offscreen sizing."
+keywords = ["graphics", "renderer", "coverage", "culling"]
+categories = ["graphics"]
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+emblema-geometry = { workspace = true }
+emblema-hal = { workspace = true }

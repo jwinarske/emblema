@@ -1,0 +1,29 @@
+[package]
+name = "emblema-present"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Presentation target trait and format negotiation for emblema."
+keywords = ["presentation", "swapchain", "graphics", "display"]
+categories = ["graphics", "rendering"]
+
+[lints]
+workspace = true
+
+[dependencies]
+emblema-hal = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+# Only the frame-loop test, which presents a recording. The library itself
+# stays below the canvas: a presentation target hands out a texture and knows
+# nothing about what is drawn into it.
+emblema-core = { path = "../emblema-core" }
+emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
+emblema-testkit = { path = "../emblema-testkit" }
+emblema-renderer = { path = "../emblema-renderer" }
+proptest = { workspace = true }

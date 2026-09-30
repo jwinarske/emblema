@@ -18,16 +18,16 @@ rust-version = "1.85"
 # Publishing is on by default and refused per crate, rather than the other way
 # round, so that adding a crate to this workspace makes a decision visible instead
 # of silently opting it out. Three say no today and each says why: `xtask`, which is
-# this repository's own tooling; `impeller-testkit`, which exists to test this
+# this repository's own tooling; `emblema-testkit`, which exists to test this
 # workspace and whose API is shaped by that rather than by a caller; and
-# `impeller-capi`, whose artifact is a shared library for C consumers who do not use
+# `emblema-capi`, whose artifact is a shared library for C consumers who do not use
 # cargo to get it.
 publish = true
 # Matches the Flutter Engine, where the C++ Impeller this project takes its
 # architecture from lives. Any code ported from there keeps its own copyright
 # notice alongside ours.
 license = "BSD-3-Clause"
-repository = "https://github.com/jwinarske/impeller-rs"
+repository = "https://github.com/jwinarske/emblema"
 # No `homepage`. There is nowhere for it to point that a crate page does not
 # already link: it held this same URL, which cargo's `redundant_homepage` lint
 # warns about, and docs.rs is linked from the absent `documentation` by default.
@@ -102,20 +102,20 @@ cosmic-text = "0.12"
 usvg = "0.43"
 
 # --- internal ---
-impeller-core = { path = "crates/impeller-core", version = "0.1.0" }
-impeller-entity = { path = "crates/impeller-entity", version = "0.1.0" }
-impeller-geometry = { path = "crates/impeller-geometry", version = "0.1.0" }
-impeller-hal = { path = "crates/impeller-hal", version = "0.1.0" }
-impeller-hal-gles = { path = "crates/impeller-hal-gles", version = "0.1.0" }
-impeller-hal-vulkan = { path = "crates/impeller-hal-vulkan", version = "0.1.0" }
-impeller-present = { path = "crates/impeller-present", version = "0.1.0" }
-impeller-present-drm = { path = "crates/impeller-present-drm", version = "0.1.0" }
-impeller-present-egl = { path = "crates/impeller-present-egl", version = "0.1.0" }
-impeller-present-vk = { path = "crates/impeller-present-vk", version = "0.1.0" }
-impeller-renderer = { path = "crates/impeller-renderer", version = "0.1.0" }
-impeller-shaders = { path = "crates/impeller-shaders", version = "0.1.0" }
-impeller-testkit = { path = "crates/impeller-testkit", version = "0.1.0" }
-impeller-text = { path = "crates/impeller-text", version = "0.1.0" }
+emblema-core = { path = "crates/emblema-core", version = "0.1.0" }
+emblema-entity = { path = "crates/emblema-entity", version = "0.1.0" }
+emblema-geometry = { path = "crates/emblema-geometry", version = "0.1.0" }
+emblema-hal = { path = "crates/emblema-hal", version = "0.1.0" }
+emblema-hal-gles = { path = "crates/emblema-hal-gles", version = "0.1.0" }
+emblema-hal-vulkan = { path = "crates/emblema-hal-vulkan", version = "0.1.0" }
+emblema-present = { path = "crates/emblema-present", version = "0.1.0" }
+emblema-present-drm = { path = "crates/emblema-present-drm", version = "0.1.0" }
+emblema-present-egl = { path = "crates/emblema-present-egl", version = "0.1.0" }
+emblema-present-vk = { path = "crates/emblema-present-vk", version = "0.1.0" }
+emblema-renderer = { path = "crates/emblema-renderer", version = "0.1.0" }
+emblema-shaders = { path = "crates/emblema-shaders", version = "0.1.0" }
+emblema-testkit = { path = "crates/emblema-testkit", version = "0.1.0" }
+emblema-text = { path = "crates/emblema-text", version = "0.1.0" }
 
 [profile.release]
 lto = "thin"
@@ -138,7 +138,7 @@ codegen-units = 1
 # which is the property that matters and is checked on the same code release
 # runs.
 #
-# See `crates/impeller-geometry/tests/hostile.rs` for the case that found it,
+# See `crates/emblema-geometry/tests/hostile.rs` for the case that found it,
 # pinned there as a test of its own, and nical/lyon#963 for the report -- which
 # carries a seven-point reproduction rather than that one, shrunk from it by
 # deleting points while the panic held.

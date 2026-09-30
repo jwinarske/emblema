@@ -4,7 +4,7 @@
 # `expect` around every setup step would bury what each test is about.
 #
 # These four settings scope the denial to what ships. A build script is the
-# same case and cannot be covered here, so `impeller-shaders/build.rs` carries
+# same case and cannot be covered here, so `emblema-shaders/build.rs` carries
 # its own allow with the same reasoning written out beside it.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

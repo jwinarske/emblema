@@ -25,12 +25,12 @@
 
 mod live;
 
-use impeller::present::PresentTarget;
-use impeller::vulkan::{DevicePreference, VulkanContext, VulkanHal, VulkanTexture};
-use impeller::wsi::{PresentMode, SwapchainTarget};
-use impeller::{Canvas, Color, Paint, Rect, TileMode};
-use impeller::{Extent2D, PixelFormat, TextureDescriptor};
-use impeller_testkit::{corpus, record_scene, Scene};
+use emblema::present::PresentTarget;
+use emblema::vulkan::{DevicePreference, VulkanContext, VulkanHal, VulkanTexture};
+use emblema::wsi::{PresentMode, SwapchainTarget};
+use emblema::{Canvas, Color, Paint, Rect, TileMode};
+use emblema::{Extent2D, PixelFormat, TextureDescriptor};
+use emblema_testkit::{corpus, record_scene, Scene};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -93,7 +93,7 @@ impl App {
         // one mirroring Impeller's own playground. Both are data, so both
         // reach the window without a line of code per scene.
         let mut scenes = corpus();
-        scenes.extend(impeller_testkit::catalog());
+        scenes.extend(emblema_testkit::catalog());
         let live = live::scenes();
         assert!(!scenes.is_empty(), "the corpus is empty");
         let knobs = live.iter().map(|s| s.start).collect();
@@ -250,7 +250,7 @@ impl Stage {
             Ok(texture) => texture,
             Err(e) => return eprintln!("cannot allocate a target for {}: {e}", scene.name),
         };
-        match impeller::execute::<VulkanHal>(&mut self.ctx, &mut texture, &recording, &[]) {
+        match emblema::execute::<VulkanHal>(&mut self.ctx, &mut texture, &recording, &[]) {
             Ok(()) => self.scene_texture = Some((texture, extent)),
             Err(e) => {
                 eprintln!("cannot render {}: {e}", scene.name);
@@ -260,7 +260,7 @@ impl Stage {
     }
 
     /// Compose a corpus scene's texture into the window, centered and scaled.
-    fn corpus_frame(&mut self, scene: &Scene) -> Option<impeller::Recording> {
+    fn corpus_frame(&mut self, scene: &Scene) -> Option<emblema::Recording> {
         self.ensure_scene_texture(scene);
         let (_, scene_extent) = self.scene_texture.as_ref()?;
         let window = self.target.extent();
@@ -324,7 +324,7 @@ impl Stage {
         self.scene_texture = Some((texture, extent));
     }
 
-    fn submit(&mut self, recording: &impeller::Recording, images: &[&VulkanTexture]) {
+    fn submit(&mut self, recording: &emblema::Recording, images: &[&VulkanTexture]) {
         if let Err(e) = self.target.acquire(&mut self.ctx) {
             return eprintln!("acquire: {e}");
         }
@@ -372,7 +372,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title("impeller playground")
+            .with_title("emblema playground")
             .with_inner_size(winit::dpi::LogicalSize::new(INITIAL, INITIAL));
         let window = event_loop.create_window(attributes).expect("window");
 
@@ -474,7 +474,7 @@ impl ApplicationHandler for App {
             } = stage;
             target.destroy(&mut ctx);
             // SAFETY: the swapchain built on it has just been destroyed.
-            unsafe { impeller::wsi::destroy_surface(&ctx, surface) };
+            unsafe { emblema::wsi::destroy_surface(&ctx, surface) };
         }
     }
 }

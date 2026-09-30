@@ -9,9 +9,9 @@
 //! only: that drawing does not panic, and that the result is not the background
 //! it started from.
 
-use impeller::vulkan::{DevicePreference, Validated, VulkanHal};
-use impeller::{Canvas, Extent2D};
-use impeller::{PixelFormat, TextureDescriptor};
+use emblema::vulkan::{DevicePreference, Validated, VulkanHal};
+use emblema::{Canvas, Extent2D};
+use emblema::{PixelFormat, TextureDescriptor};
 
 #[path = "../src/live.rs"]
 // The scene table carries more than this binary reads -- `start` is the
@@ -54,7 +54,7 @@ fn every_live_scene_draws_across_its_whole_range() {
             (scene.draw)(&mut canvas, SIZE, knob, time);
             let recording = canvas.finish();
 
-            let pixels = impeller::render_offscreen::<VulkanHal>(&mut ctx, &recording, &[&sheet])
+            let pixels = emblema::render_offscreen::<VulkanHal>(&mut ctx, &recording, &[&sheet])
                 .unwrap_or_else(|e| panic!("{} at {knob}: {e}", scene.name));
 
             // Something other than the ground it cleared to. A scene that drew
@@ -110,7 +110,7 @@ fn a_live_scene_reacts_to_its_knob() {
         let render = |ctx: &mut Validated, knob: f32| {
             let mut canvas = Canvas::new(SIZE);
             (scene.draw)(&mut canvas, SIZE, knob, 0.0);
-            impeller::render_offscreen::<VulkanHal>(ctx, &canvas.finish(), &[&sheet])
+            emblema::render_offscreen::<VulkanHal>(ctx, &canvas.finish(), &[&sheet])
                 .expect("render")
         };
         let a = render(&mut ctx, low);

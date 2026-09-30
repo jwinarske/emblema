@@ -1,6 +1,6 @@
 # Architecture
 
-impeller-rs is a tessellation-based 2D vector graphics renderer. It targets the
+emblema is a tessellation-based 2D vector graphics renderer. It targets the
 full range of Linux-capable graphics hardware, from desktop discrete GPUs down
 to embedded SoCs driving panels directly through KMS with no compositor
 present.
@@ -90,23 +90,23 @@ the mechanism that keeps this file true; the state markers are.
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│  Public API (impeller-core)                                   │
+│  Public API (emblema-core)                                   │
 │  Canvas, Paint, Path, Layer, Recording                        │
 ├───────────────────────────────────────────────────────────────┤
-│  Entity layer (impeller-entity)   coverage only; not routed   │
+│  Entity layer (emblema-entity)   coverage only; not routed   │
 ├───────────────────────────────────────────────────────────────┤
-│  Renderer (impeller-renderer)  — generic over Hal             │
+│  Renderer (emblema-renderer)  — generic over Hal             │
 │  Tessellation into clip space, batch assembly                 │
 │  (planned: pass sorting, pipeline cache, frame allocators)    │
 ├───────────────────────────────────────────────────────────────┤
-│  Rendering HAL trait (impeller-hal)                           │
+│  Rendering HAL trait (emblema-hal)                           │
 │      ┌────────────────┴────────────────┐                      │
 │      ▼                                 ▼                      │
-│  impeller-hal-vulkan            impeller-hal-gles             │
+│  emblema-hal-vulkan            emblema-hal-gles             │
 │  (ash + gpu-allocator)          (glow + EGL)                  │
 │  FIRST-CLASS                                                  │
 ├───────────────────────────────────────────────────────────────┤
-│  Presentation trait (impeller-present)                        │
+│  Presentation trait (emblema-present)                        │
 │   ┌──────────────┬──────────────┬───────────────────────┐     │
 │   ▼              ▼              ▼                       ▼     │
 │ vk-swapchain   egl-window    drm-scanout (Vulkan)  drm-scanout│
@@ -865,7 +865,7 @@ handed alongside it, so `save_layer_filtered` with a blur took a device sigma
 while the same filter through `Paint::with_image_filter` -- which becomes a layer
 on the way -- took a local one. One value in one type meaning two things
 depending on which call received it, rather than two conventions.
-`impeller-rs`'s `filter_space.rs` holds all five spellings against each other. Everything past
+`emblema`'s `filter_space.rs` holds all five spellings against each other. Everything past
 that line works in device pixels: the reach is applied to bounds already
 transformed, and the passes that do the blurring run on a target. The transform
 that decides the conversion is the one in force when the layer is opened, and
@@ -1084,8 +1084,8 @@ numbers are the same on lavapipe, on V3D, and on a machine with no GPU, which
 means they can be recorded once and checked everywhere at no variance.
 
 That is the half that catches an *algorithmic* regression, and most regressions
-worth catching are algorithmic. `crates/impeller-testkit/tests/cost-baseline.txt` holds one row per
-corpus scene and `crates/impeller-testkit/tests/cost.rs` checks it. Loosening the flattening tolerance
+worth catching are algorithmic. `crates/emblema-testkit/tests/cost-baseline.txt` holds one row per
+corpus scene and `crates/emblema-testkit/tests/cost.rs` checks it. Loosening the flattening tolerance
 from a quarter pixel to a half moves thirty of its rows; taking the analytic
 route away from rounded rectangles moves three, and says which — a scene's
 vertex count going from four to thirty-two is a quad becoming a tessellation,
@@ -1175,7 +1175,7 @@ project gives every other such number. Its floor is eight orders above lyon's
 assertion and four below the tightest value the renderer produces, which is the
 device tolerance divided by the transform's scale.
 
-None of the three was found by reading. `crates/impeller-geometry/tests/hostile.rs`
+None of the three was found by reading. `crates/emblema-geometry/tests/hostile.rs`
 generates paths out of NaN, both infinities, subnormals and the largest finite
 float, in structures no caller writes on purpose, and asserts the two things
 that must hold whatever goes in: it returns, and the indices it returns address
@@ -1515,7 +1515,7 @@ the pass that touches the image being displayed and that is exactly the root.
 Both presentation paths take a recording: the swapchain composites into the
 image it acquired, and the scanout ring into the buffer the display will read.
 The layer targets stay with the frame slot in each, released when it comes free
-— after the fence has signalled, or after the kernel has flipped a commit it
+— after the fence has signaled, or after the kernel has flipped a commit it
 gated on that fence, so in both cases the submission that sampled them has
 finished.
 
@@ -1780,8 +1780,8 @@ Because those semaphores cannot travel through the backend-agnostic submission �
 which waits for completion, putting a stall exactly where they exist to remove
 one — a swapchain frame is drawn through the target's own `submit`, as a scanout
 frame already is. Presenting a frame drawn any other way is refused rather than
-half-synchronized: acquisition's semaphore would be signalled and never waited
-on, and presentation would wait on one nothing signalled, which hangs rather
+half-synchronized: acquisition's semaphore would be signaled and never waited
+on, and presentation would wait on one nothing signaled, which hangs rather
 than looking wrong.
 
 **Transient resources belong to the submission that reads them, not to the
@@ -1903,7 +1903,7 @@ backend identity.**
 
 ## Backends
 
-### Vulkan (`impeller-hal-vulkan`)
+### Vulkan (`emblema-hal-vulkan`)
 
 Direct `ash`, no abstraction layer above the HAL. Vulkan 1.1 floor, with 1.3
 dynamic rendering, timeline semaphores, and sync2 used when present. Features
@@ -1939,7 +1939,7 @@ common on ARM, where the GPU is a render-only node and the display controller
 is a separate KMS device — scanout buffers are allocated with modifiers both
 devices accept. This negotiation is a first-class code path, not an edge case.
 
-### GLES (`impeller-hal-gles`)
+### GLES (`emblema-hal-gles`)
 
 GLES 3.0 floor via `glow`, with contexts from EGL in all configurations.
 
@@ -2147,7 +2147,7 @@ chosen modifier is always logged. A silent linear fallback halves memory
 bandwidth on an embedded panel, so it is a bug rather than a graceful
 degradation.
 
-### DRM/KMS direct scanout (`impeller-present-drm`)
+### DRM/KMS direct scanout (`emblema-present-drm`)
 
 Built on [drm-rs](https://github.com/Smithay/drm-rs), which is Smithay's own
 Rust binding to the kernel interface and not a port of anything. This section
@@ -2170,8 +2170,8 @@ logic.**
 | Hotplug detection | nobody here: it needs udev, drm-rs does not provide it, and this crate does not do it |
 | dma-buf to framebuffer import | drm-rs |
 | HDR metadata, VRR, plane rotation properties | drm-rs, through generic property access rather than a typed surface |
-| Buffer allocation, image import and export | impeller-present-drm |
-| Frame pacing against flip completion, fence plumbing | impeller-present-drm |
+| Buffer allocation, image import and export | emblema-present-drm |
+| Frame pacing against flip completion, fence plumbing | emblema-present-drm |
 
 The rows this crate does not own are not aspirations: `drm::control::Device`,
 `ClientCapability::Atomic` and `UniversalPlanes`, connector state, `DrmFourcc`
@@ -2263,7 +2263,7 @@ uniform.
     device fd is blocking and `receive_events` would otherwise ignore the
     deadline entirely.
 
-## Shader pipeline (`impeller-shaders`)
+## Shader pipeline (`emblema-shaders`)
 
 **One WGSL source tree is the single source of truth.** `build.rs` runs naga to
 produce SPIR-V for Vulkan and GLSL ES 300 for GLES, with MSL, HLSL, and desktop
@@ -2384,7 +2384,7 @@ rather than in principle.
 
 ## Renderer internals
 
-- **Geometry** (`impeller-geometry`): lyon for general fills and strokes;
+- **Geometry** (`emblema-geometry`): lyon for general fills and strokes;
   convexity detection for a fan-fill fast path; Wang's-formula adaptive Bezier
   flattening with transform-aware scale.
 
@@ -2697,7 +2697,7 @@ rather than in principle.
   four times faster than the `atan2` per vertex the definition suggests. Both
   are in the tree and a test requires them to agree, so the cheap one has
   something to be checked against.
-- **Entity layer** (`impeller-entity`): **coverage only, and nothing routes
+- **Entity layer** (`emblema-entity`): **coverage only, and nothing routes
   through it.** The design is that an entity carries transform, blend, clip
   depth, contents, and geometry, with a `Contents` implementation per material
   and coverage computation for culling. The canvas still records into a batch
@@ -2726,7 +2726,7 @@ rather than in principle.
   And `drawPaint` covers whatever the clip admits, which stays unbounded until
   a clip resolves it — a very large rectangle would be a number somebody chose,
   and wrong at some scale.
-- **Passes** (`impeller-renderer`): draws are accumulated into a batch and
+- **Passes** (`emblema-renderer`): draws are accumulated into a batch and
   submitted as one pass, in submission order rather than sorted by pipeline
   (see above). Save layers become offscreen
   targets with a paint-composited restore, sized to the caller's bounds where
@@ -2780,7 +2780,7 @@ rather than in principle.
   belongs here. Sized to the content alone, the halo is cut off square at the
   bound — which looks like a shadow drawn with a straight edge rather than like
   anything to do with bounds.
-- **Text** (`impeller-text`): shelf packing of caller-supplied coverage into
+- **Text** (`emblema-text`): shelf packing of caller-supplied coverage into
   one texture, with compaction and then doubling when it fills. Rasterization
   is out of scope and lives with the caller's font parser, which is what lets
   the atlas be tested against bitmaps whose contents are known exactly.
@@ -2901,20 +2901,20 @@ its reasons.
 | Crate | Owns |
 |---|---|
 | `impeller` | Public facade; carries the feature flags |
-| `impeller-core` | Public API: Canvas, Paint, Path, Recording, glyph runs |
-| `impeller-entity` | Entity and Contents layer — **coverage only**; nothing routes through it |
-| `impeller-geometry` | Path types, flattening, tessellation, stroking, dashing |
-| `impeller-renderer` | Render pass encoding, generic over the HAL |
-| `impeller-text` | Glyph atlas: packing, compaction, growth. Not rasterization |
-| `impeller-hal` | Rendering HAL trait |
-| `impeller-hal-vulkan` | Vulkan backend |
-| `impeller-hal-gles` | GLES 3.0 backend |
-| `impeller-present` | Presentation trait, shared types, negotiation |
-| `impeller-present-vk` | Vulkan WSI swapchain target |
-| `impeller-present-egl` | EGL window-surface target |
-| `impeller-present-drm` | DRM/KMS scanout target |
-| `impeller-shaders` | WGSL sources and build-time translation |
-| `impeller-testkit` | Shared test harness |
+| `emblema-core` | Public API: Canvas, Paint, Path, Recording, glyph runs |
+| `emblema-entity` | Entity and Contents layer — **coverage only**; nothing routes through it |
+| `emblema-geometry` | Path types, flattening, tessellation, stroking, dashing |
+| `emblema-renderer` | Render pass encoding, generic over the HAL |
+| `emblema-text` | Glyph atlas: packing, compaction, growth. Not rasterization |
+| `emblema-hal` | Rendering HAL trait |
+| `emblema-hal-vulkan` | Vulkan backend |
+| `emblema-hal-gles` | GLES 3.0 backend |
+| `emblema-present` | Presentation trait, shared types, negotiation |
+| `emblema-present-vk` | Vulkan WSI swapchain target |
+| `emblema-present-egl` | EGL window-surface target |
+| `emblema-present-drm` | DRM/KMS scanout target |
+| `emblema-shaders` | WGSL sources and build-time translation |
+| `emblema-testkit` | Shared test harness |
 | `xtask` | Capability and scanout reporting, the skip census, the contact sheet; device runs against real boards and golden management planned |
 
 Feature flags live on the `impeller` facade because a virtual workspace root
@@ -3044,11 +3044,11 @@ logic error, and worth watching: the headroom shrinks as the corpus grows.
 
 What that means today, stated precisely because the aspiration and the state
 are easy to confuse. The corpus is Rust: a couple of dozen `Scene` values built
-in `impeller-testkit`. The intent is for scenes to be data — a versioned
+in `emblema-testkit`. The intent is for scenes to be data — a versioned
 serialized IR of canvas calls — so that a corpus can be shared with a board and
 with upstream's assets, and nothing is serialized yet.
 
-`impeller-testkit` provides one executor, which renders a scene offscreen, and
+`emblema-testkit` provides one executor, which renders a scene offscreen, and
 two comparators: per-channel tolerance with an outlier budget, and the
 derivation below that chooses between exact and tolerant. The executions it
 drives are the cross-backend comparison and the cross-device conformance run.
@@ -3386,7 +3386,7 @@ backends get wrong the same way — a broken one is a check quietly lost.
 `cargo xtask gallery` renders every corpus scene onto one sheet, with the grid
 printed alongside so a tile can be found by counting. It answers a different
 question from everything else here, and only a person can read the answer. It
-suits gross wrongness rather than fine judgement: the first two things that
+suits gross wrongness rather than fine judgment: the first two things that
 looked wrong on it were not, and measurement said so both times.
 
 A scene the preferred device cannot render is drawn by whichever device can,
@@ -3475,7 +3475,7 @@ be looked at, since the incorrect ones look exactly the same from there.
 |---|---|---|---|
 | L0 | Unit: math, path ops, atlas packing, negotiation logic | Every merge, no GPU | runs |
 | L1 | Property: tessellation invariants, Bezier tolerance, stroke under transform | Every merge, no GPU | runs, for two of the three — tessellation invariants and Bezier tolerance are generated, and stroke is generated but never under a transform. The transform's effect on tolerance is a unit test instead (`tolerance_is_scaled_by_the_transform_but_not_by_the_target_size`, and `the_threshold_scales_with_the_transform`), which fixes the scale rather than searching it |
-| L2 | Golden: corpus to offscreen render, image compare | Every merge on software GPU | none for images — comparison is against another implementation rather than a stored image, deliberately, and `tests/golden/` holds nothing. Worth separating from a claim it invites: comparison against a committed artifact does exist for two other quantities, in `impeller-shaders`' snapshots of generated GLSL and SPIR-V and in the corpus cost baseline. What is absent is a stored *image* and the apparatus to compare one |
+| L2 | Golden: corpus to offscreen render, image compare | Every merge on software GPU | none for images — comparison is against another implementation rather than a stored image, deliberately, and `tests/golden/` holds nothing. Worth separating from a claim it invites: comparison against a committed artifact does exist for two other quantities, in `emblema-shaders`' snapshots of generated GLSL and SPIR-V and in the corpus cost baseline. What is absent is a stored *image* and the apparatus to compare one |
 <!-- Rejected for L2: generating references through a Rust binding to Skia.
      `skia-safe` either downloads prebuilt C++ binaries or builds Skia from
      source with LLVM, Python and Ninja. Either breaks the rule that every
@@ -3487,14 +3487,14 @@ be looked at, since the incorrect ones look exactly the same from there.
      "does this match Impeller". -->
 | L3 | Conformance: same corpus, cross-backend and cross-presentation diffs | Every merge (software) | runs, cross-backend and cross-device; cross-presentation only for the offscreen target |
 | L4 | Presentation: resize storms, flip pacing, fence ordering, hotplug | VKMS and headless WSI in CI | partial — headless WSI runs on both backends, fence ordering is checked under the validation layer, and six tests drive a real display controller through VKMS wherever a card is present. Not in CI, which loads no such module; no writeback, no CRC, no hotplug, and resize is covered only as single reconfigures rather than as a storm. Flip pacing is partly asserted and partly only measured: the ledger's arithmetic has eight unit tests, and `a_long_run_neither_leaks_nor_loses_blanks` asserts that flips were counted at all and that the blanks counted account for the span the flips arrived over. What no test asserts is a **miss budget** — `missed()` is printed and never bounded, because the figure worth having comes from a release build on a board and a test cannot assume one. See the pacing section below |
-| L5 | Stress and soak: atlas thrash, layer-depth bombs, leak detection | Nightly and weekly, hardware | partial — `a_long_run_neither_leaks_nor_loses_blanks` drives sixty frames through the scanout ring and holds the framebuffers the output keeps, the descriptors the process keeps, the ring's depth and the CPU-wait count constant across the run. That covers the resources the DRM path exchanges every frame, which is where a leak here would show. Layer-depth bombs are covered: `a_stack_of_layers_deeper_than_anything_needs_is_still_a_recording` nests a thousand layers and still draws and finishes. Atlas thrash is covered as state transitions rather than as churn — twenty-five unit tests in `impeller-text`'s atlas drive fullness, compaction, eviction, growth and the growth limit. What is missing is the soak: every one of those is a short deterministic case, and nothing runs long enough to catch a slow drift |
+| L5 | Stress and soak: atlas thrash, layer-depth bombs, leak detection | Nightly and weekly, hardware | partial — `a_long_run_neither_leaks_nor_loses_blanks` drives sixty frames through the scanout ring and holds the framebuffers the output keeps, the descriptors the process keeps, the ring's depth and the CPU-wait count constant across the run. That covers the resources the DRM path exchanges every frame, which is where a leak here would show. Layer-depth bombs are covered: `a_stack_of_layers_deeper_than_anything_needs_is_still_a_recording` nests a thousand layers and still draws and finishes. Atlas thrash is covered as state transitions rather than as churn — twenty-five unit tests in `emblema-text`'s atlas drive fullness, compaction, eviction, growth and the growth limit. What is missing is the soak: every one of those is a short deterministic case, and nothing runs long enough to catch a slow drift |
 | L6 | Performance: micro and full-frame benches with regression gating | Nightly, quiet runners | partial — `cargo xtask bench` times the two rounded-rectangle paths against each other on every device present, which is the one measurement this document rests a design on, and then a whole frame of mixed content at the same size: a tabulated ramp behind, shadowed cards over it, a blurred layer on top. Gating is opt-in: `--record` writes a baseline keyed by device and configuration, `--check` compares against one and exits non-zero on a regression past `--tolerance` — global, or per row where a row names its own — or on a row either side lacks. Two performance gates do run in the ordinary suite on every commit, both chosen because they are machine-independent: the stroke-to-fill build-cost *ratio*, and the recorded cost of every corpus scene. What the bench itself leaves ungated is wall-clock timing. **The runner this row used to name as missing has been found:** a Raspberry Pi 5 holds all eight timed rows within three tenths of a percent across three fresh runs with the governor pinned, which is why the committed baseline is a board's, and the workstation figure that motivated this — three rows of eight regressed on an unchanged build — is what rules out the cheap version, recording a baseline on a workstation and checking it in CI. What is missing now is **automation**: nothing runs the bench on a schedule, so a `--check` result reaches the repo only when a human edits a comment in the baseline, and the gate's drift line reports how far that comment has fallen behind without failing on it |
-| L7 | Fuzz: path data, scene descriptions, dma-buf negotiation | Continuous background | partial, by `proptest` rather than by a fuzzer, and in the gate rather than continuously — the rejection of `cargo-fuzz` is above and is about the toolchain. **Path data** is covered hard: `hostile.rs` generates paths from NaN, both infinities, subnormals and the largest finite float over 4096 cases, asserting that tessellation returns and that the indices it returns address real vertices, with seven shrunk cases pinned beside it. **Scene descriptions** are covered for the arrays a draw carries — meshes, gradient stops, glyph runs and atlas sprites, 2048 cases each, all asserting the recording names nothing that is not there. **dma-buf negotiation** is generated on both halves: the `IN_FORMATS` parser against blobs built structurally and then corrupted, asserting it advertises only formats and modifiers the bytes carry, and `negotiate` against generated pairs of advertised sets, asserting an agreed layout is one both sides listed and that a refusal means nothing asked for was shared. Sequences are generated too: up to forty canvas calls whose *order* is hostile -- unbalanced restores, clips under a degenerate transform, layers left open at `finish` -- and every field of a `Layer`, built as a struct literal so that adding a ninth field is a compile error rather than a field the generator silently stops covering. That one found a defect: a morphology radius decided how many passes a recording held, so a finite, positive, whole radius of `1e20` exhausted memory. What remains absent is that all of it is recording-only -- no generated scene is executed on a device -- and that `impeller-testkit`'s own `LayerSpec`, which is what the corpus is written in, is not generated at all |
+| L7 | Fuzz: path data, scene descriptions, dma-buf negotiation | Continuous background | partial, by `proptest` rather than by a fuzzer, and in the gate rather than continuously — the rejection of `cargo-fuzz` is above and is about the toolchain. **Path data** is covered hard: `hostile.rs` generates paths from NaN, both infinities, subnormals and the largest finite float over 4096 cases, asserting that tessellation returns and that the indices it returns address real vertices, with seven shrunk cases pinned beside it. **Scene descriptions** are covered for the arrays a draw carries — meshes, gradient stops, glyph runs and atlas sprites, 2048 cases each, all asserting the recording names nothing that is not there. **dma-buf negotiation** is generated on both halves: the `IN_FORMATS` parser against blobs built structurally and then corrupted, asserting it advertises only formats and modifiers the bytes carry, and `negotiate` against generated pairs of advertised sets, asserting an agreed layout is one both sides listed and that a refusal means nothing asked for was shared. Sequences are generated too: up to forty canvas calls whose *order* is hostile -- unbalanced restores, clips under a degenerate transform, layers left open at `finish` -- and every field of a `Layer`, built as a struct literal so that adding a ninth field is a compile error rather than a field the generator silently stops covering. That one found a defect: a morphology radius decided how many passes a recording held, so a finite, positive, whole radius of `1e20` exhausted memory. What remains absent is that all of it is recording-only -- no generated scene is executed on a device -- and that `emblema-testkit`'s own `LayerSpec`, which is what the corpus is written in, is not generated at all |
 
 ### VKMS would give the DRM path merge-blocking coverage
 
 **Half of it runs, and not where it would block a merge.** Six tests in
-`impeller-present-drm` drive a real display controller through VKMS on any
+`emblema-present-drm` drive a real display controller through VKMS on any
 machine with the module loaded: format negotiation, dma-buf import, an atomic
 commit, the render-done fence latching before scanout, several frames flipping
 in turn, a framebuffer the output never imported being refused, a frame carrying
@@ -3535,7 +3535,7 @@ display is right; sixty to a hundred and twenty is missing every other blank and
 reads identically on a frame counter. What separates them is the sequence number the
 kernel reports with each completed page flip, which is the display's own count of
 vertical blanks since the pipeline came up. `KmsOutput` records it and
-`impeller_present_drm::pacing` does the arithmetic.
+`emblema_present_drm::pacing` does the arithmetic.
 
 A missed flip is a blank at which the display latched nothing new while the loop was
 trying to give it one. For consecutive flips, an interval accounts for its gap in
@@ -3586,7 +3586,7 @@ cannot show and a miss count can.
 a ratio in which larger is worse, so a rate would read a collapse as an improvement
 and a baseline of zero would divide by zero; its tolerance is a percentage, which
 means nothing against a count of one or three; the drift counter does not watch
-`crates/impeller-present-drm/src`, so a row there would go stale while the gate said
+`crates/emblema-present-drm/src`, so a row there would go stale while the gate said
 current; and `cargo xtask bench` takes no DRM master and must not, so it could not
 produce the row. A paced figure is published with its preconditions in
 `docs/on-a-board.md`, the way the board's other numbers are.
@@ -3620,7 +3620,7 @@ that re-baselines tolerances under review, never ambient drift.
 
 ## Impeller C API compatibility
 
-`impeller-capi` builds `libimpeller`, intended as an ABI-compatible
+`emblema-capi` builds `libimpeller`, intended as an ABI-compatible
 implementation of upstream Impeller's C API
 (`impeller/toolkit/interop/impeller.h`). The goal is binary compatibility: a
 consumer linking the upstream C API could link this instead without
@@ -3666,7 +3666,7 @@ rather than an oversight:
    are otherwise explicitly out of scope, on the reasoning that callers bring
    their own shaper. Implementing this surface means the C API layer — not the
    renderer — depends on a shaper, and that dependency is confined to
-   `impeller-capi` so the core stays shaper-agnostic.
+   `emblema-capi` so the core stays shaper-agnostic.
 2. **Runtime shaders.** `ImpellerFragmentProgram` loads shader programs at
    runtime, which is in tension with compiling every pipeline ahead of time to
    avoid compilation jank. Supporting it means accepting a runtime compilation
@@ -3730,8 +3730,8 @@ distance to a browser is much shorter than a row of dashes suggests and a reader
 estimating it from the table alone would get it wrong.
 
 Built for `wasm32-unknown-unknown`, with nothing modified, seven crates compile:
-`impeller-geometry`, `impeller-hal`, `impeller-text`, `impeller-renderer`,
-`impeller-core`, `impeller-entity` and `impeller-shaders`. That is the whole
+`emblema-geometry`, `emblema-hal`, `emblema-text`, `emblema-renderer`,
+`emblema-core`, `emblema-entity` and `emblema-shaders`. That is the whole
 device-free half of the renderer -- tessellation, stroking, dashing, clip
 bookkeeping, batching, the material packing, and the translated shader tree --
 so everything from a `Canvas` call to a finished `Recording` runs in a browser
@@ -3740,19 +3740,19 @@ and it was not built for this.
 
 The two backends do not compile, and what stops them is worth separating:
 
-- `impeller-hal-vulkan` fails inside `ash`'s dynamic loader. Vulkan is not a web
+- `emblema-hal-vulkan` fails inside `ash`'s dynamic loader. Vulkan is not a web
   API and no amount of work here changes that.
-- `impeller-hal-gles` fails inside `khronos-egl`, which dlopens `libEGL`. That is
+- `emblema-hal-gles` fails inside `khronos-egl`, which dlopens `libEGL`. That is
   the loader rather than any GLES code, and the distinction is the whole point:
-  `crates/impeller-hal-gles/src/render.rs` is the rendering path and contains no
+  `crates/emblema-hal-gles/src/render.rs` is the rendering path and contains no
   reference to EGL at all. Every one is in
-  `crates/impeller-hal-gles/src/context.rs` and
-  `crates/impeller-hal-gles/src/fence.rs`.
+  `crates/emblema-hal-gles/src/context.rs` and
+  `crates/emblema-hal-gles/src/fence.rs`.
 
 So a WebGL2 path would need a second way to obtain a context, a decision about
 fences, and a browser-canvas presentation crate -- and would leave the rendering
 path alone. The shaders are already GLSL ES 300 and
-`crates/impeller-shaders/build.rs` sets `is_webgl: false` beside the version, a
+`crates/emblema-shaders/build.rs` sets `is_webgl: false` beside the version, a
 flag rather than a translation.
 
 Capability gating is what makes this cheaper than it sounds. WebGL2 has no

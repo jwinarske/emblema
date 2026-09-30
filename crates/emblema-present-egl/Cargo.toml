@@ -1,0 +1,25 @@
+[package]
+name = "emblema-present-egl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "EGL window-surface presentation target for emblema."
+keywords = ["egl", "presentation", "gles", "display"]
+categories = ["graphics", "rendering::graphics-api"]
+
+[lints]
+workspace = true
+
+[dependencies]
+glow = { workspace = true }
+khronos-egl = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-hal-gles = { workspace = true }
+emblema-present = { workspace = true }
+
+[dev-dependencies]
+khronos-egl = { workspace = true }

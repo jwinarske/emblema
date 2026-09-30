@@ -18,7 +18,7 @@
 //! advances every frame shows flicker, popping and reordering that a single
 //! frame cannot contain.
 
-use impeller::{
+use emblema::{
     Affine2, Canvas, Color, Dash, Extent2D, GradientStop, Layer, Paint, PathBuilder, Rect,
     SourceRect, Sprite, Vec2, VertexMode, Vertices,
 };

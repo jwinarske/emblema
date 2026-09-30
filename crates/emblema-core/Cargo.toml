@@ -1,0 +1,23 @@
+[package]
+name = "emblema-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Drawing API for emblema: Canvas, Paint, Color, recording and execution."
+keywords = ["canvas", "renderer", "graphics", "2d", "paint"]
+categories = ["graphics", "rendering"]
+
+[lints]
+workspace = true
+
+[dependencies]
+half.workspace = true
+glam = { workspace = true }
+emblema-geometry = { workspace = true }
+emblema-hal = { workspace = true }
+emblema-renderer = { workspace = true }
+emblema-text = { workspace = true }

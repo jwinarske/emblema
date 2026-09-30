@@ -536,19 +536,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "impeller-core"
+name = "emblema-core"
 version = "0.1.0"
 dependencies = [
  "glam",
  "half",
- "impeller-geometry",
- "impeller-hal",
- "impeller-renderer",
- "impeller-text",
+ "emblema-geometry",
+ "emblema-hal",
+ "emblema-renderer",
+ "emblema-text",
 ]
 
 [[package]]
-name = "impeller-geometry"
+name = "emblema-geometry"
 version = "0.1.0"
 dependencies = [
  "glam",
@@ -556,97 +556,97 @@ dependencies = [
 ]
 
 [[package]]
-name = "impeller-hal"
+name = "emblema-hal"
 version = "0.1.0"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
-name = "impeller-hal-vulkan"
+name = "emblema-hal-vulkan"
 version = "0.1.0"
 dependencies = [
  "ash",
  "gpu-allocator",
- "impeller-hal",
- "impeller-shaders",
+ "emblema-hal",
+ "emblema-shaders",
 ]
 
 [[package]]
-name = "impeller-playground"
+name = "emblema-playground"
 version = "0.1.0"
 dependencies = [
  "ash",
  "ash-window",
- "impeller-rs",
- "impeller-testkit",
+ "emblema",
+ "emblema-testkit",
  "raw-window-handle",
  "winit",
 ]
 
 [[package]]
-name = "impeller-present"
+name = "emblema-present"
 version = "0.1.0"
 dependencies = [
- "impeller-hal",
+ "emblema-hal",
  "log",
 ]
 
 [[package]]
-name = "impeller-present-vk"
+name = "emblema-present-vk"
 version = "0.1.0"
 dependencies = [
  "ash",
- "impeller-core",
- "impeller-hal",
- "impeller-hal-vulkan",
- "impeller-present",
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "emblema-present",
 ]
 
 [[package]]
-name = "impeller-renderer"
+name = "emblema-renderer"
 version = "0.1.0"
 dependencies = [
  "glam",
- "impeller-geometry",
- "impeller-hal",
+ "emblema-geometry",
+ "emblema-hal",
 ]
 
 [[package]]
-name = "impeller-rs"
+name = "emblema"
 version = "0.1.0"
 dependencies = [
- "impeller-core",
- "impeller-hal",
- "impeller-hal-vulkan",
- "impeller-present",
- "impeller-present-vk",
- "impeller-shaders",
+ "emblema-core",
+ "emblema-hal",
+ "emblema-hal-vulkan",
+ "emblema-present",
+ "emblema-present-vk",
+ "emblema-shaders",
 ]
 
 [[package]]
-name = "impeller-shaders"
+name = "emblema-shaders"
 version = "0.1.0"
 dependencies = [
  "naga",
 ]
 
 [[package]]
-name = "impeller-testkit"
+name = "emblema-testkit"
 version = "0.1.0"
 dependencies = [
  "glam",
  "half",
- "impeller-core",
- "impeller-geometry",
- "impeller-hal",
- "impeller-renderer",
- "impeller-shaders",
- "impeller-text",
+ "emblema-core",
+ "emblema-geometry",
+ "emblema-hal",
+ "emblema-renderer",
+ "emblema-shaders",
+ "emblema-text",
 ]
 
 [[package]]
-name = "impeller-text"
+name = "emblema-text"
 version = "0.1.0"
 
 [[package]]

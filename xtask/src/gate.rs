@@ -139,7 +139,7 @@ pub fn run(software: bool) -> bool {
             "check",
             "-q",
             "-p",
-            "impeller-rs",
+            "emblema",
             "--no-default-features",
             "--features",
             features,

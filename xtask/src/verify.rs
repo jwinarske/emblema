@@ -746,7 +746,7 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
         let text = "\
      Running tests/one.rs (target/debug/deps/one)
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
-     Doc-tests impeller
+     Doc-tests emblema
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;
 ";
         let outcome = parse(text, false);

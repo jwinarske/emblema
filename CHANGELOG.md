@@ -9,6 +9,19 @@ Dates are the day a version reached crates.io.
 
 ## Unreleased
 
+**The project is `emblema`.** It was `impeller-rs`, a name that read as a port of
+upstream Impeller and set the expectation this renderer is measured against
+upstream's output. It is not one: it targets devices where upstream's
+stencil-then-cover route is not the fastest available, and `docs/non-parity.md`
+records where it diverges on purpose. Every crate is `emblema-*`, the facade is
+`emblema`, and the three environment variables this workspace owns are
+`EMBLEMA_DRM_CARD`, `EMBLEMA_SHADER_SNAPSHOTS` and `EMBLEMA_COST_BASELINE`.
+
+What keeps the upstream name is what upstream names: `emblema-capi` still builds
+`libimpeller.so` against `impeller.h`, because the C ABI is upstream's and a
+consumer loads it by that name. `ImpellerGetVersion` and `IMPELLER_VERSION` are
+part of that ABI and are unchanged.
+
 **A morphology radius is a length in the caller's space, as upstream's is.** It
 was device pixels, alone among this renderer's lengths, on the recorded grounds
 that upstream had no morphology to be in parity with -- and upstream has `dilate`
@@ -31,7 +44,7 @@ axis-aligned, where upstream transforms each axis's direction vector. The two
 agree under a uniform scale and part under an anisotropic one or a rotation,
 which is what `docs/non-parity.md` 17 now records.
 
-`impeller_present_drm::pacing` counts the vertical blanks a frame loop did not land
+`emblema_present_drm::pacing` counts the vertical blanks a frame loop did not land
 on, from the sequence the kernel reports with each completed flip -- which the event
 loop previously discarded. `KmsOutput` gains `pacing`, `exact_frame_nanos` and
 `framebuffer_count`, all inherent so the published `OutputEvent` keeps its shape, and
@@ -119,7 +132,7 @@ the target axis, which cannot change a picture: a window reaching as far as the
 target is wide already spans it. Found by a generated `Layer`.
 
 Generated canvas operation sequences and generated `Layer`s in
-`impeller-rs`'s hostile-input suite, which is what found the above. Up to forty
+`emblema`'s hostile-input suite, which is what found the above. Up to forty
 calls whose order is hostile -- unbalanced restores, clips under a degenerate
 transform, layers left open at `finish` -- and every `Layer` field, built as a
 struct literal so a new field breaks the build rather than going quietly
@@ -134,7 +147,7 @@ advertised sets, asserting an agreed layout is one both sides listed and that a
 refusal means nothing asked for was shared. `proptest` rather than a fuzzer, for
 the toolchain reason `docs/architecture.md` already records.
 
-`Capability` and `Withheld` in `impeller-hal`, and a `withheld` field on
+`Capability` and `Withheld` in `emblema-hal`, and a `withheld` field on
 `ContextConfig` and `GlesConfig`, so a context can be built lacking a capability
 the device has. Test support: the refusal paths and the branches that decide
 whether to skip could previously only run on a machine whose device lacked the
@@ -160,8 +173,8 @@ whole project rather than a delta, and `docs/parity.md` and
 are checked by tests, so neither can drift from the code without failing the build.
 
 Fourteen of the workspace's seventeen crates go. `xtask` is this repository's
-tooling; `impeller-testkit` exists to test this workspace and its API is shaped by
-that; `impeller-capi` produces a shared library that C consumers obtain from a build
+tooling; `emblema-testkit` exists to test this workspace and its API is shaped by
+that; `emblema-capi` produces a shared library that C consumers obtain from a build
 rather than from cargo. Each says so in its own manifest, and each is one line from
 changing its mind.
 
