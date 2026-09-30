@@ -52,10 +52,15 @@
 # cards cost 0.639 over it and their three shadows another 0.847; the blurred layer
 # on top is 1.998 under Vulkan. That is the same shape the VisionFive 2 records at
 # 67.4 per cent, on an unrelated tile architecture, so it is not a PowerVR quirk --
-# and V3D leans on it harder. `docs/non-parity.md` 1 and 19 are where that leads:
-# this gradient has five stops, so it is tabulated into a ramp texture and sampled
-# per fragment, where upstream would walk uniforms and, for an axis-aligned one,
-# interpolate across vertices instead.
+# and V3D leans on it harder.
+#
+# **Do not read that share as a gradient path waiting to be improved.** Measured on
+# this board 2026-09-30, the same ground drawn flat costs 8.494 ms against the
+# five-stop gradient's 10.424, so four fifths of that draw is covering the pixels and
+# only 1.930 ms is evaluating the ramp. And drawing it with four stops -- the paint
+# block's walk, which is what upstream would use for five -- costs 14.958, half again
+# as much. `docs/on-a-board.md` has the ladder and what it does to
+# `docs/non-parity.md` 1, which read as a debt and is not one.
 #
 # The three new rows carry tolerances derived from the same three runs. The device
 # rows moved 0.09 to 0.11 per cent, so the Vulkan ones take this section's 2.0 and

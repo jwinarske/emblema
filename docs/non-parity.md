@@ -119,20 +119,48 @@ produces, so no quantization enters that the walk does not also have. The cost
 is an upload and a sampler binding per gradient past four stops, on a path
 upstream would not have taken.
 
-That sentence understated it, and a measurement is why. The bench's frame draws a
-full-screen five-stop gradient, so it is on this path; on the VisionFive 2 that
-one draw is **43.1 ms of a 64.0 ms frame** -- 67 per cent of the frame, measured
-2026-09-29 at 1ef0205 and tabulated in [`on-a-board.md`](on-a-board.md). An
-upload and a sampler binding are per-draw costs and sound like overhead; what the
-row actually shows is that a filtered fetch per fragment, over two million
-fragments, on the most bandwidth-starved part measured here, is the largest single
-item in a frame.
+**That was written as a debt, and the measurement says it is the opposite.** The
+sentence above and the paragraph that used to follow it read the texture as the
+expensive thing. The bench's frame draws a full-screen five-stop gradient, so it is
+on this path, and that draw is 75 per cent of the frame on a Pi 5 and 67 on a
+VisionFive 2 -- which made it look as though a filtered fetch per fragment were the
+largest item in a frame.
 
-What that figure does *not* establish is how much of the 43.1 ms is the fetch and
-how much is simply covering every pixel once. Nothing here has measured the same
-scene through the four-stop path to separate them, and until something does, this
-entry claims the cost is on a path upstream would not have taken -- not that
-taking upstream's path would return most of it.
+It is not. Measured on the Pi 5 on 2026-09-30, the same ground drawn three ways in
+one run ([`on-a-board.md`](on-a-board.md) has the conditions):
+
+| route | flat fill | 5 stops, ramp texture | 4 stops, paint block |
+|---|---|---|---|
+| Vulkan | 8.494 ms | 10.424 | **14.958** |
+| GLES | 8.843 | 11.767 | **16.308** |
+
+Two things follow, and neither was the expected one.
+
+**Most of that draw is fill.** Evaluating the ramp adds 1.930 ms under Vulkan, so of
+a 13.911 ms frame the whole business of deciding a gradient's color is 13.9 per
+cent; the rest is covering two million pixels once, which no gradient path changes.
+
+**The ramp texture is the cheaper way to evaluate it, by a factor of three.** The
+four-stop walk costs 6.464 ms of evaluation against the ramp's 1.930 -- 3.3 times
+as much on Vulkan and 2.6 on GLES. A filtered fetch from a 256-texel table that
+fits in any texture cache beats a per-fragment walk with comparisons and
+interpolation on this hardware.
+
+**Impact.** The picture is the same either way, and is tested to one level per
+channel: the ramp holds exactly what the four-stop walk produces, so no
+quantization enters that the walk does not also have. The cost is an upload and a
+sampler binding per gradient past four stops, which is a per-draw overhead, against
+a per-fragment saving of 1.9 ms on a full-screen draw. On the devices this renderer
+targets the trade is favorable, and **closing this gap would make them slower**:
+raising `MAX_STOPS` toward upstream's 256 would move every gradient between five
+and two hundred and fifty-six stops onto the path that costs 3.3 times more to
+evaluate. By the rule at the top of this file that is a question about how the
+pixels get there, answered against the target devices, and the answer is now
+measured rather than assumed.
+
+What remains unmeasured is the crossover: a gradient small enough that one upload
+and one sampler binding outweigh the per-fragment saving. Every figure here is a
+full-screen draw, where the per-fragment side dominates by construction.
 
 Note the trap this sets, because it is easy to fall into and one commit here
 already did. Upstream's *texture* path does not dither, and reading that across
@@ -140,6 +168,11 @@ to this renderer's ramp looks obviously right. It is backwards: upstream reaches
 its texture past 256 stops and this renderer reaches its ramp past four, so
 matching the mechanism would leave nearly every gradient here on the side
 upstream nearly never uses. Both paths are dithered for that reason.
+
+The same shape of mistake produced the paragraph this entry used to carry. Reading
+a mechanism across from upstream implies upstream's is the one to want; here the
+measurement says the ramp is the better of the two on this hardware, and the thing
+to carry across was the dithering rather than the threshold.
 
 ## 2. The gradient ramp is half-float; upstream's is eight-bit
 
@@ -895,12 +928,21 @@ The honest account of how it stayed absent: the symbol was already cited in this
 file, in §3's evidence column, as the file that dithers under an `#ifndef`.
 Something can be read for one property and not seen for another.
 
-**Impact.** For the most ordinary gradient in an interface — a vertical or
-horizontal wash behind a card or a bar — upstream does zero per-fragment gradient
-work where this renderer does a four-stop walk or a filtered texture fetch per
-fragment. The cost of that is unmeasured here, and the reason to expect it to
-matter is §1's measurement: a full-screen five-stop gradient is 43.1 ms of a 64.0
-ms frame on the VisionFive 2.
+**Impact, and it is bounded now rather than open.** For the most ordinary gradient
+in an interface — a vertical or horizontal wash behind a card or a bar — upstream
+does zero per-fragment gradient work where this renderer does a four-stop walk or a
+filtered texture fetch per fragment.
+
+What that is worth has a ceiling, and §1's later measurement supplies it. A
+vertex-interpolated path removes *all* per-fragment gradient evaluation and nothing
+else, so the most it can recover is the evaluation share of the draw: on the Pi 5,
+1.930 ms of a 13.911 ms frame under Vulkan and 2.924 of 14.866 under GLES. That is
+**13.9 and 19.7 per cent of a frame** — worth building, and not the three quarters
+that the gradient ground's share of the frame invites you to read. Four fifths of
+that draw is the fill underneath, which no gradient path touches.
+
+The earlier wording here pointed at the ground's 43.1 ms of 64.0 on the VisionFive 2
+as the reason to expect this to matter, which overstated it in exactly that way.
 
 **The measurement cannot be taken from anything here as it stands**, and the
 bench is the reason. Its only gradient is the ground's, `[0, 0]` to `[w, h]` —
@@ -916,11 +958,16 @@ checks pictures in any case, and a vertex-interpolated wash is meant to produce
 the same one.
 
 So: an axis-aligned rect gradient in the bench comes first, because without one
-there is nothing to time a change against and §1's row cannot separate a fetch
-from a fill either. Then the path, whose predicate is cheap and whose geometry is
-the sections upstream already describes. The paint block's four stops do not bound
-it — the sections are geometry, so a vertex-interpolated wash is not limited the
-way the fragment walk is, and building it would narrow §1 as well.
+there is nothing to time a change against. Then the path, whose predicate is cheap
+and whose geometry is the sections upstream already describes. The paint block's
+four stops do not bound it — the sections are geometry, so a vertex-interpolated
+wash is not limited the way the fragment walk is.
+
+It would not narrow §1, though, which is what an earlier draft of this paragraph
+claimed. §1 is about which of two *per-fragment* evaluations a gradient past four
+stops takes, and the measurement there says this renderer already takes the cheaper
+one. A vertex-interpolated path sidesteps both rather than improving either, and
+only for the axis-aligned rect case the predicate admits.
 
 ## 20. A blur's deviations scale per axis; a backdrop blur's single number cannot
 
