@@ -1299,11 +1299,75 @@ The three cards and their three shadows together are between nine and eleven per
 of the frame on every row here -- 10.7 and 10.5 on the Pi, 8.7 on the VisionFive 2 --
 so the shapes are not where the frame goes on any of them.
 
-That is what makes `non-parity.md` 1 and 19 the entries to read rather than a
-curiosity about one board. Five stops is past this renderer's `MAX_STOPS`, so the
-gradient is tabulated into a ramp texture and sampled per fragment; upstream would
-walk uniforms for the same gradient and, for an axis-aligned one, interpolate it
-across vertices and do no per-fragment gradient work at all.
+**What that share is made of is the next section, and it is not what this paragraph
+originally said.** The obvious reading -- that a gradient sampling a ramp texture per
+fragment is where three quarters of the frame goes, so a different gradient path
+would return it -- is wrong twice over. Four fifths of that draw is the fill
+underneath, and of the evaluation that remains, the ramp texture is the cheaper of
+the two methods available rather than the dearer. Read on before reaching for
+`non-parity.md` 1.
+
+### Four fifths of that gradient is fill, and the ramp texture is the cheap half
+
+Measured on the Pi 5, 2026-09-30, after the rows above: same conditions, 57.6 C at
+the start, `throttled=0x0` and 2400000 throughout, three runs agreeing to within
+0.08 per cent. **This is the measurement that says what the 75 per cent above is
+made of, and it contradicts what this file and `non-parity.md` previously implied
+about it.**
+
+The ground was drawn three ways, full screen at 1920x1080, in one run so the rungs
+are comparable: a flat fill, which evaluates nothing; the same gradient with four
+stops, which is `MAX_STOPS`, so the colors ride in the paint block and the shader
+walks them; and with five, one past it, so the recorder bakes a 256-texel ramp and
+the shader takes a filtered fetch per fragment. Five stops is what the bench's
+ground uses, and the probe reproduced `frame, gradient ground` to three
+thousandths of a millisecond, which is what says the rungs are the same draw.
+
+| route | flat fill | 5 stops (ramp texture) | 4 stops (paint block) |
+|---|---|---|---|
+| Pi 5 Vulkan | 8.494 ms | 10.424 | **14.958** |
+| Pi 5 GLES | 8.843 | 11.767 | **16.308** |
+
+Two results, and the second was not the expected one.
+
+**Most of the gradient is not the gradient.** Fill alone is 81 per cent of the
+five-stop figure under Vulkan and 75 under GLES. Evaluating the ramp adds 1.930 ms
+on Vulkan and 2.924 on GLES -- so of a 13.911 ms frame, everything to do with
+deciding a gradient's color is 13.9 per cent, and the rest of that draw is the cost
+of covering two million pixels once.
+
+**The ramp texture is the cheaper way to evaluate it, by a factor of three.** The
+four-stop path walks its stops per fragment and costs 6.464 ms of evaluation
+against the ramp's 1.930 -- 3.3 times as much on Vulkan, 2.6 on GLES. A filtered
+fetch from a 256-texel table that fits in any texture cache beats a per-fragment
+walk with comparisons and interpolation on this hardware, and it beats it by more
+than the whole remaining evaluation cost.
+
+So `non-parity.md` 1 is not the debt it reads as, and this file said the opposite of
+the truth about it for two entries. Upstream carries 256 stops in uniforms and
+reaches a texture only past that; this renderer reaches a texture past four. **The
+measurement says the renderer's side of that is faster here**, and closing the gap
+-- raising `MAX_STOPS` toward upstream's 256 -- would move every gradient between
+five and two hundred and fifty-six stops onto a path 3.3 times more expensive in
+its evaluation. That is exactly the kind of question the opening of
+`non-parity.md` says is answered against the target devices rather than against
+upstream's shape.
+
+It also bounds `non-parity.md` 19. A vertex-interpolated path does no per-fragment
+gradient work at all, so the most it can recover is the evaluation share: about 1.9
+ms of a 13.9 ms frame under Vulkan, 2.9 of 14.9 under GLES. That is worth having --
+fourteen per cent of a frame is not nothing -- but it is not the three quarters the
+ground's share invites you to read, and nothing about the gradient path touches the
+fill underneath it.
+
+**These numbers are not gated, which is a weakness and is stated rather than
+hidden.** They came from a throwaway probe -- three extra rows built from the
+ground alone with the stop count as a parameter -- run on the board and then
+reverted, so no baseline holds them and no test will notice if they rot. They are
+here because the conclusion changed two entries and the evidence should be findable,
+not because this is the way to keep a number. Making them permanent means three
+more bench rows and a re-recording on both boards; the probe is twenty lines and
+`git log` for this paragraph has it.
 
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
