@@ -25,9 +25,30 @@ kernel headers the binary will meet, which makes it a better sysroot than a
 packaged one and a worse thing to forget you depend on. About twenty-seven
 megabytes, once.
 
+`PI` is whichever name your `known_hosts` carries the board's *current* key under,
+which is not always the one written here. This board's host key has been regenerated
+at least once, and the entries left behind do not all point at the same key: on one
+workstation `raspberrypi.local` and the board's address carry the current key while
+`raspberrypi.lan` still holds the old one, so `ssh joel@raspberrypi.lan` fails with
+`REMOTE HOST IDENTIFICATION HAS CHANGED` and `ssh joel@raspberrypi` fails with
+`Host key verification failed` for the plainer reason that no entry exists under the
+bare name.
+
+Neither is an attack and neither is a reason to pass `StrictHostKeyChecking=no`.
+Fingerprint what the host offers, compare it against the entries you already trust,
+and use a name that matches:
+
+```sh
+ssh-keyscan -t ed25519 raspberrypi.local 2>/dev/null | ssh-keygen -lf -
+```
+
+If that fingerprint is already in `known_hosts` under another name, the key is one
+you have trusted before and the stale entry is the thing to fix. If it is not, stop
+and find out why before typing a password at it.
+
 ```sh
 S=$HOME/.cache/pi-sysroot
-PI=joel@raspberrypi
+PI=joel@raspberrypi.local
 
 mkdir -p "$S/usr/lib/aarch64-linux-gnu" "$S/usr/lib/gcc"
 rsync -a \
