@@ -13,6 +13,39 @@
 //! triangles that cover area outside the path, which renders visibly wrong;
 //! sending a convex path through the general tessellator merely costs time.
 //! Convexity detection is conservative for exactly this reason.
+//!
+//! # What the general path costs, against the floor
+//!
+//! lyon is not the cheapest way to triangulate a *simple* polygon, and the gap is
+//! worth knowing because `non-parity.md` 18 rests on this being the expensive half.
+//! Measured 2026-10-01 against `earcutr`, ear clipping, on x86-64 and on a Pi 5's
+//! A76 -- identical triangle counts in every case, so the two agree on the output:
+//!
+//! | geometry | lyon : earcut, x86-64 | on A76 |
+//! |---|---|---|
+//! | 1,185 real tile rings, median 7 points | 1.8x | 1.7x |
+//! | 160 stars, 8 points | 3.0x | 2.5x |
+//! | 160 stars, 64 points | 2.9x | 2.2x |
+//! | 160 stars, 256 points | 4.1x | 2.9x |
+//!
+//! So roughly a factor of two on real map geometry and up to four on dense concave
+//! shapes. On the VisionFive 2, where one Berlin tile costs nineteen milliseconds to
+//! triangulate, a factor of 1.7 is about eight milliseconds a tile.
+//!
+//! **It is not a swap, which is why nothing changed here.** Ear clipping needs a
+//! simple polygon: lyon resolves self-intersection and both fill rules, and
+//! `non-parity.md` 18 depends on that -- a self-intersecting path fills the same here
+//! as it does under a stencil precisely because lyon applies the rule. Every one of
+//! the 1,185 tile rings happened to be simple, which is what let the counts match,
+//! and MVT encoders do not guarantee it.
+//!
+//! The design that would claim it without giving that up: try ear clipping on a
+//! single closed contour, then *check* its output -- the triangle areas sum to the
+//! contour's shoelace area for a simple polygon and will not for a self-intersecting
+//! one -- and fall back to lyon when the check fails. Verifying is O(n) against
+//! lyon's sweep, so the fast path stays cheaper than the thing it replaces. Not
+//! built, and it wants a generated-input suite of its own before it is, since the
+//! failure mode is a wrong fill rather than a slow one.
 
 use crate::flatten::{flatten, DEFAULT_TOLERANCE};
 use crate::path::{polygon_convexity, Convexity, FillRule, Path, Verb};
