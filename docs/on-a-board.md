@@ -1369,6 +1369,46 @@ not because this is the way to keep a number. Making them permanent means three
 more bench rows and a re-recording on both boards; the probe is twenty lines and
 `git log` for this paragraph has it.
 
+### A square rectangle is on the wrong route, by thirty per cent
+
+Measured 2026-09-30, interleaved: two binaries differing only in which route
+`draw_rect` takes for an unrounded rectangle, alternating in one session on each
+board. Pi 5 pinned at 2400000 with `throttled=0x0`; VisionFive 2 with its desktop
+stopped and governors pinned.
+
+`draw_rect`'s own comment gave the reason for the analytic route: a shape computing
+its own coverage spares the pass multisampling, "four times the fill and four times
+the bandwidth saved on a frame made mostly of rectangles". `stacked interface` is
+eleven rectangles, so it can test that.
+
+| frame | route | Pi 5 V3D | VisionFive 2 | x86-64 |
+|---|---|---|---|---|
+| stacked, plus panels | analytic, 1 sample | 18.767 ms | 74.083 | 2.216 |
+| | tessellated, 4 samples | **13.687** | **56.780** | **1.631** |
+| stacked interface | analytic, 1 sample | 24.508 | 93.981 | 2.758 |
+| | tessellated, 4 samples | **16.077** | **66.100** | **1.786** |
+
+Tessellated wins by 34 per cent on V3D, 30 on PowerVR, 35 on x86-64. Three
+architectures, one direction.
+
+`full frame, mixed content` is the control: 13.917 against 13.929 on V3D, 64.066
+against 64.157 on PowerVR. Its cards are *rounded* rectangles and take the analytic
+route either way, so the switch moved what it was meant to and nothing else.
+
+The arithmetic the comment had wrong. Multisampling shades once per pixel and pays in
+attachment bandwidth and a resolve, which is 1.23 times on V3D and 2.62 on PowerVR
+rather than four. The analytic route pays a distance-field evaluation per fragment
+across a quad covering the shape, and for a rectangle that field evaluates to a
+constant.
+
+Nothing is changed on it here. The routes antialias differently -- four sample levels
+against continuous coverage -- so flipping is a quality decision as well as a speed
+one, and it moves every rectangle in every scene, the cost baseline, both timing
+baselines and the corpus comparison. That wants its own measurements.
+
+It also bears on `non-parity.md` 21: a tessellated rectangle is coverage-binary, so
+`BatchDraw::occludes` would admit it.
+
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
 The `render` group turned GLES on, and the rows it produces are a trap the

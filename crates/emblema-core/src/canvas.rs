@@ -3472,10 +3472,23 @@ impl Canvas {
     ///
     /// An antialiased solid fill takes the same distance field a rounded
     /// rectangle does, with no corner to round. The vertex count is the same
-    /// either way -- a rectangle is four vertices whichever route it takes --
-    /// so what this buys is the edge: the pass does not have to multisample for
-    /// a shape that computes its own coverage, which is four times the fill and
-    /// four times the bandwidth saved on a frame made mostly of rectangles.
+    /// either way, so the intent was to spare the pass multisampling for a shape
+    /// that computes its own coverage.
+    ///
+    /// **Measured 2026-09-30: the analytic route is the dearer one here, by about
+    /// thirty per cent.** On the `stacked interface` frame, tessellated at four
+    /// samples against analytic at one: 16.077 ms against 24.508 on a Pi 5,
+    /// 66.100 against 93.981 on a VisionFive 2, 1.786 against 2.758 on x86-64.
+    /// `docs/on-a-board.md` has the conditions, the control and the arithmetic.
+    ///
+    /// Multisampling shades once per pixel and pays in bandwidth and a resolve --
+    /// 1.23x on V3D, 2.62x on PowerVR, not 4x. The field costs an evaluation per
+    /// fragment, and for a rectangle it evaluates to a constant.
+    ///
+    /// Not flipped, because the two routes antialias differently: four sample
+    /// levels against continuous coverage. That is a change to every rectangle in
+    /// every scene, both timing baselines and the corpus comparison, and wants its
+    /// own measurements.
     pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) -> Result<&mut Self> {
         if rect.is_empty() {
             return Ok(self);
@@ -3494,10 +3507,12 @@ impl Canvas {
     /// lines that have to get the corner tangents right, and getting them
     /// slightly wrong shows as a corner that is subtly not round.
     ///
-    /// Tessellated like any other path. The analytic coverage that would let a
-    /// rounded rectangle skip tessellation entirely is not implemented, and is
-    /// where the interesting speed is for a real interface -- this is the shape
-    /// that would benefit most from it.
+    /// Analytic for a solid fill or stroke that asked for antialiasing, which is
+    /// what `analytic_rrect` admits. The field is implemented for this shape, a
+    /// plain rectangle, a circle and an oval.
+    ///
+    /// Tessellation is the fallback: a gradient or image fill, an aliased fill, or
+    /// a square-cornered stroke goes to `draw_path`.
     pub fn draw_rrect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> Result<&mut Self> {
         if rect.is_empty() {
             return Ok(self);
@@ -3830,11 +3845,15 @@ impl Canvas {
 
     /// A paint for the fragment-evaluated rounded rectangle, where one applies.
     ///
-    /// Only a solid fill that asked for antialiasing. A stroke is a different
-    /// shape, a gradient or an image would need both its own mapping and this
-    /// one at once — which is the case the push-constant budget was sized
-    /// against — and an aliased fill is asking for hard edges, which the
-    /// tessellated path gives and this one deliberately does not.
+    /// A solid-colored fill or stroke that asked for antialiasing. The material
+    /// carries a stroke width and an outer radius, and the bench times the stroked
+    /// case as `stroked field`.
+    ///
+    /// Refused: a gradient or an image, which would need its own mapping and this
+    /// one at once -- the case the push-constant budget was sized against; an
+    /// aliased fill, which asks for the hard edges the tessellated path gives; and
+    /// a square-cornered stroked rectangle, for the reason stated where the body
+    /// declines it.
     /// The material, and the clip-to-local mapping it would otherwise carry.
     ///
     /// Returned beside the material rather than inside it so that two of this

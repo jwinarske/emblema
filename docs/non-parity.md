@@ -1158,9 +1158,17 @@ different pieces of work:
 - **A tessellated route for an unrounded axis-aligned rectangle.** A radius of zero
   through the analytic shader is paying for a distance field that computes a constant,
   and a plain rect could take a solid fill whose coverage the rasterizer decides. That
-  would make these draws occlude outright and is the smaller change of the two, but it
-  moves a route that entries elsewhere in this file measure, so it wants its own
-  numbers first.
+  would make these draws occlude outright.
+
+  **Measured 2026-09-30, and it is worth more than this entry.** Interleaving two
+  binaries that differ only in that branch, the tessellated route takes 34 per cent off
+  `stacked interface` on V3D, 30 on PowerVR and 35 on x86-64 -- against the 40 per cent
+  of the *wash* reordering would recover, which is a slice of a frame the route change
+  has already made cheaper. `docs/on-a-board.md` has the conditions and the control.
+
+  So the route comes first and this entry second. Flipping it is a quality decision as
+  well as a speed one -- four sample levels against continuous coverage -- and it hands
+  this entry its occluders as a side effect rather than a purpose.
 
 Antialiasing is not the obstacle it looks like, and that is worth stating because it
 was the first thing checked. `Canvas::pass_samples` raises the whole pass's sample
