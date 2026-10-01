@@ -82,7 +82,8 @@ use emblema_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
 mod frames;
 
 use frames::{
-    frame, stacked, Frame, Stacked, EXTENT, FRAMES, FRAME_STAGES, SHAPES, STACKED_STAGES, WARMUP,
+    concave, concave_name, frame, stacked, Frame, Stacked, CONCAVE_POINTS, EXTENT, FRAMES,
+    FRAME_STAGES, SHAPES, STACKED_STAGES, WARMUP,
 };
 pub use frames::{recording, Path};
 
@@ -360,6 +361,15 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 },
             )));
         }
+        for points in CONCAVE_POINTS {
+            report(Event::Measured(time_building(
+                concave_name(points),
+                match points {
+                    12 => || concave(12),
+                    _ => || concave(72),
+                },
+            )));
+        }
     }
 
     for index in 0.. {
@@ -395,6 +405,14 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 time_frames::<VulkanHal>(&mut ctx, stage.name(), &recording, |_| {}),
             ));
         }
+        for points in CONCAVE_POINTS {
+            let recording = concave(points);
+            let name = concave_name(points);
+            report(outcome(
+                name,
+                time_frames::<VulkanHal>(&mut ctx, name, &recording, |_| {}),
+            ));
+        }
     }
 
     if let Ok(mut ctx) = GlesContext::new(DisplayTarget::Surfaceless) {
@@ -427,6 +445,15 @@ pub fn gather(skip: &[String], report: &mut dyn FnMut(Event)) {
                 unsafe { glow::HasContext::finish(ctx.raw_gl()) }
             });
             report(outcome(stage.name(), timed));
+        }
+        for points in CONCAVE_POINTS {
+            let recording = concave(points);
+            let name = concave_name(points);
+            let timed = time_frames::<GlesHal>(&mut ctx, name, &recording, |ctx| {
+                // SAFETY: a context is current on this thread.
+                unsafe { glow::HasContext::finish(ctx.raw_gl()) }
+            });
+            report(outcome(name, timed));
         }
     }
 }
@@ -475,7 +502,8 @@ fn header() -> String {
     format!(
         "{SHAPES} rounded rectangles at {}x{}, then one frame of mixed \
          content at the same size in {} stages, then an interface that \
-         overdraws in {}.\n{FRAMES} frames each after {WARMUP} warm-up{}\n",
+         overdraws in {}, then the same grid of concave fills at two point \
+         counts.\n{FRAMES} frames each after {WARMUP} warm-up{}\n",
         EXTENT.width,
         EXTENT.height,
         FRAME_STAGES.len(),
@@ -613,6 +641,18 @@ fn epilogue() -> &'static str {
      differences the same way, and read them against the mixed frame only as \n\
      two budgets rather than as a comparison: they draw different things. \n\
      Solid fills throughout, so what the deltas measure is coverage.\n\
+     \n\
+     The last two rows are the general triangulator, which nothing else here \n\
+     reaches: every other fill is a rounded rectangle, which goes to a fan, or \n\
+     a rectangle, which goes to a distance field. These are concave stars over \n\
+     the same grid as the comparison rows, at twelve points and at seventy-two \n\
+     -- the same area, six times the geometry. Read the pair against the \n\
+     `recording` section rather than against each other: `non-parity.md` 18 is \n\
+     the entry, and what the two rows are for is that a concave fill's cost \n\
+     goes up with its vertex count on the processor and with its area on the \n\
+     device, so holding one fixed while multiplying the other says which half \n\
+     a triangulation is paid from. Aliased, which is what keeps them off the \n\
+     analytic route and on the triangulator.\n\
      \n\
      The `recording` section is the other half, and it needs no device: it is \n\
      what building each of those frames costs before anything is submitted, \n\
@@ -1069,6 +1109,58 @@ mod tests {
             fastest: Duration::from_micros(90),
             slowest: Duration::from_micros(110),
         }
+    }
+
+    /// A concave fill's cost is in its vertices, which is what the two rows exist
+    /// to separate.
+    ///
+    /// `docs/non-parity.md` 18 claims a concave fill costs a CPU triangulation here
+    /// where upstream costs two draws and a stencil attachment, and that a path's
+    /// cost therefore scales with its vertex count on the CPU rather than with its
+    /// area on the GPU. Nothing in this bench could show that: the comparison rows
+    /// are rounded rectangles, which `fill` sends to a fan rather than to the
+    /// general triangulator, and the two frames are rectangles, gradients and blurs.
+    ///
+    /// The two concave rows hold the area fixed and multiply the point count by six,
+    /// so the claim is testable by construction. What this test pins is the
+    /// construction rather than the timing: the same number of shapes over the same
+    /// grid, six times the geometry, and one draw either way because a single solid
+    /// color batches.
+    #[test]
+    fn the_concave_rows_differ_in_geometry_and_not_in_area() {
+        let [few, many] = frames::CONCAVE_POINTS;
+        assert_eq!((few, many), (12, 72), "six times the points");
+
+        let geometry = |points| {
+            let recording = frames::concave(points);
+            let vertices: usize = recording
+                .passes
+                .iter()
+                .map(|pass| pass.batch.vertices().len())
+                .sum();
+            (recording.draw_count(), vertices)
+        };
+        let (coarse_draws, coarse_vertices) = geometry(few);
+        let (fine_draws, fine_vertices) = geometry(many);
+
+        // One draw each: a hundred and sixty shapes in one solid color merge, so the
+        // rows differ in geometry and in nothing else a backend can see.
+        assert_eq!(
+            (coarse_draws, fine_draws),
+            (1, 1),
+            "one solid color over the whole grid batches to a single draw"
+        );
+
+        // And the triangulation really does grow with the point count. Asserted as a
+        // band rather than a ratio because a triangulator's output is not a fixed
+        // multiple of its input -- what matters is that it grows roughly with the
+        // points and not with the area, which is unchanged.
+        let growth = fine_vertices as f64 / coarse_vertices as f64;
+        assert!(
+            (4.0..=8.0).contains(&growth),
+            "six times the points should give roughly six times the geometry, not \
+             {growth:.1} times ({coarse_vertices} to {fine_vertices} vertices)"
+        );
     }
 
     /// **No draw in either bench frame occludes, and that is the finding.**

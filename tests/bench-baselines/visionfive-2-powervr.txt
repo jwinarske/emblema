@@ -139,6 +139,8 @@ recording	full frame, mixed content	0.159	5.0
 recording	stacked, wash	0.079	5.0
 recording	stacked, plus panels	0.096	5.0
 recording	stacked interface	0.139	5.0
+recording	concave, 12 points	3.633	5.0
+recording	concave, 72 points	25.423	5.0
 vulkan:0 PowerVR B-Series BXE-4-32	distance field, 1 sample	26.790
 vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 4 samples	26.844
 vulkan:0 PowerVR B-Series BXE-4-32	tessellated, 1 sample	10.164
@@ -151,3 +153,5 @@ vulkan:0 PowerVR B-Series BXE-4-32	full frame, mixed content	64.019
 vulkan:0 PowerVR B-Series BXE-4-32	stacked, wash	43.190	2.0
 vulkan:0 PowerVR B-Series BXE-4-32	stacked, plus panels	74.078	2.0
 vulkan:0 PowerVR B-Series BXE-4-32	stacked interface	93.966	2.0
+vulkan:0 PowerVR B-Series BXE-4-32	concave, 12 points	5.608	2.0
+vulkan:0 PowerVR B-Series BXE-4-32	concave, 72 points	8.042	2.0
