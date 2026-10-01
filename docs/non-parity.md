@@ -912,11 +912,49 @@ appear as a stall when a pan lands many tiles at once, not as a lower frame rate
 And these are static-musl builds, which run about fourteen per cent slower than
 glibc on the workstation where both were timed; the shares are unaffected.
 
-**Impact.** A concave fill costs a CPU triangulation here and two draws plus a
-stencil attachment upstream. What this renderer's half costs is now measured on two
-boards and gated in both baselines; what upstream's half costs is still unmeasured on
-any hardware this project has, so which is dearer remains open -- but the question is
-now one measurement away rather than two. Fill rules are not affected -- lyon resolves non-zero and
+**Both halves are measured now, on one tiler, and triangulation wins there.** Probed
+2026-10-01 by drawing the concave grid the other way: a fan of `(center, p[i],
+p[i+1])` per star -- the geometry nonzero winding resolves in the stencil, overlapping
+where the star is concave -- then a cover quad over each shape's bounds.
+
+| | | triangulate | | stencil-shaped | | |
+|---|---|---|---|---|---|---|
+| device | points | cpu | gpu | cpu | gpu | winner |
+| x86-64 | 12 | 0.177 | 0.113 | 0.089 | 0.360 | triangulate, 35% |
+| x86-64 | 72 | 1.152 | 0.165 | 0.301 | 0.467 | **stencil, 42%** |
+| Pi 5 V3D | 12 | 0.538 | 1.456 | 0.280 | 4.437 | triangulate, 58% |
+| Pi 5 V3D | 72 | 4.019 | 2.033 | 0.912 | 5.682 | triangulate, 8% |
+
+The stencil shape costs a third of the processor -- 0.912 ms against 4.019 at
+seventy-two points on the Pi -- and two to three times the device. On a workstation
+with bandwidth to spare that trade pays off once a path is dense enough. **On V3D it
+does not pay at either density, and at seventy-two points it is close enough that the
+probe cannot call it: eight per cent, against an overestimate.**
+
+Two things make this a bound rather than a verdict. The probe draws the fan as a
+*colored* mesh, because the public API has no way to ask for a stencil-only pass, so
+it rasterizes the same fragments and additionally writes them -- the real stencil side
+is cheaper by some amount this cannot measure. And the second board was off the
+network when this ran, so PowerVR is unmeasured; it has the worst bandwidth here and
+the slowest processor, which pull opposite ways, so it is the interesting case and not
+a formality.
+
+What the probe does settle is the shape of the answer: **the crossover is real and it
+is a property of vertex density and of bandwidth, not of the renderer.** A sparse
+concave path is cheaper to triangulate on every device measured. A dense one is
+cheaper to stencil on a workstation and roughly a wash on V3D.
+
+It also names the prerequisite for building it rather than probing it. Nonzero winding
+needs a stencil that increments on front faces and decrements on back, or an invert
+for even-odd. `ClipRole` has one op per role -- `INCREMENT_AND_CLAMP` and
+`DECREMENT_AND_CLAMP`, single-sided -- and `Narrow`'s own documentation requires a
+triangulation rather than an overlapping fan, for exactly the reason a fan would break
+it: a pixel covered twice steps forward twice. So the route needs two-sided stencil
+state in the backends first.
+
+**Impact.** A concave fill costs a CPU triangulation here and two draws plus a stencil
+attachment upstream. Which is dearer depends on the path and the part, measured above
+for two of the three devices this project benches. Fill rules are not affected -- lyon resolves non-zero and
 even-odd as the stencil does, so a self-intersecting path fills the same either
 way, which is why nothing in `parity.md` or the corpus shows this. The visible
 consequences are elsewhere: a concave path's cost here scales with its vertex
