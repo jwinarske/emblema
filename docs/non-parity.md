@@ -1090,9 +1090,48 @@ which is 6.6 per cent of the frame. Culling that much of the ground saves about 
 ms of a 13.911 ms Vulkan frame -- **near five per cent**. The clear-color hoist does
 not apply at all, because the ground is a gradient and a clear is one color.
 
-So this is worth recording and is not worth building for this frame. The prize scales
-with how much opaque content a scene stacks, and nothing here measures a scene that
-stacks much: an interface with opaque panels over opaque backgrounds is where the
-number would be larger, and this repository has no such scene to measure. That is the
-same shape as entry 19 -- a real upstream mechanism whose value here is bounded by
-what the corpus and the bench actually draw.
+**The scene arrived, and the number is forty per cent.** `stacked interface` was added
+for exactly the case this entry describes, and both boards measured it: three opaque
+rectangles covering 94.1 per cent of the wash beneath them, so culling it saves about
+9.81 ms of a 24.509 ms frame on V3D and 40.6 of 93.966 on PowerVR -- forty and
+forty-three per cent, against five on the mixed frame. Two unrelated tile
+architectures, the same answer. So the earlier sentence here was right that the prize
+was a property of the scene, and wrong that this repository would not measure one.
+
+**And then the predicate found nothing to reorder, which is the real blocker.**
+`BatchDraw::occludes` admits a draw that replaces every sample it touches: an opaque
+`Material::Solid`, unclipped, `Src` or `SrcOver`, no color filter, `Modulate` tinting.
+Those conditions are not arbitrary -- each excludes a way alpha can arrive below one
+after the fact, and the analytic materials are the case it exists for, since
+`RoundedRect`, `Ellipse` and `RoundedRectBlur` compute coverage in the shader and blend
+it, so an opaque *color* still leaves a soft edge that a depth write would hide the
+background behind.
+
+Run over both bench frames, it admits **nothing at all**. Every rectangle in the
+stacked frame -- the bar, the sidebar, the panel and all eight rows, each a plain
+opaque `draw_rect` -- records as `Material::RoundedRect` with a radius of zero, because
+that is the route a rectangle takes here. `nothing_in_either_bench_frame_is_a_safe_occluder_yet`
+asserts the zero rather than leaving it as a remark, so whichever way out is taken has
+to fail that test and say which.
+
+So the obstacle is not depth state, and not a sort. **This renderer has no
+coverage-binary occluder to give a depth test**, and the two ways to get one are
+different pieces of work:
+
+- **A conservative interior.** Let an analytic shape occlude over an inset of itself --
+  a pixel or two in from its edge -- leaving the boundary to blend as it does now. The
+  reordering then needs each draw's geometry rather than a boolean, which is a larger
+  interface than `occludes` and the reason it is not one already.
+- **A tessellated route for an unrounded axis-aligned rectangle.** A radius of zero
+  through the analytic shader is paying for a distance field that computes a constant,
+  and a plain rect could take a solid fill whose coverage the rasterizer decides. That
+  would make these draws occlude outright and is the smaller change of the two, but it
+  moves a route that entries elsewhere in this file measure, so it wants its own
+  numbers first.
+
+Antialiasing is not the obstacle it looks like, and that is worth stating because it
+was the first thing checked. `Canvas::pass_samples` raises the whole pass's sample
+count when any draw asks for antialiasing, and no draw blends its own coverage for it,
+so an opaque solid fill is binary at every sample whether the pass is multisampled or
+not -- which is exactly what a depth test wants. A renderer that antialiased by
+blending coverage could not do this at all.
