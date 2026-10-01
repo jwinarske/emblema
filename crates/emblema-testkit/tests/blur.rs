@@ -184,23 +184,25 @@ fn transposing_the_scale_transposes_the_deviations() {
     );
 }
 
-/// A backdrop blur still takes the single factor, and stays round under a scale that
-/// is not.
+/// A backdrop blur is converted per axis too, and the field never had to change.
 ///
-/// `Layer::backdrop_blur` is one number, not a pair -- `with_backdrop_blur` takes one
-/// sigma and the field holds one -- so a caller cannot state an anisotropic backdrop
-/// blur and this cannot give them one. Under `scale(2, 3)` a backdrop blur of six
-/// records eighteen on *both* axes: the larger factor, applied twice. Under
-/// `scale(3, 2)` it records the same, so the two transforms are again
-/// indistinguishable here.
+/// `Layer::backdrop_blur` is one `f32` and `with_backdrop_blur` takes one sigma, so a
+/// caller states a blur that is round *in their own space*. Under a transform whose
+/// axes scale differently that is an oval in device space, and one number cannot hold
+/// an oval -- which is why this used to come out round, at the larger factor on both
+/// axes, where the same deviations on the layer itself stretched.
 ///
-/// Pinned rather than left implicit, because it is the last piece of what
-/// `docs/non-parity.md` 20 was about and the one place the old behavior survives.
-/// Making it right means making the field a pair, which changes a public type and is
-/// a decision rather than a correction -- so this test says what today does, and the
-/// entry says what it would take.
+/// `docs/non-parity.md` 20 said closing this meant making the field a pair and
+/// changing a published type. It did not. The field holds the caller's number and
+/// always did; what was wrong was converting it with one factor in
+/// `Layer::scaled_by`. It is now converted where it becomes an `ImageFilter::Blur`,
+/// which has two components to put the answer in, and the public API is untouched.
+///
+/// Six under `scale(2, 3)` reaches twelve across and eighteen down; under
+/// `scale(3, 2)` it reaches eighteen and twelve. Transposing the transform transposes
+/// the blur, which is the property that says one number is no longer collapsing two.
 #[test]
-fn a_backdrop_blur_stays_round_under_an_anisotropic_scale() {
+fn a_backdrop_blur_is_converted_per_axis() {
     use emblema_core::{Canvas, Color, Extent2D, Layer, Paint, Rect};
 
     let recorded = |sx: f32, sy: f32| -> Vec<f32> {
@@ -237,15 +239,18 @@ fn a_backdrop_blur_stays_round_under_an_anisotropic_scale() {
             .collect()
     };
 
+    let wide = recorded(2.0, 3.0);
+    let tall = recorded(3.0, 2.0);
     assert_eq!(
-        recorded(2.0, 3.0),
-        vec![18.0, 18.0],
-        "six times the larger factor, on both axes"
+        wide,
+        vec![12.0, 18.0],
+        "six by two across and by three down"
     );
-    assert_eq!(
-        recorded(3.0, 2.0),
-        recorded(2.0, 3.0),
-        "and transposing the scale changes nothing, which is what a single number \
-         cannot help doing"
+    assert_eq!(tall, vec![18.0, 12.0], "and the other way round");
+    assert_ne!(
+        wide, tall,
+        "transposing the scale has to transpose the backdrop blur. Equal here, at the \
+         larger factor on both axes, is what docs/non-parity.md 20 recorded before \
+         this was converted where it becomes a filter"
     );
 }

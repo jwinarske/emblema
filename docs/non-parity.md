@@ -974,7 +974,7 @@ stops takes, and the measurement there says this renderer already takes the chea
 one. A vertex-interpolated path sidesteps both rather than improving either, and
 only for the axis-aligned rect case the predicate admits.
 
-## 20. A blur's deviations scale per axis; a backdrop blur's single number cannot
+## 20. A blur's deviations scale per axis, and so does a backdrop blur's single number
 
 **Closed for the pair, open for the one number, and the pair is why this entry
 exists.** `dart:ui` states a deviation per axis in the caller's space, and something
@@ -996,25 +996,31 @@ rather than fixed for one commit because no corpus scene blurred a layer under a
 anisotropic scale, and the scene comes before the fix here or the change is
 unmeasured.
 
-**What remains is `Layer::backdrop_blur`, and it is a public type rather than a
-mistake.** The field is one `f32` and `with_backdrop_blur` takes one sigma, so a
-caller cannot state an anisotropic backdrop blur and this cannot give them one. It
-keeps the single largest factor: a backdrop blur of six under `scale(2, 3)` records
-eighteen on *both* axes, and under `scale(3, 2)` records the same. So a frosted panel
-under an anisotropic scale is blurred round here where the same deviations on the
-layer itself would stretch, and the two transforms are again indistinguishable.
+**`Layer::backdrop_blur` was the last of it, and closing it needed no API change
+after all.** This entry said it did: the field is one `f32` and `with_backdrop_blur`
+takes one sigma, so the reasoning was that an anisotropic backdrop blur is not
+expressible and making it so means making the field a pair. That conflated what the
+caller states with what the renderer converts it to.
 
-Making that right means making the field a pair, which changes a published type and
-wants its own decision -- the isotropic spelling is also the one nearly every caller
-wants, and `save_layer_backdrop` already takes a full `ImageFilter` for anything
-else, so an anisotropic backdrop blur is expressible today by a caller who asks for
-it that way. `a_backdrop_blur_stays_round_under_an_anisotropic_scale` pins what it
-does now.
+One number is the right thing for a caller to state -- it means a blur that is round
+*in their own space*, which is what nearly every caller wants. A round blur under a
+transform whose axes scale differently is an oval in device space, and the mistake was
+converting it to one number of device pixels: `Layer::scaled_by` multiplied it by the
+single largest factor, so a frosted panel came out round at the larger scale on both
+axes while the same deviations on the layer itself stretched, and `scale(2, 3)` and
+`scale(3, 2)` were again indistinguishable.
 
-**Impact.** For the pair, none against upstream: they agree under every transform
-`BlurBasis` can decompose. For the backdrop, a blur that should stretch stays round,
-bounded to a backdrop blur stated as a single sigma under a transform whose axes
-scale differently.
+The field now stays in the caller's space and `open_layer` converts it where it becomes
+an `ImageFilter::Blur`, which has two components to put the answer in. Six under
+`scale(2, 3)` reaches twelve across and eighteen down, and transposing the transform
+transposes the blur. Nothing between the two points reads it as a length -- its only
+other uses are `> 0.0` tests asking whether a backdrop is wanted at all -- and the
+public API is untouched. `a_backdrop_blur_is_converted_per_axis` pins it.
+
+**Impact.** None against upstream, under every transform `BlurBasis` can decompose:
+the layer's deviations, a dilation's radii and a backdrop blur all take the length of
+each transformed basis vector, as upstream's `ExtractScale` does. What is left is the
+shear and perspective fallback entry 17 records, which both filters share.
 
 Three tests hold it, written the way entry 17's were:
 
@@ -1024,7 +1030,8 @@ Three tests hold it, written the way entry 17's were:
 - `transposing_the_scale_transposes_the_deviations` is the property the single factor
   destroyed, and is built from a `Canvas` because the two halves have to be recorded
   in one test to be compared.
-- `a_backdrop_blur_stays_round_under_an_anisotropic_scale` pins what is left.
+- `a_backdrop_blur_is_converted_per_axis` pins the last of it, and the transposition
+  as well: twelve and eighteen one way, eighteen and twelve the other.
 
 The scene's deviations are small deliberately, and entry 6 is why: a deviation drives
 the reduction as well as the blur, so a scene crossing a halving threshold would move
