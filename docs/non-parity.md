@@ -912,37 +912,54 @@ appear as a stall when a pan lands many tiles at once, not as a lower frame rate
 And these are static-musl builds, which run about fourteen per cent slower than
 glibc on the workstation where both were timed; the shares are unaffected.
 
-**Both halves are measured now, on one tiler, and triangulation wins there.** Probed
-2026-10-01 by drawing the concave grid the other way: a fan of `(center, p[i],
+**Both halves are measured now, on four parts, and there is a crossover on every one.**
+Probed 2026-10-01 by drawing the concave grid the other way: a fan of `(center, p[i],
 p[i+1])` per star -- the geometry nonzero winding resolves in the stencil, overlapping
-where the star is concave -- then a cover quad over each shape's bounds.
+where the star is concave -- then a cover quad over each shape's bounds. Point counts
+swept from six to a hundred and ninety-two over the same grid, so area is fixed and
+only the geometry grows.
 
-| | | triangulate | | stencil-shaped | | |
-|---|---|---|---|---|---|---|
-| device | points | cpu | gpu | cpu | gpu | winner |
-| x86-64 | 12 | 0.177 | 0.113 | 0.089 | 0.360 | triangulate, 35% |
-| x86-64 | 72 | 1.152 | 0.165 | 0.301 | 0.467 | **stencil, 42%** |
-| Pi 5 V3D | 12 | 0.538 | 1.456 | 0.280 | 4.437 | triangulate, 58% |
-| Pi 5 V3D | 72 | 4.019 | 2.033 | 0.912 | 5.682 | triangulate, 8% |
+Totals, processor plus device, in milliseconds:
 
-The stencil shape costs a third of the processor -- 0.912 ms against 4.019 at
-seventy-two points on the Pi -- and two to three times the device. On a workstation
-with bandwidth to spare that trade pays off once a path is dense enough. **On V3D it
-does not pay at either density, and at seventy-two points it is close enough that the
-probe cannot call it: eight per cent, against an overestimate.**
+| points | x86-64 | | Pi 5 V3D | | Adreno 640 | | i.MX8MP A53 cpu only | |
+|---|---|---|---|---|---|---|---|---|
+| | tri | stc | tri | stc | tri | stc | tri | stc |
+| 6 | 0.204 | 0.400 | 1.611 | 4.402 | 2.728 | 7.837 | 1.662 | 1.130 |
+| 12 | 0.290 | 0.437 | 1.993 | 4.723 | 3.351 | 8.320 | 3.094 | 1.553 |
+| 24 | 0.464 | 0.493 | 2.672 | 5.139 | 4.269 | 8.896 | 6.222 | 2.113 |
+| 48 | 0.834 | **0.604** | 4.223 | 5.884 | 6.185 | 10.404 | 12.497 | 3.311 |
+| 96 | 1.768 | **0.793** | 8.017 | **7.184** | 10.819 | 13.306 | 28.809 | 5.679 |
+| 192 | 4.690 | **1.158** | 18.782 | **9.590** | 23.333 | **16.800** | 74.995 | 9.758 |
 
-Two things make this a bound rather than a verdict. The probe draws the fan as a
-*colored* mesh, because the public API has no way to ask for a stencil-only pass, so
-it rasterizes the same fragments and additionally writes them -- the real stencil side
-is cheaper by some amount this cannot measure. And the second board was off the
-network when this ran, so PowerVR is unmeasured; it has the worst bandwidth here and
-the slowest processor, which pull opposite ways, so it is the interesting case and not
-a formality.
+**The crossover exists on all three parts with a device half, and it moves with the
+processor-to-device ratio:** between twenty-four and forty-eight points on x86-64,
+between forty-eight and ninety-six on V3D, between ninety-six and a hundred and
+ninety-two on an Adreno 640. Below it, triangulating is cheaper everywhere measured;
+above it, the stencil shape is, by twenty-eight to seventy-five per cent.
 
-What the probe does settle is the shape of the answer: **the crossover is real and it
-is a property of vertex density and of bandwidth, not of the renderer.** A sparse
-concave path is cheaper to triangulate on every device measured. A dense one is
-cheaper to stencil on a workstation and roughly a wash on V3D.
+The mechanism is the same on each: the stencil shape costs a quarter to a third of the
+processor -- 2.361 ms against 15.919 at a hundred and ninety-two points on the Pi --
+and two to three times the device, because a fan over a concave star rasterizes
+fragments the star does not cover. Which term dominates is a property of the part.
+
+The i.MX8MP's A53 shows the processor half alone and shows it hardest: 74.995 ms to
+triangulate one frame of a hundred and sixty dense stars, against 9.758 to fan them.
+Its Vulkan could not supply the other half -- the driver takes SIGSEGV on the first
+timed row, exit 139, `sig=11` -- and no GLES device enumerates there, so the board
+bounds the processor term and says nothing about the device one.
+
+Three things keep this a bound rather than a verdict. The probe draws the fan as a
+*colored* mesh, because the public API cannot ask for a stencil-only pass, so it
+rasterizes the same fragments and additionally writes them -- the real stencil side is
+cheaper by an amount this cannot measure, which moves every crossover above *down*.
+The Adreno numbers were taken with twenty-eight per cent background load on a working
+vehicle board and its device rows are marked noisy, so its crossover is the least
+certain of the three. And the VisionFive 2 was off the network, so PowerVR -- the worst
+bandwidth and the slowest in-order processor here, pulling opposite ways -- is
+unmeasured.
+
+What the probe settles is the shape of the answer: **the crossover is real, and it
+belongs to vertex density and to the part rather than to the renderer.**
 
 It also names the prerequisite for building it rather than probing it. Nonzero winding
 needs a stencil that increments on front faces and decrements on back, or an invert
