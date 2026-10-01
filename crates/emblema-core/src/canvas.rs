@@ -985,23 +985,31 @@ impl Layer {
     /// each use -- the transform that decides it is the one in force when the
     /// layer is opened, and it may be gone by the time the layer is composited.
     ///
-    /// **Every length stated per axis takes the axis factors; the one stated as a
-    /// single number cannot.** A blur's deviations and a morphology's radii are
-    /// pairs, and each component takes the length of its own transformed basis
-    /// vector -- which is what upstream's `ExtractScale` and `TransformDirection`
-    /// take. `backdrop_blur` is one number by public API, so a caller cannot
-    /// state an anisotropic backdrop blur and this cannot give them one: it keeps
-    /// the single largest factor, and under an anisotropic scale it stays round
-    /// where the same blur on the layer itself would stretch. `non-parity.md` 20
-    /// records that as what is left, and why making the field a pair is an API
-    /// decision rather than a correction.
+    /// **Every length stated per axis takes the axis factors, and the one stated
+    /// as a single number is converted elsewhere.** A blur's deviations and a
+    /// morphology's radii are pairs, and each component takes the length of its
+    /// own transformed basis vector -- which is what upstream's `ExtractScale`
+    /// and `TransformDirection` take.
+    ///
+    /// `backdrop_blur` is deliberately *not* converted here, and the reason is
+    /// that it cannot be. It is one number, so a caller states a blur that is
+    /// round in their own space -- and a round blur under an anisotropic scale is
+    /// an oval in device space, which one number cannot hold. Multiplying it by a
+    /// single factor here is what used to happen and is what made a frosted panel
+    /// stay round under `scale(2, 3)` while the same deviations on the layer
+    /// itself stretched. So the field stays in the caller's space and
+    /// `open_layer` converts it per axis at the point it becomes an
+    /// `ImageFilter::Blur`, which has two components to put the answer in.
+    ///
+    /// Nothing between here and there reads it as a length: the two other uses
+    /// are `> 0.0` tests asking whether a backdrop is wanted at all.
     fn scaled_by(self, scale: f32, axes: Vec2) -> Self {
         if !scale.is_finite() || scale <= 0.0 {
             return self;
         }
         Self {
             blur: self.blur * axes,
-            backdrop_blur: self.backdrop_blur * scale,
+            backdrop_blur: self.backdrop_blur,
             // A morphology radius is a length in the caller's space too, and was
             // the one filter left out of this conversion -- on the stated
             // grounds that upstream had no morphology to be in parity with,
@@ -1647,11 +1655,20 @@ impl Canvas {
         let region = region.unwrap_or(parent);
         // The layer's own sigma is the `Copy`-friendly spelling of the same
         // thing, so it becomes a filter here and there is one path below.
+        //
+        // And this is where it is converted into device pixels, because this is
+        // the first place with two components to convert it into. `Layer::scaled_by`
+        // leaves it alone for that reason: the caller stated one number, meaning a
+        // blur round in their space, and under a transform whose axes scale
+        // differently that is an oval. A filter handed over by the caller is
+        // already converted -- `save_layer_filtered` and the backdrop entry points
+        // run it through `ImageFilter::scaled_by` -- so only this arm converts.
+        let axes = axis_scales_of(self.transform);
         let asked = match backdrop {
             Some(filter) => filter.clone(),
             None if layer.backdrop_blur > 0.0 => ImageFilter::Blur {
-                sigma_x: layer.backdrop_blur,
-                sigma_y: layer.backdrop_blur,
+                sigma_x: layer.backdrop_blur * axes.x,
+                sigma_y: layer.backdrop_blur * axes.y,
             },
             None => ImageFilter::None,
         };

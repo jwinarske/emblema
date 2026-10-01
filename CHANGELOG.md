@@ -60,13 +60,17 @@ apart. Each component now takes the length of its own transformed basis vector, 
 upstream's `ExtractScale` does: twelve and six one way, eighteen and four the other.
 **This changes what a blurred layer draws under an anisotropic scale.**
 
-`Layer::backdrop_blur` is what remains, and it is a public type rather than an
-oversight: the field is one `f32` and `with_backdrop_blur` takes one sigma, so a
-caller cannot state an anisotropic backdrop blur and this does not invent one. It
-keeps the largest factor and stays round where the same deviations on the layer
-itself would stretch. `docs/non-parity.md` 20 has what changing it would cost, and
-`save_layer_backdrop` already takes a full `ImageFilter` for a caller who wants
-something else.
+**A backdrop blur is converted per axis too, and the field did not have to change.**
+`Layer::backdrop_blur` is one `f32` and `with_backdrop_blur` takes one sigma, which is
+the right thing for a caller to state: it means a blur round in *their* space. A round
+blur under a transform whose axes scale differently is an oval in device space, and the
+defect was converting it to a single number of device pixels -- so a frosted panel came
+out round at the larger factor on both axes while the same deviations on the layer
+stretched. The field now stays in the caller's space and `open_layer` converts it where
+it becomes an `ImageFilter::Blur`, which has two components to hold the answer. **This
+changes what a backdrop blur draws under an anisotropic scale**: six under `scale(2, 3)`
+reaches twelve across and eighteen down rather than eighteen on both. The public API is
+unchanged, and `docs/non-parity.md` 20 is closed.
 
 `emblema_present_drm::pacing` counts the vertical blanks a frame loop did not land
 on, from the sequence the kernel reports with each completed flip -- which the event
