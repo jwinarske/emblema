@@ -912,11 +912,100 @@ appear as a stall when a pan lands many tiles at once, not as a lower frame rate
 And these are static-musl builds, which run about fourteen per cent slower than
 glibc on the workstation where both were timed; the shares are unaffected.
 
-**Impact.** A concave fill costs a CPU triangulation here and two draws plus a
-stencil attachment upstream. What this renderer's half costs is now measured on two
-boards and gated in both baselines; what upstream's half costs is still unmeasured on
-any hardware this project has, so which is dearer remains open -- but the question is
-now one measurement away rather than two. Fill rules are not affected -- lyon resolves non-zero and
+**Both halves are measured now, on four parts, and there is a crossover on every one.**
+Probed 2026-10-01 by drawing the concave grid the other way: a fan of `(center, p[i],
+p[i+1])` per star -- the geometry nonzero winding resolves in the stencil, overlapping
+where the star is concave -- then a cover quad over each shape's bounds. Point counts
+swept from six to a hundred and ninety-two over the same grid, so area is fixed and
+only the geometry grows.
+
+Totals, processor plus device, in milliseconds:
+
+| points | x86-64 | | Pi 5 V3D | | Adreno 640 | | i.MX8MP A53 cpu only | |
+|---|---|---|---|---|---|---|---|---|
+| | tri | stc | tri | stc | tri | stc | tri | stc |
+| 6 | 0.204 | 0.400 | 1.611 | 4.402 | 2.728 | 7.837 | 1.662 | 1.130 |
+| 12 | 0.290 | 0.437 | 1.993 | 4.723 | 3.351 | 8.320 | 3.094 | 1.553 |
+| 24 | 0.464 | 0.493 | 2.672 | 5.139 | 4.269 | 8.896 | 6.222 | 2.113 |
+| 48 | 0.834 | **0.604** | 4.223 | 5.884 | 6.185 | 10.404 | 12.497 | 3.311 |
+| 96 | 1.768 | **0.793** | 8.017 | **7.184** | 10.819 | 13.306 | 28.809 | 5.679 |
+| 192 | 4.690 | **1.158** | 18.782 | **9.590** | 23.333 | **16.800** | 74.995 | 9.758 |
+
+**The crossover exists on all three parts with a device half, and it moves with the
+processor-to-device ratio:** between twenty-four and forty-eight points on x86-64,
+between forty-eight and ninety-six on V3D, between ninety-six and a hundred and
+ninety-two on an Adreno 640. Below it, triangulating is cheaper everywhere measured;
+above it, the stencil shape is, by twenty-eight to seventy-five per cent.
+
+The mechanism is the same on each: the stencil shape costs a quarter to a third of the
+processor -- 2.361 ms against 15.919 at a hundred and ninety-two points on the Pi --
+and two to three times the device, because a fan over a concave star rasterizes
+fragments the star does not cover. Which term dominates is a property of the part.
+
+The i.MX8MP's A53 shows the processor half alone and shows it hardest: 74.995 ms to
+triangulate one frame of a hundred and sixty dense stars, against 9.758 to fan them.
+Its Vulkan could not supply the other half -- the driver takes SIGSEGV on the first
+timed row, exit 139, `sig=11` -- and no GLES device enumerates there, so the board
+bounds the processor term and says nothing about the device one.
+
+Three things keep this a bound rather than a verdict. The probe draws the fan as a
+*colored* mesh, because the public API cannot ask for a stencil-only pass, so it
+rasterizes the same fragments and additionally writes them -- the real stencil side is
+cheaper by an amount this cannot measure, which moves every crossover above *down*.
+The Adreno numbers were taken with twenty-eight per cent background load on a working
+vehicle board and its device rows are marked noisy, so its crossover is the least
+certain of the three. And the VisionFive 2 was off the network, so PowerVR -- the worst
+bandwidth and the slowest in-order processor here, pulling opposite ways -- is
+unmeasured.
+
+What the probe settles is the shape of the answer: **the crossover is real, and it
+belongs to vertex density and to the part rather than to the renderer.**
+
+**And a real map never reaches it.** The point counts above are per shape, so the
+question is where map geometry sits on that axis. Decoded from the tile this entry
+measured -- `protomaps-berlin-14-8802-5373.mvt`, counting polygon rings out of the
+command stream:
+
+| tile | rings | median | p90 | p99 | max |
+|---|---|---|---|---|---|
+| protomaps berlin z14 | 1,185 | 7 | 21 | 54 | **104** |
+| streets z10 | 2,109 | 4 | -- | 123 | 1,244 |
+| real-world z0 | 4,875 | 2 | -- | 15 | 566 |
+
+Half the Berlin tile's rings are under eight points and eighty-one per cent under
+sixteen; seven rings of 1,185 pass sixty-four, and none passes 104. A median of seven
+is where triangulating wins by sixty-three per cent on V3D, and even the
+ninety-ninth percentile at fifty-four is below that part's crossover. **So for tile
+geometry, triangulating is the right route on every part measured, and the stencil
+would not have helped.**
+
+That also corrects the reading of the nineteen milliseconds this entry opens with. It
+is not a few dense rings; it is 1,185 sparse ones. Many cheap triangulations rather
+than few expensive ones -- and stencil-then-cover would answer it with 1,185 fans and
+1,185 cover draws, which is the direction that costs more on a tiler.
+
+Two things pull the other way and neither is enough. The star the probe draws is
+pessimal for the stencil route -- an inner radius of 0.4 makes its fan overdraw
+heavily, where a building footprint is closer to convex and would overdraw less, moving
+every crossover down. And the denser outliers are real: `streets-10` carries a
+1,244-point ring, past every crossover here. But that is one ring in two thousand.
+
+One limit on all of this: these are tiles, which are simplified per zoom by the format's
+own design. Unsimplified source geometry -- a coastline, an administrative boundary --
+is far denser and would sit well past every crossover. A renderer consumes tiles, so
+that case arrives only if something upstream of it stops simplifying.
+
+It also names the prerequisite for building it rather than probing it. Nonzero winding
+needs a stencil that increments on front faces and decrements on back, or an invert
+for even-odd. `ClipRole` has one op per role -- `INCREMENT_AND_CLAMP` and
+`DECREMENT_AND_CLAMP`, single-sided -- and `Narrow`'s own documentation requires a
+triangulation rather than an overlapping fan, for exactly the reason a fan would break
+it: a pixel covered twice steps forward twice. So the route needs two-sided stencil
+state in the backends first.
+
+**Impact.** A concave fill costs a CPU triangulation here and two draws plus a stencil
+attachment upstream. Which is dearer depends on the path and the part, measured above
+for two of the three devices this project benches. Fill rules are not affected -- lyon resolves non-zero and
 even-odd as the stencil does, so a self-intersecting path fills the same either
 way, which is why nothing in `parity.md` or the corpus shows this. The visible
 consequences are elsewhere: a concave path's cost here scales with its vertex
