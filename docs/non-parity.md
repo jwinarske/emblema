@@ -988,9 +988,44 @@ geometry and was not worth resolving before a path exists to select. The corpus
 checks pictures in any case, and a vertex-interpolated wash is meant to produce
 the same one.
 
-So: an axis-aligned rect gradient in the bench comes first, because without one
-there is nothing to time a change against. Then the path, whose predicate is cheap
-and whose geometry is the sections upstream already describes. The paint block's
+**Built and reverted on 2026-10-01, and the measurement is why it is worth writing
+down.** The path is about a hundred lines and needs no shader: a section's vertices
+carry premultiplied stop colors and the material is a white solid under `Modulate`,
+which is the identity against them, so the interpolated vertex color is the result --
+the arrangement `draw_vertices` already uses for a caller's mesh.
+
+It works. Rendered against the shader route over identical geometry -- the same
+rectangle drawn as a path, which the fast branch does not see -- the pictures agree to
+**2/255 worst and 0.74 mean** over 65,536 channels, on a strong ramp and on a
+0.50-to-0.52 gray. On x86-64 `stacked, wash` went **1.370 ms to 0.709**, and its
+recording cost to zero, since a five-stop wash no longer bakes a 256-texel ramp.
+
+Three things stopped it, and none is the arithmetic:
+
+- **The 2/255 is the dither, and the dither is the point.** §3 records that both
+  gradient paths here dither deliberately, and a vertex-interpolated one has no shader
+  to dither in. `dithering_tracks_a_gradient_better_than_rounding_does` fails on it:
+  dithering measured *worse* than rounding, 0.000574 against 0.000543, because there
+  was none. Closing that means a material that dithers an interpolated vertex color,
+  which is a shader change rather than a route.
+- **It makes `BatchDraw::occludes` unsound.** That predicate admits
+  `Material::Solid` with opaque alpha, on the reasoning that a solid fill carries no
+  per-vertex color -- which was true until this path produced exactly that pairing
+  with colors that may be translucent. `BatchDraw` cannot see the vertex buffer, so
+  the fix is an interface change, and entry 21 depends on that predicate.
+- **Several tests pin the structure it changes**, beyond the two above: a recording's
+  ramp count, a mask blur over a gradient, a runtime-effect filter, and every corpus
+  scene's cost row. The mask blur one was a real defect in the attempt rather than a
+  pinned invariant -- the fast path went straight to the batch and skipped
+  `draw_masked`, so the shape drew sharp and unmasked.
+
+So the order is: a dithering material first, then the predicate's interface, then this.
+Reverted rather than carried, because a half-landed route that silently drops dither is
+worse than none.
+
+The remaining prerequisite, before any of that: an axis-aligned rect gradient in the
+bench, which `stacked, wash` now is. Then the path, whose predicate is cheap and whose
+geometry is the sections upstream already describes. The paint block's
 four stops do not bound it — the sections are geometry, so a vertex-interpolated
 wash is not limited the way the fragment walk is.
 
