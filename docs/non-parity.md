@@ -961,6 +961,40 @@ unmeasured.
 What the probe settles is the shape of the answer: **the crossover is real, and it
 belongs to vertex density and to the part rather than to the renderer.**
 
+**And a real map never reaches it.** The point counts above are per shape, so the
+question is where map geometry sits on that axis. Decoded from the tile this entry
+measured -- `protomaps-berlin-14-8802-5373.mvt`, counting polygon rings out of the
+command stream:
+
+| tile | rings | median | p90 | p99 | max |
+|---|---|---|---|---|---|
+| protomaps berlin z14 | 1,185 | 7 | 21 | 54 | **104** |
+| streets z10 | 2,109 | 4 | -- | 123 | 1,244 |
+| real-world z0 | 4,875 | 2 | -- | 15 | 566 |
+
+Half the Berlin tile's rings are under eight points and eighty-one per cent under
+sixteen; seven rings of 1,185 pass sixty-four, and none passes 104. A median of seven
+is where triangulating wins by sixty-three per cent on V3D, and even the
+ninety-ninth percentile at fifty-four is below that part's crossover. **So for tile
+geometry, triangulating is the right route on every part measured, and the stencil
+would not have helped.**
+
+That also corrects the reading of the nineteen milliseconds this entry opens with. It
+is not a few dense rings; it is 1,185 sparse ones. Many cheap triangulations rather
+than few expensive ones -- and stencil-then-cover would answer it with 1,185 fans and
+1,185 cover draws, which is the direction that costs more on a tiler.
+
+Two things pull the other way and neither is enough. The star the probe draws is
+pessimal for the stencil route -- an inner radius of 0.4 makes its fan overdraw
+heavily, where a building footprint is closer to convex and would overdraw less, moving
+every crossover down. And the denser outliers are real: `streets-10` carries a
+1,244-point ring, past every crossover here. But that is one ring in two thousand.
+
+One limit on all of this: these are tiles, which are simplified per zoom by the format's
+own design. Unsimplified source geometry -- a coastline, an administrative boundary --
+is far denser and would sit well past every crossover. A renderer consumes tiles, so
+that case arrives only if something upstream of it stops simplifying.
+
 It also names the prerequisite for building it rather than probing it. Nonzero winding
 needs a stencil that increments on front faces and decrements on back, or an invert
 for even-odd. `ClipRole` has one op per role -- `INCREMENT_AND_CLAMP` and
