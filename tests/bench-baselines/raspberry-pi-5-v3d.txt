@@ -428,6 +428,8 @@ recording	full frame, mixed content	0.018	10.0
 recording	stacked, wash	0.009	15.0
 recording	stacked, plus panels	0.011	15.0
 recording	stacked interface	0.016	15.0
+recording	concave, 12 points	0.531	5.0
+recording	concave, 72 points	4.039	5.0
 vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.205	2.0
 vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
 vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.692	2.0
@@ -440,6 +442,8 @@ vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.911	2.0
 vulkan:0 V3D 7.1.7.0	stacked, wash	10.424	2.0
 vulkan:0 V3D 7.1.7.0	stacked, plus panels	18.766	2.0
 vulkan:0 V3D 7.1.7.0	stacked interface	24.509	2.0
+vulkan:0 V3D 7.1.7.0	concave, 12 points	1.452	2.0
+vulkan:0 V3D 7.1.7.0	concave, 72 points	2.025	2.0
 gles V3D 7.1.7.0	distance field, 1 sample	8.551
 gles V3D 7.1.7.0	tessellated, 4 samples	5.465
 gles V3D 7.1.7.0	tessellated, 1 sample	3.642
@@ -452,3 +456,5 @@ gles V3D 7.1.7.0	full frame, mixed content	14.866
 gles V3D 7.1.7.0	stacked, wash	11.772
 gles V3D 7.1.7.0	stacked, plus panels	20.494
 gles V3D 7.1.7.0	stacked interface	26.351
+gles V3D 7.1.7.0	concave, 12 points	1.536
+gles V3D 7.1.7.0	concave, 72 points	2.048

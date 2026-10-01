@@ -878,6 +878,30 @@ in-order U74 -- so the ceiling is a property of the work rather than of the part
 The *absolute* does move, by 3.7x between the two extremes, and nineteen
 milliseconds for one tile is past a whole frame at sixty hertz.
 
+**The bench has concave rows now, and they say the same thing from inside the
+project.** The measurement above came from an external vector tile because nothing
+this bench drew reached the general triangulator: the comparison rows are rounded
+rectangles, which `fill` sends to a fan, and the two frames are rectangles, gradients
+and blurs. `concave, 12 points` and `concave, 72 points` are a hundred and sixty
+concave stars over the same grid the comparison rows use -- the same area, six times
+the geometry -- and they are aliased so they stay on the triangulator rather than on
+the distance field.
+
+| config | cpu at 12 | cpu at 72 | gpu at 12 | gpu at 72 | cpu share, 12 -> 72 |
+|---|---|---|---|---|---|
+| Pi 5, Vulkan | 0.531 ms | 4.039 | 1.452 | 2.025 | 27% -> **67%** |
+| Pi 5, GLES | 0.531 | 4.039 | 1.536 | 2.048 | 26% -> **66%** |
+| VisionFive 2 | 3.633 | 25.423 | 5.608 | 8.042 | 39% -> **76%** |
+
+Six times the points costs 6.9 to 7.6 times the processor and 1.3 to 1.4 times the
+device, on three configurations across two architectures. That is this entry's claim
+stated as a measurement rather than as a mechanism: **a concave fill's cost scales
+with its vertex count on the processor and with its area on the device**, and which
+half a frame is paid from therefore depends on the path rather than on the renderer.
+At seventy-two points the VisionFive 2 spends 25.4 ms triangulating one frame, which
+is past a sixty hertz budget before the device has drawn anything -- the same order as
+the 19 ms that one Berlin tile cost, now reproducible from `cargo xtask bench`.
+
 Four things that keep this from being a case for stencil-then-cover on its own.
 It is a ceiling and not a saving: the stencil trades that CPU for a second draw
 and an attachment, which a tiler does not give away. Vector tile geometry carries
@@ -889,8 +913,10 @@ And these are static-musl builds, which run about fourteen per cent slower than
 glibc on the workstation where both were timed; the shares are unaffected.
 
 **Impact.** A concave fill costs a CPU triangulation here and two draws plus a
-stencil attachment upstream, and which is dearer is unmeasured on any hardware
-this project has. Fill rules are not affected -- lyon resolves non-zero and
+stencil attachment upstream. What this renderer's half costs is now measured on two
+boards and gated in both baselines; what upstream's half costs is still unmeasured on
+any hardware this project has, so which is dearer remains open -- but the question is
+now one measurement away rather than two. Fill rules are not affected -- lyon resolves non-zero and
 even-odd as the stencil does, so a self-intersecting path fills the same either
 way, which is why nothing in `parity.md` or the corpus shows this. The visible
 consequences are elsewhere: a concave path's cost here scales with its vertex

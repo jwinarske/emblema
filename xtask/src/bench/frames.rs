@@ -247,6 +247,97 @@ impl Frame {
 pub(super) const FRAME_STAGES: [Frame; 4] =
     [Frame::Ground, Frame::Cards, Frame::Shadows, Frame::All];
 
+/// How many concave polygons the concave rows draw, and how many points each has.
+///
+/// Laid out on the same sixteen-by-ten grid `shapes()` uses, so the two concave
+/// rows cover the same area as each other and as the comparison rows above. The
+/// point counts differ by six times and the area does not, which is the whole
+/// design: `non-parity.md` 18 claims a concave fill's cost here scales with its
+/// vertex count on the CPU and with its area on the GPU, and two rows that hold
+/// one of those fixed while multiplying the other is what tests it.
+///
+/// Twelve and seventy-two rather than rounder numbers because a star needs an even
+/// count -- a point and a notch per pair -- and because seventy-two across a
+/// hundred and sixty shapes is 11,520 points, within sight of the 13,795 in the
+/// Berlin tile that entry measured, so the figures are comparable to the ones
+/// already recorded there.
+pub(super) const CONCAVE_POINTS: [usize; 2] = [12, 72];
+
+/// A star polygon inscribed in `bounds`, with `points` vertices.
+///
+/// Concave by construction, which is the property that matters: a convex path goes
+/// to a fan and never reaches the general triangulator, so a convex scene could not
+/// show what triangulation costs. Alternating radii put every other vertex at forty
+/// per cent of the way out, which is a notch deep enough that no two adjacent edges
+/// are collinear at any count this uses.
+///
+/// Straight edges only, no curves. That matches the vector-tile geometry entry 18
+/// measured against, and the entry notes why it matters: flattening a curve is CPU
+/// work too, so a curve-heavy path would shift the share away from triangulation and
+/// make the comparison say something else.
+fn star(bounds: Rect, points: usize) -> emblema_core::Path {
+    let center = Vec2::new(
+        (bounds.left + bounds.right) * 0.5,
+        (bounds.top + bounds.bottom) * 0.5,
+    );
+    let outer = Vec2::new(
+        (bounds.right - bounds.left) * 0.5,
+        (bounds.bottom - bounds.top) * 0.5,
+    );
+    let mut builder = emblema_core::Path::builder();
+    for i in 0..points {
+        let t = i as f32 / points as f32 * std::f32::consts::TAU;
+        let reach = if i % 2 == 0 { 1.0 } else { 0.4 };
+        let at = Vec2::new(
+            center.x + outer.x * reach * t.cos(),
+            center.y + outer.y * reach * t.sin(),
+        );
+        if i == 0 {
+            builder.move_to(at);
+        } else {
+            builder.line_to(at);
+        }
+    }
+    builder.close();
+    builder.build()
+}
+
+/// How a concave row names itself.
+pub(super) fn concave_name(points: usize) -> &'static str {
+    match points {
+        12 => "concave, 12 points",
+        72 => "concave, 72 points",
+        _ => "concave",
+    }
+}
+
+/// A hundred and sixty concave polygons, each with `points` vertices.
+///
+/// The scene `non-parity.md` 18 was missing. That entry is the deepest divergence in
+/// the file -- upstream resolves a filled path's winding in the stencil buffer and
+/// this renderer triangulates it on the CPU -- and its cost was measured on a Berlin
+/// vector tile rather than on anything this bench draws, because nothing this bench
+/// draws reaches the general triangulator at all. The comparison rows are rounded
+/// rectangles, which `fill` sends to a fan; the two frames are rectangles, gradients
+/// and blurs. A concave fill had no row.
+///
+/// Aliased, and the reason is the same one the tessellated comparison rows give: the
+/// analytic route declines a paint that asked for no antialiasing, so turning it off
+/// is what keeps this scene on the triangulator rather than quietly measuring a
+/// distance field. It also keeps the pass at one sample, so the GPU side is fill and
+/// not a resolve.
+pub(super) fn concave(points: usize) -> Recording {
+    let mut canvas = Canvas::new(EXTENT);
+    canvas.clear(Color::BLACK);
+    let paint = Paint::fill(Color::srgb(0.28, 0.52, 0.86, 1.0)).with_anti_alias(false);
+    for bounds in shapes() {
+        canvas
+            .draw_path(&star(bounds, points), &paint)
+            .expect("a concave fill");
+    }
+    canvas.finish()
+}
+
 /// How the stacked-interface row names itself.
 pub(super) const STACKED: &str = "stacked interface";
 
