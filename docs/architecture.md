@@ -2530,7 +2530,7 @@ rather than in principle.
 
   It goes further than narrowing. At these sample counts the field at one sample
   costs about twice the *tessellated* shapes at four -- 1.81× on Vulkan and
-  1.56× on GLES -- so on this board, for this scene, tessellating and
+  1.57× on GLES -- so on this board, for this scene, tessellating and
   multisampling is cheaper than evaluating the field, which is the opposite of
   what the numbers said a week ago.
 

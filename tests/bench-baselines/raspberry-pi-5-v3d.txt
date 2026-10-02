@@ -1,6 +1,7 @@
-# A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted, idle at 58.7 C and
-# 65.3 C after three runs, `vcgencmd get_throttled` 0x0 before and after every one,
-# and the clock at 2400000 throughout.
+# A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted. Re-recorded
+# 2026-10-01 at e026ac8: idle at 56.0 C, 60.4 C entering the recorded run and 64.2 C
+# after it, `vcgencmd get_throttled` 0x0 before and after, the clock at 2400000
+# throughout, load average 0.05 and nothing holding the GPU.
 #
 #   cargo xtask bench --skip llvmpipe --check tests/bench-baselines/raspberry-pi-5-v3d.txt
 #
@@ -22,7 +23,14 @@
 # configures. `docs/on-a-board.md` has the check.
 #
 # Updating this is a reviewed event, like the shader snapshots: re-record with
-# --record, and the diff is the claim that every row moved for a reason. The
+# --record, and the diff is the claim that every row moved for a reason.
+#
+# **`--record` does not write this header.** It writes the rows and the per-row
+# tolerances, which it reads back from the file first because a tolerance is a
+# judgment rather than a measurement. Everything above and below that is prose and has
+# to be reattached by hand -- so take a copy before recording over the file, or the
+# reasoning goes and the diff reads as four hundred deletions. Reattaching it is also
+# when the prose gets checked against the rows it now sits above, which is the point. The
 # GLES rows repeat to about a tenth of a percent and mean what they say.
 #
 # All four *Vulkan* rows land in one of two states from one process to the next,
@@ -117,7 +125,37 @@
 # touches, so agreeing is the self-consistent reading and 0.225 against 0.236 was the
 # odd one.
 #
-# Last checked against the board: 01d7cb2
+# **That reading held.** Re-recorded 2026-10-01, the two rows read 0.246 and 0.246 --
+# agreeing again, from a different boot and a different binary. The 0.236 that sat in
+# this file was the odd value, as the paragraph above predicted.
+#
+# Thirty-four rows moved in that re-record, and each moved for one of three reasons.
+#
+# **The rectangle fill route, which is most of it.** `stacked, plus panels` 18.766 to
+# 13.680 and `stacked interface` 24.509 to 16.069 on Vulkan -- 27 and 34 per cent --
+# with GLES at 26.9 and 34.3. `Canvas::draw_rect` tessellates a fill rather than
+# evaluating a distance field, measured here on 2026-09-30 before it was taken and
+# predicted at 16.077 against the 16.069 recorded. `full frame, mixed content` is the
+# control at 13.911 to 13.909, its cards being rounded and analytic either way.
+#
+# **The ear-clipping fast path.** `recording / concave, 12 points` 0.531 to 0.447,
+# sixteen per cent off. A simple contour of sixteen points or fewer is ear-clipped
+# rather than swept, the cap set from this board -- it crosses at twenty points where
+# an x86-64 desktop crosses at thirty, which is why the cap is not twenty-four.
+#
+# **A correctness fix, costing two per cent of the recording rows.** `distance field`
+# 0.098 to 0.101, both `tessellated` rows to 0.246, `stroked field` 0.100 to 0.102,
+# `stroked path` 0.724 to 0.728. Attributed rather than assumed: `polygon_convexity`
+# now refuses a contour carrying a zero-length edge, which it used to call convex and
+# fan -- a wrong fill, found by generated input -- and a binary with that guard removed
+# reads 0.243 against 0.248 on this board, interleaved, two runs a side. The binary
+# from the previously recorded commit reads 0.242 in the same session, which is what
+# says the two per cent is this guard and not the board.
+#
+# Moving the guard behind the collinearity test, so that a vertex which turns never
+# reaches it, measured 0.250 -- no better. The cost is not the comparison.
+#
+# Last checked against the board: e026ac8
 #
 # That line names the commit whose state a board run passed against, which is
 # never the commit that writes the line -- a hash cannot be recorded inside the
@@ -416,45 +454,45 @@
 # both backends run the same WGSL, and the software reference is lavapipe
 # running it too, so a shared mistake would pass every comparison the suite
 # makes.
-recording	distance field, 1 sample	0.098	5.0
-recording	tessellated, 4 samples	0.242	10.0
-recording	tessellated, 1 sample	0.236	5.0
-recording	stroked field, 1 sample	0.100	5.0
-recording	stroked path, 1 sample	0.724	5.0
+recording	distance field, 1 sample	0.101	5.0
+recording	tessellated, 4 samples	0.246	10.0
+recording	tessellated, 1 sample	0.246	5.0
+recording	stroked field, 1 sample	0.102	5.0
+recording	stroked path, 1 sample	0.728	5.0
 recording	frame, gradient ground	0.009	15.0
 recording	frame, plus cards	0.011	15.0
 recording	frame, plus shadows	0.015	15.0
-recording	full frame, mixed content	0.018	10.0
+recording	full frame, mixed content	0.019	10.0
 recording	stacked, wash	0.009	15.0
 recording	stacked, plus panels	0.011	15.0
 recording	stacked interface	0.016	15.0
-recording	concave, 12 points	0.531	5.0
-recording	concave, 72 points	4.039	5.0
-vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.205	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.692	2.0
-vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.779	2.0
-vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.193	3.0
-vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.427	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus cards	11.066	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.913	2.0
-vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.911	2.0
-vulkan:0 V3D 7.1.7.0	stacked, wash	10.424	2.0
-vulkan:0 V3D 7.1.7.0	stacked, plus panels	18.766	2.0
-vulkan:0 V3D 7.1.7.0	stacked interface	24.509	2.0
-vulkan:0 V3D 7.1.7.0	concave, 12 points	1.452	2.0
-vulkan:0 V3D 7.1.7.0	concave, 72 points	2.025	2.0
-gles V3D 7.1.7.0	distance field, 1 sample	8.551
+recording	concave, 12 points	0.447	5.0
+recording	concave, 72 points	4.071	5.0
+vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.207	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.533	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.696	2.0
+vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.783	2.0
+vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.207	3.0
+vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.420	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus cards	11.060	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.907	2.0
+vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.909	2.0
+vulkan:0 V3D 7.1.7.0	stacked, wash	10.418	2.0
+vulkan:0 V3D 7.1.7.0	stacked, plus panels	13.680	2.0
+vulkan:0 V3D 7.1.7.0	stacked interface	16.069	2.0
+vulkan:0 V3D 7.1.7.0	concave, 12 points	1.453	2.0
+vulkan:0 V3D 7.1.7.0	concave, 72 points	2.007	2.0
+gles V3D 7.1.7.0	distance field, 1 sample	8.553
 gles V3D 7.1.7.0	tessellated, 4 samples	5.465
-gles V3D 7.1.7.0	tessellated, 1 sample	3.642
+gles V3D 7.1.7.0	tessellated, 1 sample	3.644
 gles V3D 7.1.7.0	stroked field, 1 sample	9.145
-gles V3D 7.1.7.0	stroked path, 1 sample	1.305	2.0
-gles V3D 7.1.7.0	frame, gradient ground	11.766
-gles V3D 7.1.7.0	frame, plus cards	12.444
-gles V3D 7.1.7.0	frame, plus shadows	13.328
-gles V3D 7.1.7.0	full frame, mixed content	14.866
-gles V3D 7.1.7.0	stacked, wash	11.772
-gles V3D 7.1.7.0	stacked, plus panels	20.494
-gles V3D 7.1.7.0	stacked interface	26.351
-gles V3D 7.1.7.0	concave, 12 points	1.536
-gles V3D 7.1.7.0	concave, 72 points	2.048
+gles V3D 7.1.7.0	stroked path, 1 sample	1.317	2.0
+gles V3D 7.1.7.0	frame, gradient ground	11.773
+gles V3D 7.1.7.0	frame, plus cards	12.450
+gles V3D 7.1.7.0	frame, plus shadows	13.337
+gles V3D 7.1.7.0	full frame, mixed content	14.872
+gles V3D 7.1.7.0	stacked, wash	11.773
+gles V3D 7.1.7.0	stacked, plus panels	14.977
+gles V3D 7.1.7.0	stacked interface	17.304
+gles V3D 7.1.7.0	concave, 12 points	1.530
+gles V3D 7.1.7.0	concave, 72 points	2.059

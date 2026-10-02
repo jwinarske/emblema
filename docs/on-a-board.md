@@ -1284,12 +1284,15 @@ a 2.0 tolerance in the baseline, and the differences taken from it are worth abo
 one decimal.
 
 **Confirmed on V3D, 2026-09-30 at 50b64f4, and it leans harder there.** The Pi 5's
-stage rows were recorded the same way, after a reboot with the governor pinned:
+stage rows were recorded the same way, after a reboot with the governor pinned. The
+figures below are the baseline's current ones, re-recorded 2026-10-01 at e026ac8, and
+they moved by a tenth of a per cent or less -- the rectangle route flip that prompted
+that re-record does not touch this scene, whose cards are rounded:
 
 | route | ground | plus cards | plus shadows | frame | ground's share |
 |---|---|---|---|---|---|
-| Pi 5 Vulkan | 10.427 ms | 11.066 | 11.913 | 13.911 | **75.0%** |
-| Pi 5 GLES | 11.766 | 12.444 | 13.328 | 14.866 | **79.1%** |
+| Pi 5 Vulkan | 10.420 ms | 11.060 | 11.907 | 13.909 | **74.9%** |
+| Pi 5 GLES | 11.773 | 12.450 | 13.337 | 14.872 | **79.2%** |
 | VisionFive 2 Vulkan | 43.149 | 45.498 | 48.717 | 64.019 | **67.4%** |
 
 So a single full-screen five-stop gradient is three quarters of the frame on V3D and
