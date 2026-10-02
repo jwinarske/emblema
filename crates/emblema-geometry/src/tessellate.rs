@@ -32,20 +32,24 @@
 //! shapes. On the VisionFive 2, where one Berlin tile costs nineteen milliseconds to
 //! triangulate, a factor of 1.7 is about eight milliseconds a tile.
 //!
-//! **It is not a swap, which is why nothing changed here.** Ear clipping needs a
-//! simple polygon: lyon resolves self-intersection and both fill rules, and
-//! `non-parity.md` 18 depends on that -- a self-intersecting path fills the same here
-//! as it does under a stencil precisely because lyon applies the rule. Every one of
-//! the 1,185 tile rings happened to be simple, which is what let the counts match,
-//! and MVT encoders do not guarantee it.
+//! **It is not a swap.** Ear clipping needs a simple polygon: lyon resolves
+//! self-intersection and both fill rules, and `non-parity.md` 18 depends on that -- a
+//! self-intersecting path fills the same here as it does under a stencil precisely
+//! because lyon applies the rule. Every one of the 1,185 tile rings happened to be
+//! simple, which is what let the counts match, and MVT encoders do not guarantee it.
 //!
-//! The design that would claim it without giving that up: try ear clipping on a
-//! single closed contour, then *check* its output -- the triangle areas sum to the
-//! contour's shoelace area for a simple polygon and will not for a self-intersecting
-//! one -- and fall back to lyon when the check fails. Verifying is O(n) against
-//! lyon's sweep, so the fast path stays cheaper than the thing it replaces. Not
-//! built, and it wants a generated-input suite of its own before it is, since the
-//! failure mode is a wrong fill rather than a slow one.
+//! **Claimed for a single contour, under a cap.** `fill` tries ear clipping on one
+//! closed contour and verifies before using it, falling back to lyon otherwise -- see
+//! `ear_fill`. The verification is what bounds it: proving a contour simple costs a
+//! quadratic edge-pair test, which overtakes lyon's sweep at about thirty points, so
+//! `MAX_EAR_POINTS` sits at twenty-four. That covers the median tile ring of seven and
+//! leaves the dense end where it was. On the bench's twelve-point concave row the
+//! recording goes from 0.175 ms to 0.119 ms, a third off; the seventy-two-point row
+//! is past the cap, and a build with the cap lowered to refuse both rows reads the
+//! twelve-point row at 0.175 ms again, which is what says the win is this route.
+//!
+//! Checking the output was not enough on its own, which took generated input to find
+//! rather than reading -- `is_simple_polygon` has that story.
 
 use crate::flatten::{flatten, DEFAULT_TOLERANCE};
 use crate::path::{polygon_convexity, Convexity, FillRule, Path, Verb};
@@ -161,6 +165,45 @@ impl Tessellator {
             return &self.buffers;
         }
 
+        // A single concave contour is what ear clipping serves and lyon
+        // over-serves, and the output is checked rather than trusted. See
+        // `ear_fill`.
+        if polylines.len() == 1
+            && ear_fill(strip_closing_duplicate(&polylines[0]), &mut self.buffers)
+        {
+            return &self.buffers;
+        }
+        self.buffers.clear();
+
+        general_fill(
+            &polylines,
+            path.fill_rule(),
+            &mut self.fill,
+            &mut self.buffers,
+        );
+        &self.buffers
+    }
+
+    /// Fill through the general route, skipping both fast paths.
+    ///
+    /// `ear_fill`'s verification is the only thing between a wrong fill and the
+    /// framebuffer, and the only way to state that as a property is against the route
+    /// it replaces -- so `property.rs` generates contours, takes whichever route
+    /// `fill` chose, and where it chose the fast one compares the area against this.
+    ///
+    /// Hidden because it is not a choice a caller should be making: the fast paths are
+    /// selected by geometry, and asking for the slow one asks for the same picture at
+    /// more cost.
+    #[doc(hidden)]
+    pub fn fill_general(&mut self, path: &Path, tolerance: f32) -> &VertexBuffers {
+        self.buffers.clear();
+        if !path.is_finite() || !path.is_within_tessellation_range() {
+            return &self.buffers;
+        }
+        let polylines = flatten(path, usable_tolerance(tolerance));
+        if polylines.is_empty() {
+            return &self.buffers;
+        }
         general_fill(
             &polylines,
             path.fill_rule(),
@@ -326,6 +369,148 @@ fn fan_fill(points: &[Vec2], out: &mut VertexBuffers) {
     for i in 1..points.len() as u32 - 1 {
         out.indices.extend_from_slice(&[0, i, i + 1]);
     }
+}
+
+/// Triangulate one closed contour by ear clipping, and answer whether the result
+/// was *proved* to be a triangulation of it.
+///
+/// Ear clipping is between 1.7 and 4 times cheaper than the general sweep -- the
+/// module documentation has the measurements -- but it is only correct for a simple
+/// polygon, and this renderer cannot know in advance that a contour is one. lyon can
+/// be asked for any contour and resolves both fill rules; earcut cannot and does not.
+///
+/// So the precondition is tested rather than assumed, by `is_simple_polygon`, whose
+/// documentation says why checking only the output is not sufficient. What is left
+/// here is shape: `n - 2` triangles, which is how many a simple polygon of `n`
+/// vertices has, every index inside the contour, and no triangle naming one of its
+/// corners twice.
+///
+/// And for a contour that passes, the fill rule stops mattering: non-zero and
+/// even-odd agree on a simple polygon, so there is nothing for the rule to decide.
+/// That is what makes this safe to run before consulting it.
+///
+/// The verification is a quadratic edge-pair test against lyon's `O(n log n)` sweep,
+/// so it only pays on a small contour. `MAX_EAR_POINTS` is where the two were
+/// measured to cross.
+fn ear_fill(points: &[Vec2], out: &mut VertexBuffers) -> bool {
+    /// The largest contour this route will attempt.
+    ///
+    /// Two measurements set it. `earcutr` does not return on every finite polygon: a
+    /// contour of 6,235 points spanning zero to 16,777,215, generated by `hostile.rs`,
+    /// hung the suite inside `earcut` before any check here could run -- so a cap is
+    /// the only guard that works, a verification being no use on an answer it never
+    /// gets. And the simplicity test below overtakes what ear clipping saves:
+    /// `examples/ear-crossover.rs` sweeps this route against `fill_general` over the
+    /// bench's star contour, and on a desktop it runs 1.36x faster at 20 points, 1.15x
+    /// at 24, 1.01x at 30 and 0.94x at 32. Past thirty the fast path is the slow one.
+    ///
+    /// Twenty-four, not thirty, because that crossover is a property of one machine's
+    /// cache and the margin should survive another. It still covers the work: the
+    /// vector tile rings measured for `non-parity.md` 18 have a median of seven points
+    /// and a ninety-ninth percentile of fifty-four. The tail goes to lyon, which
+    /// returns on anything.
+    const MAX_EAR_POINTS: usize = 24;
+
+    let n = points.len();
+    if !(3..=MAX_EAR_POINTS).contains(&n) {
+        return false;
+    }
+    if !is_simple_polygon(points) {
+        return false;
+    }
+
+    let flat: Vec<f64> = points
+        .iter()
+        .flat_map(|p| [f64::from(p.x), f64::from(p.y)])
+        .collect();
+    let Ok(indices) = earcutr::earcut(&flat, &[], 2) else {
+        return false;
+    };
+    if indices.len() != (n - 2) * 3 {
+        return false;
+    }
+
+    // Indices must address the contour and name three distinct corners. Earcut's
+    // edge bookkeeping is not re-derived beyond that: `is_simple_polygon` above
+    // establishes the precondition directly, and the edge-parity map that stood
+    // here allocated on every call -- more than ear clipping saves.
+    for triangle in indices.chunks_exact(3) {
+        let [a, b, c] = [triangle[0], triangle[1], triangle[2]];
+        if a >= n || b >= n || c >= n || a == b || b == c || a == c {
+            return false;
+        }
+    }
+
+    out.vertices.extend_from_slice(points);
+    out.indices
+        .extend(indices.into_iter().map(|index| index as u32));
+    true
+}
+
+/// Whether a closed contour is a simple polygon: no two edges meet except at a vertex
+/// they share.
+///
+/// **This exists because the cheap checks were not enough, and a generated test said
+/// so.** `ear_fill` first verified `earcutr`'s output by triangle count and edge
+/// parity, reasoning that a triangulation bounded by the input edges can only be a
+/// triangulation of the input. `property.rs` refuted that on its first run with five
+/// points -- `[(40,20), (50,20), (0,30), (50,0), (30,60)]`, which self-intersects, for
+/// which earcut returns exactly `n - 2` triangles whose edges pass parity, and whose
+/// area is 500 against the 494.2 the non-zero rule fills.
+///
+/// So simplicity is tested rather than inferred. Quadratic in the edge count, which is
+/// why `MAX_EAR_POINTS` is small: at twenty-four points it is 252 segment pairs of a
+/// few operations each, under what lyon's sweep costs on that contour, and at five
+/// hundred it would be many times over.
+///
+/// Conservative at every boundary. A zero-length edge, a touch at an endpoint, a
+/// collinear overlap -- each returns false and sends the contour to lyon, which
+/// resolves all of them under the rule the caller asked for.
+fn is_simple_polygon(points: &[Vec2]) -> bool {
+    let n = points.len();
+    let edge = |i: usize| (points[i], points[(i + 1) % n]);
+
+    for i in 0..n {
+        let (a, b) = edge(i);
+        if a == b {
+            return false;
+        }
+        // Pairs sharing a vertex are adjacent and may meet there; every other pair
+        // must not meet at all. `j` starts past `i + 1`, and the wrap pair -- edge
+        // `n - 1` against edge `0` -- is excluded by the upper bound.
+        let last = if i == 0 { n - 1 } else { n };
+        for j in (i + 2)..last {
+            let (c, d) = edge(j);
+            if segments_meet(a, b, c, d) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Whether two segments touch or cross anywhere, endpoints and collinear overlaps
+/// included.
+fn segments_meet(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).perp_dot(r - p);
+    let (d1, d2) = (side(c, d, a), side(c, d, b));
+    let (d3, d4) = (side(a, b, c), side(a, b, d));
+
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+    {
+        return true;
+    }
+    // A zero is collinear or touching, and a point inside the other segment's extent
+    // is a meeting -- counted whether or not it crosses, because a contour that
+    // touches itself is not one this route will reason about.
+    let within = |p: Vec2, q: Vec2, r: Vec2| {
+        r.x >= p.x.min(q.x) && r.x <= p.x.max(q.x) && r.y >= p.y.min(q.y) && r.y <= p.y.max(q.y)
+    };
+    (d1 == 0.0 && within(c, d, a))
+        || (d2 == 0.0 && within(c, d, b))
+        || (d3 == 0.0 && within(a, b, c))
+        || (d4 == 0.0 && within(a, b, d))
 }
 
 /// Tessellate arbitrary geometry through lyon.
@@ -802,5 +987,186 @@ mod stroke_tests {
             (area - 1.0).abs() < 0.01,
             "stale geometry inflated area to {area}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ear_clipping {
+    use super::*;
+
+    /// An L, which is concave and simple: five vertices, three triangles.
+    fn ell() -> Vec<Vec2> {
+        vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 10.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(10.0, 40.0),
+            Vec2::new(0.0, 40.0),
+        ]
+    }
+
+    /// A bowtie: the only self-intersecting contour in this module, and the case the
+    /// verification exists for.
+    fn bowtie() -> Vec<Vec2> {
+        vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 40.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(0.0, 40.0),
+        ]
+    }
+
+    fn triangle_area_sum(out: &VertexBuffers) -> f32 {
+        out.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let (a, b, c) = (
+                    out.vertices[t[0] as usize],
+                    out.vertices[t[1] as usize],
+                    out.vertices[t[2] as usize],
+                );
+                ((b - a).perp_dot(c - a) * 0.5).abs()
+            })
+            .sum()
+    }
+
+    /// A concave simple contour takes the fast route and is proved.
+    #[test]
+    fn a_concave_simple_contour_is_ear_clipped() {
+        let points = ell();
+        let mut out = VertexBuffers::default();
+        assert!(ear_fill(&points, &mut out), "an L is simple and concave");
+
+        // Ear clipping of an n-gon is exactly n - 2 triangles over the n input
+        // vertices, and adds none of its own.
+        assert_eq!(out.vertices.len(), points.len());
+        assert_eq!(out.indices.len(), (points.len() - 2) * 3);
+        // The L covers 40x10 plus 10x30.
+        assert!((triangle_area_sum(&out) - 700.0).abs() < 0.01);
+    }
+
+    /// `fill` routes a concave contour here, not just `ear_fill` when called directly.
+    ///
+    /// Without this the rest of the module tests a function nothing reaches, and the
+    /// generated cross-check in `tests/property.rs` would pass on a dispatch that never
+    /// chose this route. A fan cannot produce this output on this contour: the L is
+    /// concave, so `polygon_convexity` refuses the fan, and lyon adds vertices of its
+    /// own and would not return the contour back unchanged.
+    #[test]
+    fn fill_sends_a_concave_contour_to_ear_clipping() {
+        let points = ell();
+        let mut builder = Path::builder().with_fill_rule(FillRule::NonZero);
+        builder.move_to(points[0]);
+        for p in &points[1..] {
+            builder.line_to(*p);
+        }
+        builder.close();
+        let path = builder.build();
+        assert_eq!(path.convexity(), Convexity::Concave, "the L is concave");
+
+        let mut tess = Tessellator::new();
+        let filled = tess.fill(&path, 0.25);
+        assert_eq!(filled.vertices, points, "the contour's own vertices");
+        assert_eq!(filled.indices.len(), (points.len() - 2) * 3);
+    }
+
+    /// A self-intersecting contour is refused, and lyon is what fills it.
+    ///
+    /// This is the property the whole verification exists for: ear clipping returns
+    /// *something* for a bowtie, and that something is not the non-zero fill.
+    #[test]
+    fn a_self_intersecting_contour_is_refused() {
+        let mut out = VertexBuffers::default();
+        assert!(
+            !ear_fill(&bowtie(), &mut out),
+            "a bowtie must not pass verification"
+        );
+        assert!(out.indices.is_empty(), "a refusal writes nothing");
+
+        // And the whole path still fills, through the general route, with the two
+        // lobes the non-zero rule asks for: 20x20 each, halved, twice.
+        let mut builder = Path::builder().with_fill_rule(FillRule::NonZero);
+        builder.move_to(bowtie()[0]);
+        for p in &bowtie()[1..] {
+            builder.line_to(*p);
+        }
+        builder.close();
+        let mut tess = Tessellator::new();
+        let filled = tess.fill(&builder.build(), 0.25);
+        assert!(
+            (triangle_area_sum(filled) - 800.0).abs() < 1.0,
+            "two lobes of 400: {}",
+            triangle_area_sum(filled)
+        );
+    }
+
+    /// Past the cap it declines without calling earcut.
+    ///
+    /// The cap is what stands between this route and the 6,235-point contour that hung
+    /// `hostile.rs`, so it is asserted rather than left to the constant. Five hundred
+    /// and thirteen points is far past any cap this route would be given, so the
+    /// assertion does not move when the cap does.
+    #[test]
+    fn a_contour_past_the_cap_is_declined() {
+        let big: Vec<Vec2> = (0..513)
+            .map(|i| {
+                let t = i as f32 * 0.01;
+                Vec2::new(t.cos() * 100.0, t.sin() * 100.0)
+            })
+            .collect();
+        let mut out = VertexBuffers::default();
+        assert!(!ear_fill(&big, &mut out), "past the cap");
+        assert!(out.indices.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod routes_agree_on_real_shapes {
+    use super::*;
+    use crate::superellipse::RoundSuperellipse;
+
+    fn area(out: &VertexBuffers) -> f64 {
+        out.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let (a, b, c) = (
+                    out.vertices[t[0] as usize],
+                    out.vertices[t[1] as usize],
+                    out.vertices[t[2] as usize],
+                );
+                f64::from(((b - a).perp_dot(c - a) * 0.5).abs())
+            })
+            .sum()
+    }
+
+    /// Whichever route a real shape takes, it fills the same area.
+    ///
+    /// `property.rs` states this over generated lattice contours, where
+    /// self-intersection is common. This states it over the shapes the corpus actually
+    /// draws, where the risk is the opposite one: a smooth curve flattens to hundreds
+    /// of nearly-collinear points, which is where a convexity test or an ear clipper
+    /// is most likely to disagree with a sweep by a little rather than a lot.
+    ///
+    /// Added because the superellipse's recorded cost row moved when the fast paths
+    /// changed -- 301 triangles to 299 -- and a different triangulation of the same
+    /// region is fine while a different region is not. Counting triangles cannot tell
+    /// those apart; area can.
+    #[test]
+    fn a_rounded_superellipse_fills_the_same_area_either_route() {
+        for (size, radius) in [(100.0, 25.0), (100.0, 49.0), (240.0, 60.0), (64.0, 8.0)] {
+            let path = RoundSuperellipse::with_radius(
+                crate::Rect::new(Vec2::ZERO, Vec2::new(size, size)),
+                radius,
+            )
+            .to_path();
+            let mut tess = Tessellator::new();
+            let chosen = area(tess.fill(&path, 0.25));
+            let general = area(tess.fill_general(&path, 0.25));
+            assert!(
+                (chosen - general).abs() <= 0.001 * general.max(1.0),
+                "size {size} radius {radius}: chosen route fills {chosen}, general {general}"
+            );
+        }
     }
 }

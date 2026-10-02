@@ -199,3 +199,90 @@ proptest! {
         prop_assert_eq!(path.segments().count(), path.verbs().len());
     }
 }
+
+/// What the ear-clipping fast path accepts must fill the same as the general route.
+///
+/// `ear_fill`'s verification is the only thing standing between a wrong fill and the
+/// framebuffer, and the hand-written cases beside it do not prove it: a bowtie, a
+/// pentagram and an hourglass are all rejected by the *triangle count*, because
+/// `earcutr` bails early on invalid input and returns fewer than `n - 2`. The
+/// edge-parity half of the check caught none of them.
+///
+/// So the property is stated against the route it replaces. Contours are generated on
+/// a small integer lattice, where self-intersection is common rather than rare -- most
+/// of these are not simple polygons. For every one the fast path *accepts*, the area
+/// it fills must equal what lyon fills under the non-zero rule, which is the thing the
+/// renderer would otherwise have drawn.
+mod ear_clipping_agrees {
+    use emblema_geometry::path::{FillRule, Path};
+    use emblema_geometry::tessellate::Tessellator;
+    use glam::Vec2;
+    use proptest::prelude::*;
+
+    fn area(vertices: &[Vec2], indices: &[u32]) -> f32 {
+        indices
+            .chunks_exact(3)
+            .map(|t| {
+                let (a, b, c) = (
+                    vertices[t[0] as usize],
+                    vertices[t[1] as usize],
+                    vertices[t[2] as usize],
+                );
+                ((b - a).perp_dot(c - a) * 0.5).abs()
+            })
+            .sum()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 4096, ..ProptestConfig::default() })]
+
+        #[test]
+        fn an_accepted_contour_fills_what_lyon_fills(
+            points in prop::collection::vec((0i32..12, 0i32..12), 3..14),
+        ) {
+            let contour: Vec<Vec2> = points
+                .iter()
+                .map(|&(x, y)| Vec2::new(x as f32 * 10.0, y as f32 * 10.0))
+                .collect();
+
+            let mut builder = Path::builder().with_fill_rule(FillRule::NonZero);
+            builder.move_to(contour[0]);
+            for p in &contour[1..] {
+                builder.line_to(*p);
+            }
+            builder.close();
+            let path = builder.build();
+
+            let mut tess = Tessellator::new();
+            let filled = tess.fill(&path, 0.25).clone();
+
+            // Whichever route ran, the fill is addressable and finite.
+            for index in &filled.indices {
+                prop_assert!((*index as usize) < filled.vertices.len());
+            }
+            for v in &filled.vertices {
+                prop_assert!(v.is_finite());
+            }
+
+            // Either fast path writes exactly the contour's own vertices and `n - 2`
+            // triangles, and lyon adds vertices of its own, so this says a fast path
+            // ran without saying which. That is the right granularity: the fan and the
+            // ear clipper both owe the general route the same area. What pins that ear
+            // clipping is reached at all is a unit test, `tessellate.rs`'s
+            // `fill_sends_a_concave_contour_to_ear_clipping`.
+            let n = contour.len();
+            let took_fast_path = filled.vertices.len() == n
+                && filled.indices.len() == (n - 2) * 3
+                && filled.vertices == contour;
+            if took_fast_path {
+                let mut general = Tessellator::new();
+                let lyon = general.fill_general(&path, 0.25).clone();
+                let (fast, slow) = (area(&filled.vertices, &filled.indices), area(&lyon.vertices, &lyon.indices));
+                prop_assert!(
+                    (fast - slow).abs() <= 0.01 * slow.max(1.0),
+                    "ear clipping accepted a contour it fills differently: {fast} against {slow} for {contour:?}"
+                );
+            }
+        }
+    }
+}

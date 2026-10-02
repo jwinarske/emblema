@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 glam = { workspace = true }
 lyon_tessellation = { workspace = true }
+earcutr = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
