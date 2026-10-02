@@ -1229,6 +1229,37 @@ impl Material {
     /// Stops beyond the limit are dropped rather than resampled, and the count
     /// travels alongside so the shader ignores unused entries instead of
     /// blending toward whatever happens to be in them.
+    /// Whether this material's shading reads screen-space derivatives.
+    ///
+    /// `dpdx` and `dpdy` are computed across a two-by-two quad of fragments, using helper
+    /// invocations outside the primitive. Whether a scissor keeps those helpers alive is
+    /// not something either specification settles, and implementations differ: Mesa
+    /// 26.2.3 keeps them and 25.2.8 does not. So a draw whose shading depends on them
+    /// gives a different answer at a scissor's edge than away from it, and splitting such
+    /// a draw by scissor changes the picture along the seam.
+    ///
+    /// Measured rather than reasoned about: an analytic shadow drawn once reads 217 where
+    /// the same shadow drawn in four scissored strips reads 206, at the pixel on the
+    /// strip boundary, on Mesa 25.2.8. See `a_scissor_does_not_change_what_a_draw_paints`.
+    ///
+    /// **True unless shown otherwise**, which is the only safe direction: a material
+    /// wrongly called derivative-free leaves a seam in the frame. The two groups that are
+    /// shown otherwise are solid fills, whose coverage comes from the rasterizer, and the
+    /// gradients, which sample their ramp at an explicit level of zero. The rest either
+    /// take a coverage from the gradient of a distance field -- the rounded rectangle, the
+    /// ellipse and the rounded-rectangle blur -- or a texture level from the rate their
+    /// coordinates change, which is every image fill, or are a caller's own program.
+    pub fn needs_screen_derivatives(&self) -> bool {
+        !matches!(
+            self,
+            Material::Solid(_)
+                | Material::LinearGradient { .. }
+                | Material::RadialGradient { .. }
+                | Material::SweepGradient { .. }
+                | Material::ConicalGradient { .. }
+        )
+    }
+
     pub fn to_uniform(&self) -> [f32; MATERIAL_FLOATS] {
         let mut out = [0.0f32; MATERIAL_FLOATS];
 

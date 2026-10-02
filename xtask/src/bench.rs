@@ -1163,8 +1163,11 @@ mod tests {
         );
     }
 
-    /// **Eleven of the stacked frame's twelve draws now occlude; none of the mixed
-    /// frame's do.**
+    /// **Most of the stacked frame's draws occlude; none of the mixed frame's do.**
+    ///
+    /// A hundred and twenty-six of a hundred and thirty-one, which is eleven opaque
+    /// rectangles and a gradient after `Batch::cull_occluded` has split each into the
+    /// pieces a later draw does not cover. Before culling it was eleven of twelve.
     ///
     /// This test used to assert zero on both and say why: every rectangle recorded
     /// as `Material::RoundedRect` with a radius of zero, and an analytic shape
@@ -1174,7 +1177,8 @@ mod tests {
     /// happened. `Canvas::draw_rect` tessellates a fill as of the route flip, so the
     /// bar, the sidebar, the panel and the eight rows are coverage-binary.
     ///
-    /// The twelfth is the wash, which `stacked` draws with a gradient.
+    /// The five that do not are the wash's own pieces, which `stacked` draws with a
+    /// gradient.
     ///
     /// The mixed frame stays at zero, and for the reason it always did: its cards
     /// are *rounded* rectangles, which still take the field, and it has a layer.
@@ -1198,9 +1202,10 @@ mod tests {
 
         assert_eq!(
             occluding(&frames::stacked(frames::Stacked::All)),
-            (11, 12),
-            "eleven tessellated rectangles and the gradient wash; if this falls back \
-             to zero the rectangle fill left the tessellated route"
+            (126, 131),
+            "the eleven tessellated rectangles, split into pieces by culling, against \
+             the gradient wash's own five; if the first number falls to zero the \
+             rectangle fill left the tessellated route"
         );
         assert_eq!(
             occluding(&frames::frame(frames::Frame::All)),
@@ -1264,20 +1269,43 @@ mod tests {
             "the frame should paint 2.53 times its own area, not {painted:.2}"
         );
 
-        // And the stages are what they say: one draw for the wash, three opaque
-        // rectangles over it, then the rows.
-        let draws = |stage| frames::stacked(stage).draw_count();
-        assert_eq!(draws(frames::Stacked::Wash), 1, "the wash alone");
+        // And the stages are what they say: one rectangle for the wash, three opaque
+        // ones over it, then the rows.
+        //
+        // Counted in vertices rather than in draws, because a draw is no longer one
+        // element. `Batch::cull_occluded` confines each draw to the pixels no later
+        // opaque draw replaces, which splits one into several that share its geometry --
+        // so the draw count is a property of what overlaps what, while four vertices per
+        // rectangle is a property of the scene. The stage structure is what this test is
+        // about, so it counts the thing culling cannot move.
+        let rects = |stage| {
+            frames::stacked(stage)
+                .passes
+                .iter()
+                .map(|pass| pass.batch.vertices().len())
+                .sum::<usize>()
+                / 4
+        };
+        assert_eq!(rects(frames::Stacked::Wash), 1, "the wash alone");
         assert_eq!(
-            draws(frames::Stacked::Panels),
+            rects(frames::Stacked::Panels),
             4,
             "bar, sidebar, panel over it"
         );
         assert_eq!(
-            draws(frames::Stacked::All),
+            rects(frames::Stacked::All),
             4 + frames::ROWS,
-            "one draw per list row on top"
+            "one rectangle per list row on top"
         );
+
+        // What the draw counts actually are, recorded rather than derived: eleven opaque
+        // rectangles over a full-screen gradient is a great deal of overlap, and this is
+        // the shape of frame culling turns into many small draws. `docs/on-a-board.md`
+        // has what that costs and what it saves.
+        let draws = |stage| frames::stacked(stage).draw_count();
+        assert_eq!(draws(frames::Stacked::Wash), 1, "nothing to cull against");
+        assert_eq!(draws(frames::Stacked::Panels), 15);
+        assert_eq!(draws(frames::Stacked::All), 131);
 
         // No layer anywhere in it, which is what keeps the frame a fill
         // measurement. A blur or a group would make the deltas answer a different

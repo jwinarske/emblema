@@ -7,7 +7,7 @@
 //! replay backend can inspect the whole batch before touching any state.
 
 use crate::material::ColorFilter;
-use crate::{BlendMode, Error, Material, Result, Scissor};
+use crate::{BlendMode, Error, Extent2D, Material, Result, Scissor};
 
 /// What a draw does with the stencil buffer.
 ///
@@ -296,6 +296,135 @@ impl BatchDraw {
     /// multisampled or not, which is exactly the case a depth test is built for.
     /// A renderer that antialiased by blending coverage could not use this
     /// predicate at all.
+    /// The whole pixels this draw certainly covers, where that is knowable exactly.
+    ///
+    /// `None` unless the geometry is a quad standing on its own bounding box: four
+    /// vertices at the four corners, six indices forming two triangles that share the
+    /// quad's diagonal. That is what an axis-aligned rectangle fill tessellates to, and
+    /// it is the one shape whose covered area is its bounding box rather than something
+    /// strictly inside it. Everything else -- a rotated rectangle, a path, a stroke, a
+    /// glyph run -- is refused rather than approximated, because the answer is used to
+    /// stop drawing something underneath and a rectangle too large leaves a hole in the
+    /// frame.
+    ///
+    /// Every test here is discrete, with no tolerance anywhere. A quad one part in ten
+    /// thousand short of its bounding box would pass an area comparison and leave a
+    /// sub-pixel notch, and at four samples a notch is a visible seam. Exact corners or
+    /// nothing.
+    ///
+    /// Two triangles sharing a *side* rather than the diagonal are refused too. They
+    /// have six indices over four vertices and cover half the box, so nothing short of
+    /// looking at which pair is shared tells them apart.
+    ///
+    /// The positions are homogeneous clip coordinates, so this converts. `w` must be
+    /// exactly one on all four vertices, which refuses perspective rather than dividing
+    /// by a quantity that varies across the quad, and the normalized range maps onto the
+    /// target with y running downward -- the orientation [`Scissor`] fixes and that both
+    /// backends already agree on. [`Scissor::covered_device_bounds`] then rounds inward.
+    pub fn covered(
+        &self,
+        vertices: &[Vertex],
+        indices: &[u32],
+        extent: Extent2D,
+    ) -> Option<Scissor> {
+        if self.index_count != 6 {
+            return None;
+        }
+        let first = self.first_index as usize;
+        let six = indices.get(first..first.checked_add(6)?)?;
+        let (left, right) = (&six[..3], &six[3..]);
+        // Each triangle names three distinct vertices, or it has no area.
+        for tri in [left, right] {
+            if tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] {
+                return None;
+            }
+        }
+        // Two shared vertices, which is what sharing an edge means.
+        let shared: Vec<u32> = left.iter().copied().filter(|i| right.contains(i)).collect();
+        if shared.len() != 2 {
+            return None;
+        }
+
+        let mut distinct: Vec<u32> = Vec::with_capacity(4);
+        for &i in six {
+            if !distinct.contains(&i) {
+                distinct.push(i);
+            }
+        }
+        if distinct.len() != 4 {
+            return None;
+        }
+
+        let at = |index: u32| -> Option<[f32; 2]> {
+            let v = vertices.get(index as usize)?;
+            // Affine only. A perspective quad's covered region is not its bounding box.
+            (v.position[2] == 1.0).then_some([v.position[0], v.position[1]])
+        };
+        let mut corners = [[0.0f32; 2]; 4];
+        for (slot, &index) in corners.iter_mut().zip(&distinct) {
+            *slot = at(index)?;
+        }
+
+        let fold = |f: fn(f32, f32) -> f32, axis: usize, seed: f32| {
+            corners.iter().map(|c| c[axis]).fold(seed, f)
+        };
+        let min_x = fold(f32::min, 0, f32::INFINITY);
+        let max_x = fold(f32::max, 0, f32::NEG_INFINITY);
+        let min_y = fold(f32::min, 1, f32::INFINITY);
+        let max_y = fold(f32::max, 1, f32::NEG_INFINITY);
+
+        // Every corner at one extreme in each axis, and all four combinations present.
+        // A quad with three corners on its box and the fourth inside passes neither.
+        let quadrant = |c: [f32; 2]| -> Option<usize> {
+            let east = if c[0] == min_x {
+                false
+            } else if c[0] == max_x {
+                true
+            } else {
+                return None;
+            };
+            let south = if c[1] == min_y {
+                false
+            } else if c[1] == max_y {
+                true
+            } else {
+                return None;
+            };
+            Some(usize::from(east) + 2 * usize::from(south))
+        };
+        let mut seen = [false; 4];
+        for &c in &corners {
+            seen[quadrant(c)?] = true;
+        }
+        if !seen.iter().all(|&s| s) {
+            return None;
+        }
+
+        // The shared pair must be opposite corners. Sharing a side leaves both triangles
+        // on one half of the quad.
+        let a = quadrant(at(shared[0])?)?;
+        let b = quadrant(at(shared[1])?)?;
+        if a + b != 3 {
+            return None;
+        }
+
+        // `viewport_projection` is `x * 2/w - 1` across and `1 - y * 2/h` down, so clip
+        // space runs left to right with the target but *bottom to top against it*: a
+        // clip y of +1 is the target's first row. Inverting that mapping swaps which end
+        // is the minimum, and getting it backwards is not a subtle failure -- it mirrors
+        // every culled region vertically, which showed as a card's shadow landing above
+        // the card instead of below it.
+        let across = |v: f32| (v + 1.0) * 0.5 * extent.width as f32;
+        let down = |v: f32| (1.0 - v) * 0.5 * extent.height as f32;
+        let min = [across(min_x), down(max_y)];
+        let max = [across(max_x), down(min_y)];
+        let covered = Scissor::covered_device_bounds(min, max, extent);
+        Some(match self.clip {
+            Some(clip) => covered.intersect(clip),
+            None => covered,
+        })
+    }
+
     pub fn occludes(&self) -> bool {
         self.stencil == ClipState::UNCLIPPED
             && matches!(self.blend, BlendMode::Src | BlendMode::SrcOver)
@@ -674,6 +803,115 @@ impl Batch {
     pub fn draws(&self) -> &[BatchDraw] {
         &self.draws
     }
+
+    /// Stop each draw writing pixels a later opaque draw will overwrite.
+    ///
+    /// Returns how many draws were narrowed or dropped, which is what a test asserts
+    /// on -- a pass that quietly did nothing would otherwise look like a pass.
+    ///
+    /// # Why this is not reordering
+    ///
+    /// Draw order is untouched. Each draw is confined, by scissor, to the pixels no
+    /// later opaque draw replaces. `docs/non-parity.md` 21 wanted a depth buffer to
+    /// reorder opaque draws and `docs/on-a-board.md` records why that is closed here:
+    /// at four samples the attachment costs four times the pass on V3D, and the frame
+    /// worth reordering is four samples. A scissor costs nothing and needs no
+    /// attachment.
+    ///
+    /// It is also pixel-identical rather than approximately right. For draws `i` before
+    /// `j`, if `j` replaces every sample of a pixel then nothing `i` wrote there can
+    /// reach the frame -- including by way of something between them that blended
+    /// against it, since that result is replaced too. [`BatchDraw::occludes`] is
+    /// exactly the "replaces every sample it touches" predicate, and
+    /// [`BatchDraw::covered`] is where it does so.
+    ///
+    /// # What limits it
+    ///
+    /// Only the occluder needs known coverage. The draw being narrowed needs nothing at
+    /// all, because a scissor restricts any geometry -- which is what makes this worth
+    /// doing, since the thing being saved is usually a gradient or an image and neither
+    /// is a shape this could reason about.
+    ///
+    /// Two caps keep the work bounded on a batch that is nothing like a frame of
+    /// interface. `MAX_BLOCKERS` is how many occluders are carried at once, and
+    /// [`crate::occlusion::MAX_PIECES`] is how many rectangles a remainder may need before the
+    /// draw is left alone. Both failures are safe: drawing more than necessary is slow,
+    /// never wrong.
+    pub fn cull_occluded(&mut self, extent: Extent2D) -> usize {
+        /// Occluders carried while walking back through the draws.
+        ///
+        /// The walk is from the front of the frame backwards, so these are the draws
+        /// nearest the viewer -- the ones most likely to be hiding something. Sixteen
+        /// bounds the remainder arithmetic, which is quadratic in this count.
+        const MAX_BLOCKERS: usize = 16;
+
+        if self.draws.len() < 2 || extent.width == 0 || extent.height == 0 {
+            return 0;
+        }
+        let whole = Scissor::covering(extent);
+
+        let mut blockers: Vec<Scissor> = Vec::with_capacity(MAX_BLOCKERS);
+        let mut rewritten = 0usize;
+        // Built back to front and reversed once, rather than inserted into.
+        let mut out: Vec<BatchDraw> = Vec::with_capacity(self.draws.len());
+
+        for index in (0..self.draws.len()).rev() {
+            let draw = self.draws[index].clone();
+            let covered = draw
+                .occludes()
+                .then(|| draw.covered(&self.vertices, &self.indices, extent))
+                .flatten();
+
+            // A draw that writes the stencil is sequencing rather than content: its
+            // effect is not confined to the pixels it colors, so narrowing its scissor
+            // would change which pixels a *later* clipped draw is clipped to. Left
+            // alone, and it cannot be an occluder either -- `occludes` already refuses
+            // anything but `UNCLIPPED`.
+            // A draw whose shading reads screen-space derivatives cannot be split by
+            // scissor without changing its edge -- see
+            // `Material::needs_screen_derivatives`, which has the measurement. This is
+            // where the pass stops being free, and it is why the prize survives anyway:
+            // the gradient that costs the frame is derivative-free and the analytic
+            // shapes that are not are cheap.
+            if blockers.is_empty()
+                || draw.stencil.role.writes_stencil()
+                || draw.material.needs_screen_derivatives()
+            {
+                out.push(draw);
+            } else {
+                let own = draw.clip.unwrap_or(whole);
+                match crate::occlusion::remainder(own, &blockers) {
+                    // Nothing of this draw survives, so it does not need drawing.
+                    Some(pieces) if pieces.is_empty() => rewritten += 1,
+                    // One piece covering what it already had: leave the draw exactly as
+                    // it was, clip included. A draw that was never clipped keeps saying
+                    // so, which is a distinction `BatchDraw::clip` documents.
+                    Some(pieces) if pieces.len() == 1 && pieces[0] == own => out.push(draw),
+                    Some(pieces) => {
+                        rewritten += 1;
+                        for piece in pieces {
+                            out.push(BatchDraw {
+                                clip: Some(piece),
+                                ..draw.clone()
+                            });
+                        }
+                    }
+                    // Past the cap. Left alone, which is always correct.
+                    None => out.push(draw),
+                }
+            }
+
+            if let Some(area) = covered {
+                if !area.is_empty() && blockers.len() < MAX_BLOCKERS {
+                    blockers.push(area);
+                }
+            }
+        }
+
+        out.reverse();
+        self.draws = out;
+        rewritten
+    }
 }
 
 #[cfg(test)]
@@ -846,6 +1084,283 @@ mod occlusion {
         let mut batch = Batch::new();
         batch.push(&TRI, &[0, 1, 2], material, blend).unwrap();
         batch.draws().first().expect("one draw").clone()
+    }
+
+    const TARGET: Extent2D = Extent2D::new(100, 80);
+
+    /// A quad over the given clip-space box, as `fan_fill` emits one.
+    fn quad(min: [f32; 2], max: [f32; 2]) -> ([[f32; 2]; 4], [u32; 6]) {
+        (
+            [
+                [min[0], min[1]],
+                [max[0], min[1]],
+                [max[0], max[1]],
+                [min[0], max[1]],
+            ],
+            [0, 1, 2, 0, 2, 3],
+        )
+    }
+
+    fn solid_quad(min: [f32; 2], max: [f32; 2]) -> Batch {
+        let (vertices, indices) = quad(min, max);
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &vertices,
+                &indices,
+                Material::solid([1.0; 4]),
+                BlendMode::Src,
+            )
+            .expect("a quad");
+        batch
+    }
+
+    /// The whole target, since clip space runs from -1 to 1 on both axes.
+    #[test]
+    fn a_full_target_quad_covers_the_whole_target() {
+        let batch = solid_quad([-1.0, -1.0], [1.0, 1.0]);
+        let draw = batch.draws().first().expect("one draw");
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            Some(Scissor::covering(TARGET))
+        );
+    }
+
+    /// Off-center in both axes, which is what pins the orientation.
+    ///
+    /// A y convention the wrong way round is invisible in a target symmetric about its
+    /// center line, and it was wrong here first. Clip space runs bottom to top against
+    /// the target, so a clip y of -1 is the *last* row and this quad is the target's
+    /// bottom-left quarter. `viewport_projection` in `emblema-geometry` is the authority;
+    /// what caught the mistake was a scene rather than this test, which is why there is
+    /// also an end-to-end one over a known rectangle in `emblema`'s `public_api`.
+    #[test]
+    fn a_quarter_quad_covers_the_quarter_it_sits_on() {
+        let batch = solid_quad([-1.0, -1.0], [0.0, -0.5]);
+        let draw = batch.draws().first().expect("one draw");
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            Some(Scissor::new(0, 60, 50, 20)),
+            "the bottom-left quarter, not the top-left"
+        );
+    }
+
+    /// Everything `covered` refuses, each for its own reason.
+    #[test]
+    fn nothing_but_a_quad_on_its_own_box_reports_coverage() {
+        // A triangle: three indices, not six.
+        let batch = {
+            let mut b = Batch::new();
+            b.push(&TRI, &[0, 1, 2], Material::solid([1.0; 4]), BlendMode::Src)
+                .unwrap();
+            b
+        };
+        let draw = batch.draws()[0].clone();
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            None
+        );
+
+        // Two triangles sharing a *side* rather than the diagonal. Six indices over
+        // four vertices, and it covers half the box.
+        let (vertices, _) = quad([-1.0, -1.0], [1.0, 1.0]);
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &vertices,
+                &[0, 1, 2, 0, 1, 3],
+                Material::solid([1.0; 4]),
+                BlendMode::Src,
+            )
+            .unwrap();
+        let draw = batch.draws()[0].clone();
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            None
+        );
+
+        // A corner pulled inside the box, which is any rotated or sheared rectangle.
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &[[-1.0, -1.0], [1.0, -1.0], [0.5, 1.0], [-1.0, 1.0]],
+                &[0, 1, 2, 0, 2, 3],
+                Material::solid([1.0; 4]),
+                BlendMode::Src,
+            )
+            .unwrap();
+        let draw = batch.draws()[0].clone();
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            None
+        );
+
+        // A degenerate triangle, which has no area to contribute.
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &vertices,
+                &[0, 1, 1, 0, 2, 3],
+                Material::solid([1.0; 4]),
+                BlendMode::Src,
+            )
+            .unwrap();
+        let draw = batch.draws()[0].clone();
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            None
+        );
+    }
+
+    /// A quad narrower than a pixel covers nothing rather than rounding up to one.
+    #[test]
+    fn a_subpixel_quad_covers_nothing() {
+        // Two hundredths of clip space is one pixel across a hundred, and this is a
+        // fifth of that.
+        let batch = solid_quad([0.0, 0.0], [0.004, 0.004]);
+        let draw = batch.draws().first().expect("one draw");
+        assert_eq!(
+            draw.covered(batch.vertices(), batch.indices(), TARGET),
+            Some(Scissor::EMPTY)
+        );
+    }
+
+    /// A wash under a bar, which is the stacked frame in miniature.
+    #[test]
+    fn a_wash_is_narrowed_to_what_the_bar_leaves() {
+        let (full, indices) = quad([-1.0, -1.0], [1.0, 1.0]);
+        // The target's top quarter, opaque and solid, so it occludes. Clip y near +1
+        // is the first row -- see `a_quarter_quad_covers_the_quarter_it_sits_on`.
+        let (bar, _) = quad([-1.0, 0.5], [1.0, 1.0]);
+
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &full,
+                &indices,
+                Material::solid([0.1, 0.2, 0.3, 1.0]),
+                BlendMode::SrcOver,
+            )
+            .expect("the wash");
+        batch
+            .push(&bar, &indices, Material::solid([1.0; 4]), BlendMode::Src)
+            .expect("the bar");
+
+        assert_eq!(batch.cull_occluded(TARGET), 1);
+        let draws = batch.draws();
+        assert_eq!(draws.len(), 2, "one piece plus the bar");
+        assert_eq!(
+            draws[0].clip,
+            Some(Scissor::new(0, 20, 100, 60)),
+            "the wash keeps only what the bar leaves"
+        );
+        assert_eq!(draws[1].clip, None, "the bar is untouched");
+    }
+
+    /// A draw entirely hidden is dropped rather than clipped to nothing.
+    #[test]
+    fn a_fully_covered_draw_is_dropped() {
+        let (full, indices) = quad([-1.0, -1.0], [1.0, 1.0]);
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &full,
+                &indices,
+                Material::solid([0.1, 0.2, 0.3, 1.0]),
+                BlendMode::SrcOver,
+            )
+            .expect("the wash");
+        batch
+            .push(&full, &indices, Material::solid([1.0; 4]), BlendMode::Src)
+            .expect("the cover");
+
+        assert_eq!(batch.cull_occluded(TARGET), 1);
+        assert_eq!(batch.draws().len(), 1, "only the cover is left");
+    }
+
+    /// Order is what decides, and the earlier draw is the one that loses pixels.
+    ///
+    /// The same two draws the other way round must leave both alone: a wash drawn
+    /// *over* a bar hides the bar, and the bar is not a safe occluder for it.
+    #[test]
+    fn a_draw_in_front_of_an_opaque_one_is_left_alone() {
+        let (full, indices) = quad([-1.0, -1.0], [1.0, 1.0]);
+        let (bar, _) = quad([-1.0, -1.0], [1.0, -0.5]);
+
+        let mut batch = Batch::new();
+        batch
+            .push(&bar, &indices, Material::solid([1.0; 4]), BlendMode::Src)
+            .expect("the bar");
+        batch
+            .push(
+                &full,
+                &indices,
+                Material::solid([0.1, 0.2, 0.3, 1.0]),
+                BlendMode::SrcOver,
+            )
+            .expect("the wash");
+
+        // The wash is opaque and covers the bar outright, so the bar goes.
+        assert_eq!(batch.cull_occluded(TARGET), 1);
+        assert_eq!(batch.draws().len(), 1);
+        assert_eq!(batch.draws()[0].clip, None, "the wash is untouched");
+    }
+
+    /// An occluder that cannot prove itself culls nothing.
+    #[test]
+    fn a_translucent_cover_narrows_nothing() {
+        let (full, indices) = quad([-1.0, -1.0], [1.0, 1.0]);
+        let (bar, _) = quad([-1.0, -1.0], [1.0, -0.5]);
+
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &full,
+                &indices,
+                Material::solid([1.0; 4]),
+                BlendMode::SrcOver,
+            )
+            .expect("the wash");
+        batch
+            .push(
+                &bar,
+                &indices,
+                Material::solid([1.0, 1.0, 1.0, 0.5]),
+                BlendMode::SrcOver,
+            )
+            .expect("a half-transparent bar");
+
+        assert_eq!(batch.cull_occluded(TARGET), 0);
+        assert_eq!(batch.draws().len(), 2);
+        assert!(batch.draws().iter().all(|d| d.clip.is_none()));
+    }
+
+    /// A draw that writes the stencil keeps every pixel it was given.
+    ///
+    /// Its scissor decides which pixels get a stencil value, not just which get a
+    /// color, so narrowing it would change what a later clipped draw is clipped to.
+    #[test]
+    fn a_stencil_writing_draw_is_never_narrowed() {
+        let (full, indices) = quad([-1.0, -1.0], [1.0, 1.0]);
+        let mut batch = Batch::new();
+        batch
+            .push_with(
+                &full,
+                &indices,
+                Material::solid([1.0; 4]),
+                ColorFilter::None,
+                BlendMode::Src,
+                None,
+                ClipState::narrow(1),
+            )
+            .expect("a clip being built");
+        batch
+            .push(&full, &indices, Material::solid([1.0; 4]), BlendMode::Src)
+            .expect("an opaque cover");
+
+        assert_eq!(batch.cull_occluded(TARGET), 0);
+        assert_eq!(batch.draws().len(), 2);
+        assert_eq!(batch.draws()[0].clip, None);
     }
 
     /// An opaque solid fill is what the predicate exists to admit.

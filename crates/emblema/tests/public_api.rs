@@ -17147,3 +17147,302 @@ fn an_antialiased_draw_after_a_backdrop_filter_renders() {
         at(95, 85)
     );
 }
+
+/// Culling hidden pixels does not change the picture, on scenes built to make it hard.
+///
+/// `Batch::cull_occluded` confines each draw to the pixels no later opaque draw replaces,
+/// which is sound by argument -- see its own documentation. An argument is not a check.
+/// These render the same recording twice, once with the pass and once with it left off
+/// through `Canvas::keep_hidden_draws`, and compare every byte.
+///
+/// This is the test that found the one bug the unit tests could not: clip space runs
+/// bottom to top against the target, so an inverted y mapping mirrored every culled
+/// region. Every piece of arithmetic behind it passed its own tests while a card's
+/// shadow appeared above the card.
+///
+/// The scenes are chosen for what they put in the pass rather than for looking like
+/// anything: an opaque bar that covers part of what is under it, a shadow that must
+/// survive beyond its card, a rounded card that is *not* an occluder, a stencil clip
+/// whose own draws must not be narrowed, and a layer.
+#[test]
+fn culling_hidden_pixels_changes_no_pixel() {
+    let Some(mut ctx) = context() else { return };
+
+    /// Draws in a recording, and how many of them carry a scissor.
+    ///
+    /// Compared between the two renders so that a pass which quietly stopped culling
+    /// cannot satisfy this test by doing nothing -- which is exactly how a mutation of
+    /// the y mapping first passed it, by making every occluder's coverage empty.
+    fn shape(recording: &emblema::Recording) -> (usize, usize) {
+        let draws: Vec<_> = recording
+            .passes
+            .iter()
+            .flat_map(|pass| pass.batch.draws())
+            .collect();
+        (
+            draws.len(),
+            draws.iter().filter(|d| d.clip.is_some()).count(),
+        )
+    }
+
+    /// A scene, whether culling should bite on it, and how to draw it.
+    type Scene = (&'static str, bool, fn(&mut Canvas));
+
+    let scenes: [Scene; 6] = [
+        ("a bar over a wash", true, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.1, 0.2, 0.4, 1.0)),
+                )
+                .expect("wash");
+            canvas
+                .draw_rect(Rect::new(0.0, 0.0, 128.0, 32.0), &Paint::fill(Color::WHITE))
+                .expect("bar");
+        }),
+        ("a sidebar too, sharing a corner", true, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.1, 0.2, 0.4, 1.0)),
+                )
+                .expect("wash");
+            canvas
+                .draw_rect(Rect::new(0.0, 0.0, 128.0, 32.0), &Paint::fill(Color::WHITE))
+                .expect("bar");
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 40.0, 128.0),
+                    &Paint::fill(Color::linear(0.8, 0.8, 0.2, 1.0)),
+                )
+                .expect("sidebar");
+        }),
+        ("a shadow that has to outlive its card", true, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.9, 0.9, 0.9, 1.0)),
+                )
+                .expect("ground");
+            canvas
+                .draw_shadow(
+                    &Rect::new(32.0, 32.0, 96.0, 80.0).to_rounded_path(4.0),
+                    Color::BLACK,
+                    6.0,
+                    false,
+                )
+                .expect("shadow");
+            canvas
+                .draw_rect(
+                    Rect::new(32.0, 32.0, 96.0, 80.0),
+                    &Paint::fill(Color::WHITE),
+                )
+                .expect("card");
+        }),
+        ("a rounded card, which occludes nothing", false, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.1, 0.5, 0.3, 1.0)),
+                )
+                .expect("wash");
+            canvas
+                .draw_rrect(
+                    Rect::new(16.0, 16.0, 112.0, 112.0),
+                    14.0,
+                    &Paint::fill(Color::WHITE),
+                )
+                .expect("rounded card");
+        }),
+        // Half a pixel off the grid, which is what checks the rounding direction. An
+        // occluder rounded to the *nearest* pixel claims the row its edge only half
+        // covers, and culling the wash there leaves the clear color showing through
+        // under a half-covered bar. Every other scene here is integer-aligned, where
+        // inward and nearest agree and the mistake is invisible.
+        ("a bar half a pixel off the grid", true, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.1, 0.2, 0.4, 1.0)),
+                )
+                .expect("wash");
+            canvas
+                .draw_rect(Rect::new(0.0, 0.0, 128.0, 32.5), &Paint::fill(Color::WHITE))
+                .expect("bar");
+        }),
+        // Culls nothing, and that is the assertion: the opaque fill sits inside a
+        // stencil clip, so `occludes` refuses it, and the layer is a pass of its own.
+        ("a clip and a layer over an opaque fill", false, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.2, 0.2, 0.6, 1.0)),
+                )
+                .expect("wash");
+            canvas.save();
+            canvas
+                .clip_path(&Rect::new(8.0, 8.0, 120.0, 72.0).to_rounded_path(12.0))
+                .expect("a stencil clip");
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::WHITE),
+                )
+                .expect("an opaque fill inside the clip");
+            canvas.restore();
+            canvas.save_layer(Layer::opacity(0.5));
+            canvas
+                .draw_rect(
+                    Rect::new(40.0, 40.0, 100.0, 100.0),
+                    &Paint::fill(Color::linear(1.0, 0.4, 0.0, 1.0)),
+                )
+                .expect("in the layer");
+            canvas.restore();
+        }),
+    ];
+
+    for (name, culls, build) in scenes {
+        let record = |keep_hidden: bool| {
+            let mut canvas = Canvas::new(SIZE);
+            if keep_hidden {
+                canvas.keep_hidden_draws();
+            }
+            canvas.clear(Color::BLACK);
+            build(&mut canvas);
+            canvas.finish()
+        };
+        let (culled_recording, whole_recording) = (record(false), record(true));
+
+        // The pass either did something or is not supposed to, said per scene rather
+        // than in aggregate so that one scene going quiet cannot hide behind another.
+        let (culled_shape, whole_shape) = (shape(&culled_recording), shape(&whole_recording));
+        assert_eq!(
+            culled_shape != whole_shape,
+            culls,
+            "{name}: culled {culled_shape:?} against {whole_shape:?}, expected culling = {culls}"
+        );
+
+        let culled = render_recording(&mut ctx, &culled_recording);
+        let whole = render_recording(&mut ctx, &whole_recording);
+
+        assert_eq!(culled.len(), whole.len(), "{name}: different sizes");
+        // Exact. A split draw is the same fragments with a scissor around them, so this
+        // is what the arithmetic predicts and what three rasterizers give.
+        //
+        // `a_scissor_does_not_change_what_a_derivative_free_draw_paints` below is the
+        // control: it is the property this exactness rests on, checked without any
+        // culling in it.
+        let worst = culled
+            .iter()
+            .zip(&whole)
+            .enumerate()
+            .map(|(i, (a, b))| (a.abs_diff(*b), i, *a, *b))
+            .max();
+        let differing = culled.iter().zip(&whole).filter(|(a, b)| a != b).count();
+        if let Some((delta, index, got, want)) = worst {
+            assert_eq!(
+                delta,
+                0,
+                "{name}: byte {index} is {got} against {want}, {differing} of {} differ",
+                culled.len()
+            );
+        }
+    }
+}
+
+/// A scissor changes which pixels a derivative-free draw writes, and nothing else.
+///
+/// The invariant `Batch::cull_occluded` rests on, and the reason
+/// `Material::needs_screen_derivatives` exists. A gradient takes its color from the
+/// interpolated position and samples its ramp at an explicit level, so splitting it by
+/// scissor is the same fragments with fewer of them kept. A material that read `dpdx`
+/// would not have that property -- the derivative is computed across a quad of fragments
+/// whose helpers a scissor may discard -- and that is measured in that function's own
+/// documentation rather than asserted here, because which drivers do it is not a fact
+/// about this renderer.
+///
+/// So this draws one full-target gradient, then the same gradient as four draws clipped
+/// to four strips, and demands exact equality where the strips reach. It holds on Mesa
+/// 25.2.8 and 26.2.3 and on RADV. If it ever fails, the culling pass has lost the ground
+/// it stands on and the fix is not in the pass.
+#[test]
+fn a_scissor_does_not_change_what_a_derivative_free_draw_paints() {
+    let Some(mut ctx) = context() else { return };
+
+    // The complement of a 32,32..96,80 rectangle in a 128 square, which is what culling
+    // produces for a card of that size. Written out rather than computed, so this does not
+    // share the arithmetic it is a control for.
+    let strips = [
+        Rect::new(0.0, 0.0, 128.0, 32.0),
+        Rect::new(0.0, 80.0, 128.0, 128.0),
+        Rect::new(0.0, 32.0, 32.0, 80.0),
+        Rect::new(96.0, 32.0, 128.0, 80.0),
+    ];
+
+    let wash = |canvas: &mut Canvas| {
+        canvas
+            .draw_rect(
+                Rect::new(0.0, 0.0, 128.0, 128.0),
+                &Paint::default()
+                    .with_shader(Shader::LinearGradient {
+                        start: Vec2::new(0.0, 0.0),
+                        end: Vec2::new(128.0, 128.0),
+                        stops: vec![
+                            GradientStop {
+                                offset: 0.0,
+                                color: Color::linear(0.1, 0.2, 0.6, 1.0),
+                            },
+                            GradientStop {
+                                offset: 1.0,
+                                color: Color::linear(0.9, 0.4, 0.1, 1.0),
+                            },
+                        ],
+                        tile: TileMode::Clamp,
+                    })
+                    .with_anti_alias(false),
+            )
+            .expect("gradient");
+    };
+
+    let once = {
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        wash(&mut canvas);
+        render_recording(&mut ctx, &canvas.finish())
+    };
+    let in_strips = {
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        for strip in strips {
+            canvas.save();
+            canvas.clip_rect(strip).expect("a scissor");
+            wash(&mut canvas);
+            canvas.restore();
+        }
+        render_recording(&mut ctx, &canvas.finish())
+    };
+
+    // Only where the strips reach. Inside the card's rectangle the second render draws
+    // nothing, which is the point of the strips rather than a disagreement.
+    let inside_card = |x: u32, y: u32| (32..96).contains(&x) && (32..80).contains(&y);
+    let mut worst = (0u8, 0u32, 0u32);
+    for y in 0..SIZE.height {
+        for x in 0..SIZE.width {
+            if inside_card(x, y) {
+                continue;
+            }
+            let (a, b) = (pixel(&once, x, y), pixel(&in_strips, x, y));
+            for channel in 0..4 {
+                let delta = a[channel].abs_diff(b[channel]);
+                if delta > worst.0 {
+                    worst = (delta, x, y);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        worst.0, 0,
+        "a scissored gradient differs from an unscissored one by {} at ({}, {})",
+        worst.0, worst.1, worst.2
+    );
+}

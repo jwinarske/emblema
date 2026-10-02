@@ -40,6 +40,7 @@ pub mod capabilities;
 pub mod error;
 pub mod format;
 pub mod material;
+pub mod occlusion;
 pub mod resource;
 pub mod scissor;
 pub mod sync;

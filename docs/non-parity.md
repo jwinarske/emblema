@@ -1343,9 +1343,40 @@ stacked frame was one sample and had no occluders; after it the frame has eleven
 four samples. The property that makes reordering possible is the property that makes its
 attachment unaffordable on this device, and the two arrived together.
 
-So **the depth route is closed on a tiler and the other way out is the live one.** The
-conservative interior above needs each draw's geometry rather than a boolean, and that same
-interface is what overlap analysis wants: eleven axis-aligned opaque rectangles over a
-gradient is a question about rectangles, answerable on the processor, needing no attachment
-and indifferent to the sample count. `BatchDraw` already carries a `clip: Option<Scissor>`
-for a backend to honor, which is where the answer would go.
+So **the depth route is closed on a tiler and the other way out is the live one.** That is
+built now, and it is not reordering at all.
+
+**`Batch::cull_occluded` confines each draw to the pixels no later opaque draw replaces.**
+Draw order is untouched, so nothing can land on top of the wrong thing. For draws `i`
+before `j`, if `j` replaces every sample of a pixel then nothing `i` wrote there can reach
+the frame -- including by way of something between them that blended against it, whose
+result is replaced too. `occludes` is already the "replaces every sample" predicate; what
+was added is where it does so, and the rectilinear subtraction that answers what is left.
+
+Only the *occluder* needs exactly-known coverage, which is what keeps this small. The draw
+being narrowed needs none: a scissor restricts any geometry whatever its shape, and the
+thing worth saving here is a gradient.
+
+Measured on a Pi 5, three runs a side, against the frame as it stood:
+
+| row | Vulkan | GLES |
+|---|---|---|
+| stacked, plus panels | 13.686 ms to **4.478** | 14.977 to **5.195** |
+| stacked interface | 16.074 to **5.198** | 17.304 to **6.134** |
+| full frame, mixed content | 13.924 to 13.923 | -- |
+
+Two thirds of the frame, and sixty-two frames a second to a hundred and ninety-three.
+`full frame` is the control and does not move, its cards being rounded and so not occluders.
+
+**It beats this entry's own estimate.** The 9.81 ms above was for culling the wash alone;
+this takes 10.88, because the panel under the rows is hidden too and a scissor does not care
+how many layers deep the covering goes.
+
+The cost is draws -- twelve become a hundred and thirty-one -- and processor time, the
+recording row going 0.016 ms to 0.036. Twenty microseconds for eleven milliseconds of fill.
+The draw count was expected to be the limit on a tiler and is not: at a cap of sixteen the
+frame keeps 68 draws and is *slower*, 6.975 ms against 5.198.
+
+So the forty per cent this entry opened with is no longer the number to beat, and `occludes`
+is still unconsumed by any reordering -- which remains unbuilt and now has little left to
+win.

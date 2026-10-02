@@ -1159,6 +1159,12 @@ pub struct Canvas {
     /// caller that never set a background is compositing onto whatever the surface
     /// already holds, and clearing *that* pass would erase it.
     seeded_by_redraw: bool,
+    /// Whether to leave hidden pixels in the draws that write them.
+    ///
+    /// Culling them is pixel-identical by construction, and the way to check that claim
+    /// is to render the same scene both ways and compare. Nothing but a test should want
+    /// this, which is why it is reachable only through a hidden method.
+    keep_hidden_draws: bool,
     samples: u32,
     /// Gradients tabulated because their stops did not fit in a material.
     ///
@@ -1250,6 +1256,7 @@ impl Canvas {
             background: None,
             anti_alias: false,
             seeded_by_redraw: false,
+            keep_hidden_draws: false,
             samples: 4,
             ramps: Vec::new(),
             backdrops: std::collections::HashMap::new(),
@@ -1845,7 +1852,7 @@ impl Canvas {
     /// was cut exactly rather than compositing with it.
     fn cut_pass(&mut self) -> usize {
         let target = self.target;
-        let batch = std::mem::take(&mut self.batch);
+        let mut batch = std::mem::take(&mut self.batch);
         let sources = std::mem::take(&mut self.sources);
         // The clear belongs to the half that starts from nothing. A layer's
         // target clears to transparent and the frame's to its background; after
@@ -1859,6 +1866,13 @@ impl Canvas {
                 .map(|c| c.to_array())
                 .or_else(|| self.seeded_by_redraw.then_some([0.0; 4]))
         };
+        // Stop each draw writing pixels a later opaque draw replaces. Pixel-identical
+        // and order-preserving -- see `Batch::cull_occluded`, which has the argument --
+        // and done here rather than in the backends because it is a property of the
+        // finished pass rather than of either API.
+        if !self.keep_hidden_draws {
+            batch.cull_occluded(target.extent);
+        }
         self.finished.push(Pass {
             batch,
             descriptor: PassDescriptor {
@@ -5447,6 +5461,9 @@ impl Canvas {
         });
         self.aim_at(frame.parent);
 
+        if !self.keep_hidden_draws {
+            batch.cull_occluded(layer.extent);
+        }
         self.finished.push(Pass {
             batch,
             descriptor: PassDescriptor {
@@ -6043,6 +6060,21 @@ impl Canvas {
         }
     }
 
+    /// Leave in the parts of each draw a later opaque draw would cover.
+    ///
+    /// `Batch::cull_occluded` claims to be pixel-identical. The only way to check a
+    /// claim like that is to render the same recording with it and without it and
+    /// compare the results, which needs a way to turn it off.
+    ///
+    /// Hidden because it is not a choice a caller should make: it asks for the same
+    /// picture at more cost. Alongside `Tessellator::fill_general`, which exists for the
+    /// same reason.
+    #[doc(hidden)]
+    pub fn keep_hidden_draws(&mut self) -> &mut Self {
+        self.keep_hidden_draws = true;
+        self
+    }
+
     /// Finish recording.
     pub fn finish(mut self) -> Recording {
         // A layer left open is a caller mistake, and the useful recovery is to
@@ -6054,6 +6086,10 @@ impl Canvas {
         }
 
         let samples = self.pass_samples();
+        if !self.keep_hidden_draws {
+            let extent = self.extent;
+            self.batch.cull_occluded(extent);
+        }
         let root = Pass {
             batch: self.batch,
             descriptor: PassDescriptor {

@@ -1680,6 +1680,54 @@ So reordering by depth is not the way here, and the entry records the alternativ
 already named: overlap analysis on the CPU, which needs no attachment and is indifferent
 to the sample count.
 
+### Culling hidden pixels by scissor, measured 2026-10-02 at 2f5f518
+
+The route `non-parity.md` 21 was left with after the depth attachment was ruled out above.
+`Batch::cull_occluded` confines each draw to the pixels no later opaque draw replaces --
+order preserved, no attachment, indifferent to the sample count.
+
+Three runs a side, interleaved, 57.1 to 63.1 C, `throttled=0x0`, 2400000 throughout, load
+average 0.08, nothing else on the board:
+
+| row | device | before | after | |
+|---|---|---|---|---|
+| stacked, plus panels | Vulkan | 13.686 ms | **4.478** | −67% |
+| stacked interface | Vulkan | 16.074 | **5.198** | **−68%** |
+| stacked, plus panels | GLES | 14.977 | **5.195** | −65% |
+| stacked interface | GLES | 17.304 | **6.134** | **−65%** |
+| full frame, mixed content | Vulkan | 13.924 | 13.923 | -- |
+| stacked, wash | Vulkan | 10.423 | 10.423 | -- |
+
+Sixty-two frames a second to a hundred and ninety-three. `full frame` is the control --
+its cards are rounded, so nothing in it occludes -- and `stacked, wash` is a single draw
+with nothing to cull against. Both hold still to a hundredth, which is what says the change
+moved only what it was meant to.
+
+**It beats what the depth route was estimated to save.** `non-parity.md` 21 put reordering
+at 9.81 ms, from culling the wash alone. This takes 10.88, because the panel under the rows
+is hidden too and a scissor does not care how many layers deep the covering goes.
+
+**The draw count was the worry and the board says it is not one.** Twelve draws become a
+hundred and thirty-one, and a tiler charges binning per draw that an immediate-mode renderer
+does not -- so the expectation going in was that `MAX_PIECES` would want lowering here. The
+opposite: at a cap of sixteen the frame keeps 68 draws and reads **6.975 ms**, against 5.198
+at thirty-two. Fewer draws is slower, by a third of the remaining frame. The cap stays at
+thirty-two, now set from this board rather than from a desktop -- which is the lesson the
+ear-clipping cap taught twice.
+
+What it costs is processor time, and the ratio is not close: the recording row goes from
+0.016 ms to 0.036, so twenty microseconds buy nearly eleven milliseconds of fill.
+
+x86-64 agrees on direction and understates the size, which is the usual way round for a fill
+change: `stacked interface` 1.790 to 0.838 on Vulkan and 2.100 to 1.078 on GLES, about half
+rather than two thirds.
+
+The pictures are identical, which is checked rather than argued:
+`culling_hidden_pixels_changes_no_pixel` renders six scenes with the pass and without it and
+compares every byte. One of them puts an opaque bar half a pixel off the grid, because
+rounding an occluder outward instead of inward passes every other scene and leaves one row
+of seam.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and
