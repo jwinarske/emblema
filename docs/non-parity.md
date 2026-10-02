@@ -1003,6 +1003,16 @@ triangulation rather than an overlapping fan, for exactly the reason a fan would
 it: a pixel covered twice steps forward twice. So the route needs two-sided stencil
 state in the backends first.
 
+**And the triangulating side got cheaper exactly where that distribution sits.** A
+single simple contour of twenty-four points or fewer is now triangulated by ear
+clipping rather than by lyon's sweep -- verified simple first, and sent to lyon when it
+is not, so fill rules are untouched. The bench's twelve-point concave recording goes
+from 0.175 ms to 0.119 ms, a third off. The cap is where proving a contour simple
+overtakes what the sweep costs, measured at about thirty points by
+`emblema-geometry`'s `ear-crossover` example; half the Berlin tile's rings are under
+eight. So the win lands on the common case, and every crossover above moves further
+out of the stencil's favor rather than toward it.
+
 **Impact.** A concave fill costs a CPU triangulation here and two draws plus a stencil
 attachment upstream. Which is dearer depends on the path and the part, measured above
 for two of the three devices this project benches. Fill rules are not affected -- lyon resolves non-zero and

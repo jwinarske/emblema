@@ -75,6 +75,10 @@ ash-window = "0.13"
 
 # --- core ---
 lyon_tessellation = "1.0.21"
+# Ear clipping, for the single-contour fast path in `emblema-geometry`'s
+# tessellator. ISC, which `deny.toml` already allows. Chosen over a general
+# tessellator because its output is cheap to *verify*: see `ear_fill`.
+earcutr = "0.5.0"
 swash = "0.1"
 glam = "0.27"
 bytemuck = "1"
