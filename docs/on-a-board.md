@@ -1582,6 +1582,42 @@ ms, eight times the tessellated fill's, which on a slow core is a cost in its ow
 right rather than a detail of the comparison. And this device reports no
 advanced-blend support, so all fifteen of those modes refuse here.
 
+### A cap set from the desktop was wrong by four points, measured 2026-10-01 at 0cebdf4
+
+`emblema-geometry`'s ear-clipping fast path is bounded by what it costs to *prove* a
+contour simple, and that bound is a property of the machine rather than of the
+algorithm. The cap went in at twenty-four, from a sweep taken here on x86-64 where the
+two routes cross at thirty. The Pi 5 says they cross at twenty.
+
+`cargo run --release -p emblema-geometry --example ear-crossover`, cross-built with the
+recipe at the top of this file and run from `/tmp`, governor `performance`, 57 to 59 C,
+`throttled=0x0`, 2.4 GHz throughout, nothing else on the board. Three runs, which agreed
+to within two hundredths:
+
+| points | x86-64 | Pi 5, A76 |
+|---|---|---|
+| 8 | 1.59x | 1.57x |
+| 12 | 1.53x | 1.25x |
+| 16 | 1.39x | 1.19x |
+| 20 | 1.25x | 1.00x |
+| 24 | 1.15x | **0.93x** |
+| 32 | 0.94x | 0.76x |
+
+So the shipped cap of twenty-four was serving twenty- and twenty-four-point contours on
+the reference board at a loss, and the cap is now sixteen -- under the nearer crossover
+rather than under the one machine that was measured first.
+
+The A76 is the narrower machine here, which is the part worth carrying forward: it wins
+less at every size and runs out sooner. Seeing the crossover at all needs
+`MAX_EAR_POINTS` raised first, since a contour past the cap takes lyon in both columns
+and the ratio reads 1.00 -- which is what the rows above twenty-four read on the shipped
+build, and is how that build was confirmed to be declining them.
+
+**The general lesson, since this is the second cap this route has had wrong.** A margin
+guessed from one machine is not a margin. The first cap was five hundred and twelve,
+which let `earcutr` hang; the second was twenty-four, which the board measured at a
+loss. Both were set without the board.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and
