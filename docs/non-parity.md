@@ -1274,25 +1274,27 @@ after the fact, and the analytic materials are the case it exists for, since
 it, so an opaque *color* still leaves a soft edge that a depth write would hide the
 background behind.
 
-Run over both bench frames, it admits **nothing at all**. Every rectangle in the
-stacked frame -- the bar, the sidebar, the panel and all eight rows, each a plain
-opaque `draw_rect` -- records as `Material::RoundedRect` with a radius of zero, because
-that is the route a rectangle takes here. `nothing_in_either_bench_frame_is_a_safe_occluder_yet`
-asserts the zero rather than leaving it as a remark, so whichever way out is taken has
-to fail that test and say which.
+Run over both bench frames, it first admitted **nothing at all**: every rectangle in
+the stacked frame -- the bar, the sidebar, the panel and all eight rows, each a plain
+opaque `draw_rect` -- recorded as `Material::RoundedRect` with a radius of zero,
+because that was the route a rectangle took here.
 
-So the obstacle is not depth state, and not a sort. **This renderer has no
-coverage-binary occluder to give a depth test**, and the two ways to get one are
-different pieces of work:
+**That is no longer the state. `draw_rect` tessellates a fill, and the stacked frame is
+now eleven safe occluders out of twelve draws** -- the twelfth is the gradient wash,
+which is what they would be culling. The mixed frame is still zero, its cards being
+*rounded* rectangles that keep the field, so the two frames now differ in kind and not
+only in degree. `what_in_each_bench_frame_is_a_safe_occluder` pins both counts.
+
+The two ways to get there were different pieces of work, and the second was taken:
 
 - **A conservative interior.** Let an analytic shape occlude over an inset of itself --
   a pixel or two in from its edge -- leaving the boundary to blend as it does now. The
   reordering then needs each draw's geometry rather than a boolean, which is a larger
   interface than `occludes` and the reason it is not one already.
-- **A tessellated route for an unrounded axis-aligned rectangle.** A radius of zero
-  through the analytic shader is paying for a distance field that computes a constant,
-  and a plain rect could take a solid fill whose coverage the rasterizer decides. That
-  would make these draws occlude outright.
+- **A tessellated route for an unrounded rectangle. Taken.** A radius of zero through
+  the analytic shader was paying for a distance field that computes a constant, and a
+  plain rect fill now takes a solid fill whose coverage the rasterizer decides -- which
+  makes these draws occlude outright.
 
   **Measured 2026-09-30, and it is worth more than this entry.** Interleaving two
   binaries that differ only in that branch, the tessellated route takes 34 per cent off
@@ -1300,9 +1302,23 @@ different pieces of work:
   of the *wash* reordering would recover, which is a slice of a frame the route change
   has already made cheaper. `docs/on-a-board.md` has the conditions and the control.
 
-  So the route comes first and this entry second. Flipping it is a quality decision as
-  well as a speed one -- four sample levels against continuous coverage -- and it hands
-  this entry its occluders as a side effect rather than a purpose.
+  **What it cost, measured rather than described.** The two routes antialias
+  differently, and the difference is the edge of a rotated rectangle: the field gives 70
+  distinct partial coverage levels across 268 edge pixels and gets the area right to
+  0.0015 per cent, the tessellated route gives **3** levels -- 64, 128, 191 -- across 164
+  pixels and 0.028 per cent. Both are small errors; one edge is near-continuous and the
+  other has three steps.
+
+  It is also the edge upstream gives a rectangle. `FillRectGeometry::GetPositionBuffer`,
+  read at tip on 2026-10-01, emits a four-vertex triangle strip under `Mode::kNormal`,
+  and there is no fragment-evaluated rectangle fill upstream at all -- so the flip
+  closed a divergence rather than opening one, which is why it was not treated as a
+  trade of quality for speed alone.
+
+  So the route came first and this entry second, and the occluders arrived as a side
+  effect rather than a purpose. **Nothing consumes `occludes()` yet**: the reordering is
+  the piece still to build, and it now has eleven draws to work with on the frame where
+  the prize was measured at forty per cent.
 
 Antialiasing is not the obstacle it looks like, and that is worth stating because it
 was the first thing checked. `Canvas::pass_samples` raises the whole pass's sample

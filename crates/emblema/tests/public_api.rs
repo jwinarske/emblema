@@ -900,12 +900,17 @@ fn a_layer_does_not_inherit_the_frames_antialiasing() {
         )
         .expect("line");
     canvas.save_layer(Layer::opacity(0.5));
+    // Rounded, because that is what still computes its own coverage. A plain
+    // rectangle's fill is tessellated -- see `Canvas::draw_rect` -- so a layer
+    // holding one is multisampled for the same reason the frame is, and this test
+    // would then be asserting nothing about the isolation it exists to check.
     canvas
-        .draw_rect(
+        .draw_rrect(
             Rect::new(16.0, 16.0, 64.0, 64.0),
+            8.0,
             &Paint::fill(Color::WHITE),
         )
-        .expect("rect");
+        .expect("rrect");
     canvas.restore();
     let recording = canvas.finish();
 
@@ -1480,12 +1485,13 @@ fn only_an_antialiased_solid_paint_takes_the_analytic_path() {
 }
 
 #[test]
-fn an_antialiased_rectangle_antialiases_without_multisampling() {
+fn an_antialiased_rectangle_antialiases_by_multisampling() {
     let Some(mut ctx) = context() else { return };
-    // A rectangle is four vertices whichever route it takes, so the distance
-    // field buys nothing there. What it buys is the edge: the pass no longer
-    // has to multisample for a shape that computes its own coverage, and a
-    // frame made mostly of rectangles is the common case.
+    // A rectangle fill is tessellated, so its edge comes from the rasterizer and
+    // the pass multisamples -- measured the cheaper route by about thirty per cent
+    // on three architectures, and it is what upstream does. See
+    // `Canvas::draw_rect`. What this pins is that the flip did not cost the edge:
+    // the rectangle is still antialiased and still covers its own area.
     //
     // Rotated and off the pixel grid, because an axis-aligned rectangle on
     // integer bounds has no edge to antialias and would show nothing either
@@ -1517,8 +1523,8 @@ fn an_antialiased_rectangle_antialiases_without_multisampling() {
 
     let (samples, partial, coverage) = draw(&mut ctx, true);
     assert_eq!(
-        samples, 1,
-        "an antialiased rectangle should not multisample the pass"
+        samples, 4,
+        "a tessellated rectangle takes its edge from the rasterizer"
     );
     assert!(
         partial > 100,
@@ -17070,5 +17076,74 @@ fn an_advanced_color_filter_against_a_transparent_color_is_the_identity() {
         inside[2] > 200 && inside[0] < 220 && inside[0] > 120,
         "the blue rectangle at three tenths over white should be a pale blue, \
          and is {inside:?}"
+    );
+}
+
+/// An antialiased draw after a backdrop filter: the pass that follows a cut.
+///
+/// A backdrop filter cuts the pass, and what follows the cut starts with a full-target
+/// `Src` blit of the pass just finished. That pass used to carry no clear color -- the
+/// frame's background having been spent on the pass before it -- and a multisampled
+/// pass here must clear, because the alternative is loading a resolved image into a
+/// multisample attachment and this technique has no reverse of that. So an antialiased
+/// tessellated draw after a backdrop filter was refused outright, with
+/// "a multisampled pass must clear".
+///
+/// A triangle rather than a rectangle, so this stays a statement about the pass and not
+/// about which route `draw_rect` takes.
+#[test]
+fn an_antialiased_draw_after_a_backdrop_filter_renders() {
+    let Some(mut ctx) = context() else { return };
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas
+        .draw_rect(
+            Rect::new(0.0, 0.0, 128.0, 128.0),
+            &Paint::fill(Color::linear(0.0, 0.3, 0.0, 1.0)).with_anti_alias(false),
+        )
+        .expect("ground");
+    canvas.save_layer(Layer::opacity(1.0).with_backdrop_blur(4.0));
+    canvas
+        .draw_rect(
+            Rect::new(16.0, 16.0, 64.0, 64.0),
+            &Paint::fill(Color::linear(1.0, 1.0, 1.0, 0.5)).with_anti_alias(false),
+        )
+        .expect("in the layer");
+    canvas.restore();
+
+    let mut builder = Path::builder();
+    builder.move_to(Vec2::new(70.5, 70.5));
+    builder.line_to(Vec2::new(120.5, 80.5));
+    builder.line_to(Vec2::new(80.5, 120.5));
+    builder.close();
+    canvas
+        .draw_path(
+            &builder.build(),
+            &Paint::fill(Color::WHITE).with_anti_alias(true),
+        )
+        .expect("a triangle after the cut");
+
+    let recording = canvas.finish();
+    let root = &recording.passes[recording.passes.len() - 1];
+    assert_eq!(
+        root.descriptor.samples, 4,
+        "the triangle asked for antialiasing"
+    );
+    assert!(
+        root.descriptor.clear.is_some(),
+        "a multisampled pass must clear, and the whole-target redraw makes that free"
+    );
+
+    // Rendered, not merely recorded: the refusal this test is about came from the
+    // backend rather than from the recording.
+    let pixels = render_recording(&mut ctx, &recording);
+    let at = |x: u32, y: u32| {
+        let i = ((y * SIZE.width + x) * 4) as usize;
+        pixels[i]
+    };
+    assert!(
+        at(95, 85) > 200,
+        "the triangle is drawn, found {}",
+        at(95, 85)
     );
 }

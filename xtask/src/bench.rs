@@ -1163,29 +1163,30 @@ mod tests {
         );
     }
 
-    /// **No draw in either bench frame occludes, and that is the finding.**
+    /// **Eleven of the stacked frame's twelve draws now occlude; none of the mixed
+    /// frame's do.**
     ///
-    /// `BatchDraw::occludes` admits a coverage-binary opaque fill, which is what
-    /// a depth test can safely reorder. Nothing in this bench is one. Every
-    /// rectangle here -- the stacked frame's bar, sidebar, panel and eight rows,
-    /// all of them plain opaque `draw_rect` calls -- records as
-    /// `Material::RoundedRect` with a radius of zero, because that is the route
-    /// this renderer sends a rectangle through. An analytic shape computes its
-    /// coverage in the shader and blends it, so its edge fragments are partial
-    /// and depth-writing them would hide the background behind a soft edge.
+    /// This test used to assert zero on both and say why: every rectangle recorded
+    /// as `Material::RoundedRect` with a radius of zero, and an analytic shape
+    /// blends a partial edge, which a depth test cannot reorder. It named the way
+    /// out it expected -- "routing an unrounded axis-aligned rectangle through a
+    /// tessellated solid fill would make them occlude outright" -- and that is what
+    /// happened. `Canvas::draw_rect` tessellates a fill as of the route flip, so the
+    /// bar, the sidebar, the panel and the eight rows are coverage-binary.
     ///
-    /// So `docs/non-parity.md` 21's forty per cent is not reachable by reordering
-    /// alone, and this test is the thing that says so. The blocker is not depth
-    /// state or a sort: it is that this renderer has no coverage-binary occluder
-    /// to give a depth test. The entry records the two ways out.
+    /// The twelfth is the wash, which `stacked` draws with a gradient.
     ///
-    /// Asserted as zero rather than left as a remark, so that whichever way out is
-    /// taken fails here and has to say which. A conservative interior would make
-    /// these draws occlude over part of their area; routing an unrounded
-    /// axis-aligned rectangle through a tessellated solid fill would make them
-    /// occlude outright.
+    /// The mixed frame stays at zero, and for the reason it always did: its cards
+    /// are *rounded* rectangles, which still take the field, and it has a layer.
+    /// So `docs/non-parity.md` 21's forty per cent is reachable on one of these two
+    /// frames and not the other, which is worth more than a single number -- the
+    /// frames differ in what they are made of, not in how much they overdraw.
+    ///
+    /// Nothing consumes `occludes()` yet. The prerequisite arrived; the reordering
+    /// is still to build, and this test is what will say whether a change to either
+    /// frame or to the predicate has moved what it has to work with.
     #[test]
-    fn nothing_in_either_bench_frame_is_a_safe_occluder_yet() {
+    fn what_in_each_bench_frame_is_a_safe_occluder() {
         let occluding = |recording: &Recording| -> (usize, usize) {
             let draws: Vec<_> = recording
                 .passes
@@ -1197,21 +1198,21 @@ mod tests {
 
         assert_eq!(
             occluding(&frames::stacked(frames::Stacked::All)),
-            (0, 12),
-            "if any of these now occlude, a coverage-binary route arrived: say so \
-             in docs/non-parity.md 21 and measure the frame again"
+            (11, 12),
+            "eleven tessellated rectangles and the gradient wash; if this falls back \
+             to zero the rectangle fill left the tessellated route"
         );
         assert_eq!(
             occluding(&frames::frame(frames::Frame::All)),
             (0, 12),
-            "the mixed frame is analytic shapes and a layer, and none of it \
-             occludes either"
+            "the mixed frame is rounded rectangles and a layer, and none of it \
+             occludes"
         );
 
-        // And the predicate is not vacuous -- it admits the thing it is for, which
-        // the unit tests in `emblema-hal` cover in full. Stated here too because a
-        // reader of the assertions above should not have to take "conservative"
-        // on trust from a test that only ever counts zero.
+        // And the predicate is not vacuous in the other direction either: it still
+        // refuses what it should. The unit tests in `emblema-hal` cover that in full;
+        // the admission below is stated here because the eleven above is only
+        // meaningful if the predicate is the same one that was counting zero.
         let mut batch = emblema_hal::Batch::new();
         batch
             .push(
