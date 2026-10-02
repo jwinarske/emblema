@@ -300,23 +300,45 @@ pub fn polygon_convexity(points: &[Vec2]) -> Convexity {
     // direction of travel and that is not settled until the walk finishes.
     // Two running sums rather than a list of steps, so this allocates nothing.
     let (mut counter_clockwise, mut clockwise) = (0i32, 0i32);
+    // Walked over the contour's edges that have length, rather than over its vertices.
+    // A repeated point leaves a zero-length edge, and a zero-length edge turns through
+    // no angle -- so a walk over vertices reads a cross product of zero at the repeat
+    // *and* at the vertex after it, and the turn the contour actually made between the
+    // points either side is never examined. `[(50,70), (0,70), (0,0), (40,70), (40,70)]`
+    // passed as convex that way, and `fan_fill` covered 2100 where the non-zero rule
+    // fills 1400. Found by `property.rs`'s cross-check against the general route.
+    //
+    // Skipping the repeat rather than declining on it, because a contour can carry one
+    // and still be convex -- a rounded rectangle whose radius fills the side has four,
+    // and so does every round superellipse in `cost-baseline.txt`'s scene. Declining
+    // sent those to the general route, which is correct but costs a sweep where a fan
+    // would do. The turn that matters is the one between the edges with length, and
+    // this finds it: `(40,70)` above is where the counterexample doubles back, and
+    // examining that junction is what catches it.
     for i in 0..n {
         let a = points[i];
         let b = points[(i + 1) % n];
-        let c = points[(i + 2) % n];
-        let incoming = b - a;
-        let outgoing = c - b;
-        // A repeated point leaves a zero-length edge, and a zero-length edge turns
-        // through no angle -- so the cross product below is zero and the test skips
-        // it, taking no account of where the contour actually went. That is not
-        // conservative: `[(50,70), (0,70), (0,0), (40,70), (40,70)]` self-intersects
-        // and was called convex, so `fan_fill` covered 2100 where the non-zero rule
-        // fills 1400. Declining is the conservative answer, and the general route
-        // resolves a degenerate contour under whichever rule the caller asked for.
-        // Found by `property.rs`'s cross-check against the general route.
-        if incoming == Vec2::ZERO || outgoing == Vec2::ZERO {
-            return Convexity::Concave;
+        // This edge has no length, so there is no turn at its far end to judge. The
+        // junction belongs to the last edge that did have length, and that iteration
+        // looked past this repeat to find it.
+        if a == b {
+            continue;
         }
+        let incoming = b - a;
+        // The next point that is not `b`, which is the far end of the next edge with
+        // length. Only a contour carrying repeats advances this more than once.
+        let mut k = (i + 2) % n;
+        let mut skipped = 0;
+        while points[k] == b && skipped < n {
+            k = (k + 1) % n;
+            skipped += 1;
+        }
+        let c = points[k];
+        if c == b {
+            // Every point is this one. No area, and no turn to disagree about.
+            return Convexity::Convex;
+        }
+        let outgoing = c - b;
         let cross = incoming.perp_dot(outgoing);
         let advance = (quadrant(outgoing) - quadrant(incoming)).rem_euclid(4);
         counter_clockwise += advance;
@@ -806,6 +828,37 @@ mod tests {
             polygon_convexity(&[Vec2::ZERO, Vec2::new(1.0, 1.0)]),
             Convexity::Convex
         );
+    }
+
+    #[test]
+    fn a_repeated_point_does_not_make_a_convex_contour_concave() {
+        // The other half, and the reason the repeat is skipped rather than declined.
+        // Declining was the first fix and it was conservative in the wrong direction: a
+        // rounded rectangle whose radius fills the side carries four repeats and is
+        // convex, as does every round superellipse in `cost-baseline.txt`'s scene, whose
+        // flattened contour ends with its closing point twice -- so stripping one leaves
+        // a zero-length edge at the wrap. Those went to the general route, which fills
+        // them correctly and sweeps where a fan would do.
+        let squared_off = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ];
+        assert_eq!(polygon_convexity(&squared_off), Convexity::Convex);
+
+        // And at the wrap specifically, which is the superellipse's case: the last point
+        // repeats the first after the closing duplicate has been stripped.
+        let repeated_at_the_wrap = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(10.0, 0.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(0.0, 10.0),
+            Vec2::new(0.0, 0.0),
+        ];
+        assert_eq!(polygon_convexity(&repeated_at_the_wrap), Convexity::Convex);
     }
 
     #[test]
