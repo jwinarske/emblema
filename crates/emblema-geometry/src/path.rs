@@ -306,6 +306,17 @@ pub fn polygon_convexity(points: &[Vec2]) -> Convexity {
         let c = points[(i + 2) % n];
         let incoming = b - a;
         let outgoing = c - b;
+        // A repeated point leaves a zero-length edge, and a zero-length edge turns
+        // through no angle -- so the cross product below is zero and the test skips
+        // it, taking no account of where the contour actually went. That is not
+        // conservative: `[(50,70), (0,70), (0,0), (40,70), (40,70)]` self-intersects
+        // and was called convex, so `fan_fill` covered 2100 where the non-zero rule
+        // fills 1400. Declining is the conservative answer, and the general route
+        // resolves a degenerate contour under whichever rule the caller asked for.
+        // Found by `property.rs`'s cross-check against the general route.
+        if incoming == Vec2::ZERO || outgoing == Vec2::ZERO {
+            return Convexity::Concave;
+        }
         let cross = incoming.perp_dot(outgoing);
         let advance = (quadrant(outgoing) - quadrant(incoming)).rem_euclid(4);
         counter_clockwise += advance;
@@ -795,6 +806,29 @@ mod tests {
             polygon_convexity(&[Vec2::ZERO, Vec2::new(1.0, 1.0)]),
             Convexity::Convex
         );
+    }
+
+    #[test]
+    fn a_repeated_point_does_not_hide_a_concavity() {
+        // Found by the generated cross-check in `tests/property.rs`, which caught it
+        // as a wrong fill rather than as a wrong classification: fanned, this contour
+        // covers 2,100 square units against the non-zero rule's 1,400. The repeated
+        // last point leaves a zero-length edge, and a zero-length edge turns through
+        // no angle -- so a convexity test that reads the sign of each turn sees
+        // nothing at that corner and never learns the contour doubled back.
+        //
+        // Both round superellipses in `cost-baseline.txt`'s scene carry such an edge
+        // and were classified convex, so this reached shipped shape code. Their
+        // pictures were right anyway, a fan being correct over a convex contour
+        // whatever degenerate points it carries; this one's is not.
+        let doubled_back = [
+            Vec2::new(50.0, 70.0),
+            Vec2::new(0.0, 70.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 70.0),
+            Vec2::new(40.0, 70.0),
+        ];
+        assert_eq!(polygon_convexity(&doubled_back), Convexity::Concave);
     }
 
     /// Every point on a flattened path, for checking a shape rather than a
