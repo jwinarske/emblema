@@ -1,8 +1,7 @@
 # A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted. Re-recorded
-# 2026-10-01 at 63174e2: idle at 56.0 C, 60.9 C entering the recorded run and 64.2 C
+# 2026-10-02 at 7155090: idle at 57.6 C, 61.5 C entering the recorded run and 63.7 C
 # after it, `vcgencmd get_throttled` 0x0 before and after, the clock at 2400000
-# throughout, load average 0.01 and nothing holding the GPU. Three `--check` runs at
-# that commit reported no configuration regressed before it was re-recorded.
+# throughout, load average 0.00 and nothing holding the GPU.
 #
 #   cargo xtask bench --skip llvmpipe --check tests/bench-baselines/raspberry-pi-5-v3d.txt
 #
@@ -170,7 +169,26 @@
 # digit at this scale rather than a five per cent gain -- the row is 0.0185-ish and the
 # file prints three decimals.
 #
-# Last checked against the board: 63174e2
+# **Occlusion culling moved four device rows by two thirds, which is the largest single
+# change these numbers have seen.** Re-recorded 2026-10-02 at 7155090:
+#
+#   stacked, plus panels   vulkan  13.684 -> 4.473   gles  14.978 -> 5.191
+#   stacked interface      vulkan  16.072 -> 5.190   gles  17.302 -> 6.140
+#
+# `Batch::cull_occluded` confines each draw to the pixels no later opaque draw replaces.
+# `full frame, mixed content` is the control at 13.928 to 13.920, its cards being rounded
+# and so not occluders, and `stacked, wash` is a single draw with nothing to cull against.
+#
+# **Two rows went the other way and `--check` is what said so.** The recording rows for
+# those frames -- processor work, no device in them -- read 0.011 to 0.013 and 0.016 to
+# 0.036, and both were flagged as regressions against the previous file before this was
+# recorded. They are the cost rather than a surprise: the stacked frame goes from twelve
+# draws to a hundred and thirty-one, so twenty microseconds of recording buys about eleven
+# milliseconds of fill. Worth keeping in view that the gate's one-sided check is the only
+# thing in this project that would have raised them at all, since a two-thirds improvement
+# elsewhere hides a doubling here in any summary statistic.
+#
+# Last checked against the board: 7155090
 #
 # That line names the commit whose state a board run passed against, which is
 # never the commit that writes the line -- a hash cannot be recorded inside the
@@ -469,45 +487,45 @@
 # both backends run the same WGSL, and the software reference is lavapipe
 # running it too, so a shared mistake would pass every comparison the suite
 # makes.
-recording	distance field, 1 sample	0.100	5.0
-recording	tessellated, 4 samples	0.251	10.0
-recording	tessellated, 1 sample	0.251	5.0
-recording	stroked field, 1 sample	0.103	5.0
-recording	stroked path, 1 sample	0.719	5.0
+recording	distance field, 1 sample	0.103	5.0
+recording	tessellated, 4 samples	0.241	10.0
+recording	tessellated, 1 sample	0.241	5.0
+recording	stroked field, 1 sample	0.105	5.0
+recording	stroked path, 1 sample	0.718	5.0
 recording	frame, gradient ground	0.009	15.0
 recording	frame, plus cards	0.011	15.0
-recording	frame, plus shadows	0.015	15.0
-recording	full frame, mixed content	0.018	10.0
+recording	frame, plus shadows	0.016	15.0
+recording	full frame, mixed content	0.019	10.0
 recording	stacked, wash	0.009	15.0
-recording	stacked, plus panels	0.011	15.0
-recording	stacked interface	0.016	15.0
-recording	concave, 12 points	0.448	5.0
-recording	concave, 72 points	4.020	5.0
-vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.212	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.533	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.697	2.0
-vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.786	2.0
-vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.196	3.0
-vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.424	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus cards	11.064	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.910	2.0
-vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.928	2.0
-vulkan:0 V3D 7.1.7.0	stacked, wash	10.421	2.0
-vulkan:0 V3D 7.1.7.0	stacked, plus panels	13.684	2.0
-vulkan:0 V3D 7.1.7.0	stacked interface	16.072	2.0
-vulkan:0 V3D 7.1.7.0	concave, 12 points	1.455	2.0
-vulkan:0 V3D 7.1.7.0	concave, 72 points	2.017	2.0
-gles V3D 7.1.7.0	distance field, 1 sample	8.560
-gles V3D 7.1.7.0	tessellated, 4 samples	5.464
-gles V3D 7.1.7.0	tessellated, 1 sample	3.643
-gles V3D 7.1.7.0	stroked field, 1 sample	9.150
-gles V3D 7.1.7.0	stroked path, 1 sample	1.319	2.0
-gles V3D 7.1.7.0	frame, gradient ground	11.772
-gles V3D 7.1.7.0	frame, plus cards	12.452
-gles V3D 7.1.7.0	frame, plus shadows	13.336
-gles V3D 7.1.7.0	full frame, mixed content	14.875
-gles V3D 7.1.7.0	stacked, wash	11.776
-gles V3D 7.1.7.0	stacked, plus panels	14.978
-gles V3D 7.1.7.0	stacked interface	17.302
-gles V3D 7.1.7.0	concave, 12 points	1.533
-gles V3D 7.1.7.0	concave, 72 points	2.064
+recording	stacked, plus panels	0.013	15.0
+recording	stacked interface	0.036	15.0
+recording	concave, 12 points	0.450	5.0
+recording	concave, 72 points	4.008	5.0
+vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.207	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.693	2.0
+vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.781	2.0
+vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.187	3.0
+vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.419	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus cards	11.062	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.905	2.0
+vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.910	2.0
+vulkan:0 V3D 7.1.7.0	stacked, wash	10.419	2.0
+vulkan:0 V3D 7.1.7.0	stacked, plus panels	4.473	2.0
+vulkan:0 V3D 7.1.7.0	stacked interface	5.190	2.0
+vulkan:0 V3D 7.1.7.0	concave, 12 points	1.453	2.0
+vulkan:0 V3D 7.1.7.0	concave, 72 points	1.992	2.0
+gles V3D 7.1.7.0	distance field, 1 sample	8.553
+gles V3D 7.1.7.0	tessellated, 4 samples	5.459
+gles V3D 7.1.7.0	tessellated, 1 sample	3.638
+gles V3D 7.1.7.0	stroked field, 1 sample	9.146
+gles V3D 7.1.7.0	stroked path, 1 sample	1.311	2.0
+gles V3D 7.1.7.0	frame, gradient ground	11.767
+gles V3D 7.1.7.0	frame, plus cards	12.445
+gles V3D 7.1.7.0	frame, plus shadows	13.329
+gles V3D 7.1.7.0	full frame, mixed content	14.868
+gles V3D 7.1.7.0	stacked, wash	11.768
+gles V3D 7.1.7.0	stacked, plus panels	5.191
+gles V3D 7.1.7.0	stacked interface	6.140
+gles V3D 7.1.7.0	concave, 12 points	1.528
+gles V3D 7.1.7.0	concave, 72 points	2.042

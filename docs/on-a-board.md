@@ -1285,15 +1285,15 @@ one decimal.
 
 **Confirmed on V3D, 2026-09-30 at 50b64f4, and it leans harder there.** The Pi 5's
 stage rows were recorded the same way, after a reboot with the governor pinned. The
-figures below are the baseline's current ones, re-recorded 2026-10-01 at e026ac8 and
-re-recorded again at 63174e2, and they have moved by a tenth of a per cent or less
-across both -- neither the rectangle route flip nor the convexity walk touches this
-scene, whose cards are rounded and analytic:
+figures below are the baseline's current ones, first re-recorded 2026-10-01 at e026ac8 and
+re-recorded twice since, most recently at 7155090, and they have moved by a tenth of a
+per cent or less across all three -- none of the rectangle route flip, the convexity walk
+or the occlusion culling touches this scene, whose cards are rounded and analytic:
 
 | route | ground | plus cards | plus shadows | frame | ground's share |
 |---|---|---|---|---|---|
-| Pi 5 Vulkan | 10.424 ms | 11.064 | 11.910 | 13.928 | **74.8%** |
-| Pi 5 GLES | 11.772 | 12.452 | 13.336 | 14.875 | **79.1%** |
+| Pi 5 Vulkan | 10.419 ms | 11.062 | 11.905 | 13.910 | **74.9%** |
+| Pi 5 GLES | 11.767 | 12.445 | 13.329 | 14.868 | **79.1%** |
 | VisionFive 2 Vulkan | 43.149 | 45.498 | 48.717 | 64.019 | **67.4%** |
 
 So a single full-screen five-stop gradient is three quarters of the frame on V3D and
@@ -1680,7 +1680,7 @@ So reordering by depth is not the way here, and the entry records the alternativ
 already named: overlap analysis on the CPU, which needs no attachment and is indifferent
 to the sample count.
 
-### Culling hidden pixels by scissor, measured 2026-10-02 at 2f5f518
+### Culling hidden pixels by scissor, measured 2026-10-02 at 452b783
 
 The route `non-parity.md` 21 was left with after the depth attachment was ruled out above.
 `Batch::cull_occluded` confines each draw to the pixels no later opaque draw replaces --
