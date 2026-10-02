@@ -549,6 +549,12 @@ struct LayerFrame {
     /// parent that has drawn nothing needing multisampling does not start
     /// needing it because something inside a layer did.
     anti_alias: bool,
+    /// Whether the parent's batch began by redrawing the whole target.
+    ///
+    /// Displaced with the batch, like `anti_alias` and for the same reason: a
+    /// layer's own batch starts empty and is seeded by nothing, while the parent's
+    /// may have been cut before the layer opened.
+    seeded_by_redraw: bool,
     /// The directions this layer's blur runs along.
     ///
     /// Taken from the transform in force when the layer opened, for the same
@@ -1140,6 +1146,19 @@ pub struct Canvas {
     /// behavior that surprises least; the alternative silently ignores the
     /// request on some shapes.
     anti_alias: bool,
+    /// Whether the batch now open begins by redrawing the whole target.
+    ///
+    /// It does when a pass was cut: what follows the cut is a full-target `Src`
+    /// blit of the pass just finished, unclipped and unstencilled, so every pixel
+    /// is written before anything else in the batch. A pass like that can be given
+    /// a clear color it will never show -- and a clear is what a multisampled pass
+    /// requires here, the alternative being a resolved-to-multisample load that
+    /// this technique has no reverse of.
+    ///
+    /// Tracked rather than inferred from `background` being absent, because a
+    /// caller that never set a background is compositing onto whatever the surface
+    /// already holds, and clearing *that* pass would erase it.
+    seeded_by_redraw: bool,
     samples: u32,
     /// Gradients tabulated because their stops did not fit in a material.
     ///
@@ -1230,6 +1249,7 @@ impl Canvas {
             target: Target::frame(extent),
             background: None,
             anti_alias: false,
+            seeded_by_redraw: false,
             samples: 4,
             ramps: Vec::new(),
             backdrops: std::collections::HashMap::new(),
@@ -1834,7 +1854,10 @@ impl Canvas {
         let clear = if self.in_layer() {
             Some([0.0; 4])
         } else {
-            self.background.take().map(|c| c.to_array())
+            self.background
+                .take()
+                .map(|c| c.to_array())
+                .or_else(|| self.seeded_by_redraw.then_some([0.0; 4]))
         };
         self.finished.push(Pass {
             batch,
@@ -1853,6 +1876,7 @@ impl Canvas {
         self.anti_alias = false;
         let index = self.finished.len() - 1;
         self.draw_whole_pass(index, target, target, BlendMode::Src, None);
+        self.seeded_by_redraw = true;
         self.rebuild_stencil_clips();
         index
     }
@@ -2003,6 +2027,7 @@ impl Canvas {
                 filter,
                 parent: self.target,
                 anti_alias: std::mem::take(&mut self.anti_alias),
+                seeded_by_redraw: std::mem::take(&mut self.seeded_by_redraw),
                 blur_basis: BlurBasis::of(self.transform),
             }),
         });
@@ -3493,8 +3518,10 @@ impl Canvas {
         if rect.is_empty() {
             return Ok(self);
         }
-        if let Some((material, to_local)) = self.analytic_rrect(rect, 0.0, paint) {
-            return self.draw_analytic_local(rect, material, paint, to_local);
+        {
+            if let Some((material, to_local)) = self.analytic_rrect(rect, 0.0, paint) {
+                return self.draw_analytic_local(rect, material, paint, to_local);
+            }
         }
         let path = rect.to_path();
         self.draw_path(&path, paint)
@@ -5429,6 +5456,7 @@ impl Canvas {
         // into, and before the composite below, which is an image quad that
         // multisampling cannot change.
         self.anti_alias = frame.anti_alias;
+        self.seeded_by_redraw = frame.seeded_by_redraw;
         let mut index = self.finished.len() - 1;
         if frame.paint.blur.max_element() > 0.0 {
             index = self.blur_passes(index, layer, frame.paint.blur, frame.blur_basis);
@@ -6024,7 +6052,10 @@ impl Canvas {
         let root = Pass {
             batch: self.batch,
             descriptor: PassDescriptor {
-                clear: self.background.map(|c| c.to_array()),
+                clear: self
+                    .background
+                    .map(|c| c.to_array())
+                    .or_else(|| self.seeded_by_redraw.then_some([0.0; 4])),
                 samples,
                 // The root pass renders into the caller's surface, which is the
                 // space its geometry was recorded against.

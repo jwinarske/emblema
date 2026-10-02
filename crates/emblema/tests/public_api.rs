@@ -17072,3 +17072,72 @@ fn an_advanced_color_filter_against_a_transparent_color_is_the_identity() {
          and is {inside:?}"
     );
 }
+
+/// An antialiased draw after a backdrop filter: the pass that follows a cut.
+///
+/// A backdrop filter cuts the pass, and what follows the cut starts with a full-target
+/// `Src` blit of the pass just finished. That pass used to carry no clear color -- the
+/// frame's background having been spent on the pass before it -- and a multisampled
+/// pass here must clear, because the alternative is loading a resolved image into a
+/// multisample attachment and this technique has no reverse of that. So an antialiased
+/// tessellated draw after a backdrop filter was refused outright, with
+/// "a multisampled pass must clear".
+///
+/// A triangle rather than a rectangle, so this stays a statement about the pass and not
+/// about which route `draw_rect` takes.
+#[test]
+fn an_antialiased_draw_after_a_backdrop_filter_renders() {
+    let Some(mut ctx) = context() else { return };
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas
+        .draw_rect(
+            Rect::new(0.0, 0.0, 128.0, 128.0),
+            &Paint::fill(Color::linear(0.0, 0.3, 0.0, 1.0)).with_anti_alias(false),
+        )
+        .expect("ground");
+    canvas.save_layer(Layer::opacity(1.0).with_backdrop_blur(4.0));
+    canvas
+        .draw_rect(
+            Rect::new(16.0, 16.0, 64.0, 64.0),
+            &Paint::fill(Color::linear(1.0, 1.0, 1.0, 0.5)).with_anti_alias(false),
+        )
+        .expect("in the layer");
+    canvas.restore();
+
+    let mut builder = Path::builder();
+    builder.move_to(Vec2::new(70.5, 70.5));
+    builder.line_to(Vec2::new(120.5, 80.5));
+    builder.line_to(Vec2::new(80.5, 120.5));
+    builder.close();
+    canvas
+        .draw_path(
+            &builder.build(),
+            &Paint::fill(Color::WHITE).with_anti_alias(true),
+        )
+        .expect("a triangle after the cut");
+
+    let recording = canvas.finish();
+    let root = &recording.passes[recording.passes.len() - 1];
+    assert_eq!(
+        root.descriptor.samples, 4,
+        "the triangle asked for antialiasing"
+    );
+    assert!(
+        root.descriptor.clear.is_some(),
+        "a multisampled pass must clear, and the whole-target redraw makes that free"
+    );
+
+    // Rendered, not merely recorded: the refusal this test is about came from the
+    // backend rather than from the recording.
+    let pixels = render_recording(&mut ctx, &recording);
+    let at = |x: u32, y: u32| {
+        let i = ((y * SIZE.width + x) * 4) as usize;
+        pixels[i]
+    };
+    assert!(
+        at(95, 85) > 200,
+        "the triangle is drawn, found {}",
+        at(95, 85)
+    );
+}
