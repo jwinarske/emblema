@@ -3495,30 +3495,35 @@ impl Canvas {
 
     /// Fill or stroke a rectangle.
     ///
-    /// An antialiased solid fill takes the same distance field a rounded
-    /// rectangle does, with no corner to round. The vertex count is the same
-    /// either way, so the intent was to spare the pass multisampling for a shape
-    /// that computes its own coverage.
+    /// **A fill is tessellated.** It used to take the same distance field a rounded
+    /// rectangle does, with no corner to round, on the reasoning that a shape
+    /// computing its own coverage spares the pass multisampling. That was measured
+    /// backwards on 2026-09-30: the field is the dearer route by about thirty per
+    /// cent. On the `stacked interface` frame, tessellated at four samples against
+    /// analytic at one -- 16.077 ms against 24.508 on a Pi 5, 66.100 against 93.981
+    /// on a VisionFive 2, 1.786 against 2.758 on x86-64. Three architectures, one
+    /// direction. `docs/on-a-board.md` has the conditions, the control and the
+    /// arithmetic.
     ///
-    /// **Measured 2026-09-30: the analytic route is the dearer one here, by about
-    /// thirty per cent.** On the `stacked interface` frame, tessellated at four
-    /// samples against analytic at one: 16.077 ms against 24.508 on a Pi 5,
-    /// 66.100 against 93.981 on a VisionFive 2, 1.786 against 2.758 on x86-64.
-    /// `docs/on-a-board.md` has the conditions, the control and the arithmetic.
+    /// The arithmetic the old comment had wrong: multisampling shades once per pixel
+    /// and pays in attachment bandwidth and a resolve -- 1.23x on V3D, 2.62x on
+    /// PowerVR, not 4x -- while the field costs an evaluation per fragment across a
+    /// quad, and for a rectangle that field evaluates to a constant.
     ///
-    /// Multisampling shades once per pixel and pays in bandwidth and a resolve --
-    /// 1.23x on V3D, 2.62x on PowerVR, not 4x. The field costs an evaluation per
-    /// fragment, and for a rectangle it evaluates to a constant.
+    /// It is also what upstream does. `FillRectGeometry::GetPositionBuffer`, read at
+    /// `flutter/flutter` master on 2026-10-01, emits a four-vertex triangle strip
+    /// under `Mode::kNormal`; there is no fragment-evaluated rectangle fill there at
+    /// all. So the flip closes a divergence rather than opening one, and the edge a
+    /// rectangle gets here is now the edge upstream gives it.
     ///
-    /// Not flipped, because the two routes antialias differently: four sample
-    /// levels against continuous coverage. That is a change to every rectangle in
-    /// every scene, both timing baselines and the corpus comparison, and wants its
-    /// own measurements.
+    /// **A stroke stays on the field.** What was measured is a fill, the stroke route
+    /// is careful about a corner the field would otherwise round -- see
+    /// `analytic_rrect` -- and nothing here has measured what that costs.
     pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) -> Result<&mut Self> {
         if rect.is_empty() {
             return Ok(self);
         }
-        {
+        if matches!(paint.style, Style::Stroke(_)) {
             if let Some((material, to_local)) = self.analytic_rrect(rect, 0.0, paint) {
                 return self.draw_analytic_local(rect, material, paint, to_local);
             }

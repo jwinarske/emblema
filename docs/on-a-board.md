@@ -1369,7 +1369,7 @@ not because this is the way to keep a number. Making them permanent means three
 more bench rows and a re-recording on both boards; the probe is twenty lines and
 `git log` for this paragraph has it.
 
-### A square rectangle is on the wrong route, by thirty per cent
+### A square rectangle was on the wrong route, by thirty per cent
 
 Measured 2026-09-30, interleaved: two binaries differing only in which route
 `draw_rect` takes for an unrounded rectangle, alternating in one session on each
@@ -1401,13 +1401,29 @@ rather than four. The analytic route pays a distance-field evaluation per fragme
 across a quad covering the shape, and for a rectangle that field evaluates to a
 constant.
 
-Nothing is changed on it here. The routes antialias differently -- four sample levels
-against continuous coverage -- so flipping is a quality decision as well as a speed
-one, and it moves every rectangle in every scene, the cost baseline, both timing
-baselines and the corpus comparison. That wants its own measurements.
+**Flipped 2026-10-01, for fills only.** What that cost is measured too, on the edge of a
+rotated rectangle: the field gives 70 distinct partial coverage levels across 268 edge
+pixels and the area to 0.0015 per cent, the tessellated route gives 3 levels -- 64, 128,
+191 -- across 164 pixels and 0.028 per cent. Near-continuous against three steps, both
+areas right. And three steps is the edge upstream gives a rectangle:
+`FillRectGeometry::GetPositionBuffer`, read at tip on 2026-10-01, emits a four-vertex
+triangle strip under `Mode::kNormal`, with no fragment-evaluated rectangle fill upstream
+at all -- so the flip closed a divergence.
 
-It also bears on `non-parity.md` 21: a tessellated rectangle is coverage-binary, so
-`BatchDraw::occludes` would admit it.
+Strokes stay on the field. What was measured is a fill, and the stroke route is careful
+about a corner the field would otherwise round -- a nine-wide miter differs by 253 of 255
+on the corner pixel.
+
+Confirmed here after the flip, interleaved against the previous commit: `stacked
+interface` 2.760 ms before against 1.791 after on x86-64 Vulkan, two runs a side with no
+overlap, which reproduces the 2.758 and 1.786 above.
+
+The cost baseline did not move. Both routes emit four vertices and six indices, which is
+what `draw_rect`'s old comment meant by the vertex count being the same either way --
+the difference was never geometry.
+
+It also delivered `non-parity.md` 21 its occluders: the stacked frame now has eleven safe
+occluders out of twelve draws, where it had none.
 
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
