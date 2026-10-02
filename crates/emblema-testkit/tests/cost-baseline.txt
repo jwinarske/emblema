@@ -7,7 +7,7 @@
   rect-fill                                    1      1        4        6       0     0
   circle-fill                                  1      1       40      114       0     0
   concave-polygon                              1      1        6       12       0     0
-  overlapping-opaque                           1      2        8       12       0     0
+  overlapping-opaque                           1      5        8       12       0     0
   translucent-stack                            1      3       76      210       0     0
   advanced-blend-darkening                     1      4      112      312       0     0
   advanced-blend-lightening                    1      4      112      312       0     0
@@ -16,7 +16,7 @@
   advanced-blend-luminosity                    1      4      112      312       0     0
   advanced-blend-inverting                     1      4      112      312       0     0
   clipped-circle                               1      1       44      126       0     0
-  clip-varies-between-draws                    1      3       12       18       0     0
+  clip-varies-between-draws                    1      5       12       18       0     0
   clip-follows-its-transform                   1      1        4        6       0     0
   shape-clipped-fill                           1      3       11       15       0     0
   shape-clip-and-scissor-together              1      3       51      135       0     0
@@ -46,7 +46,7 @@
   mask-blur-shadow                             1      2       28       72       0     0
   stroke-dashed                                1      3      124      246       0     0
   stroke-joins                                 1      3       23       51       0     0
-  stroke-caps                                  1      3       26       60       0     0
+  stroke-caps                                  1      6       26       60       0     0
   transparent-background                       1      3       11       15       0     0
   oval                                         1      2        8       12       0     0
   analytic-outlines                            1      3       12       18       0     0
@@ -70,7 +70,7 @@
   layer-blurred-under-anisotropic-scale        4      5       44      102       3     0
   layer-composed-filter-under-scale            5      6       48      108       4     0
   atlas-turned-sprites                         1      1       16       24       1     0
-  layer-resampled-by-its-matrix                2      3       32       78       1     0
+  layer-resampled-by-its-matrix                2      6       32       78       1     0
   shadow-cast-by-a-card                        4      5       60      150       3     0
   picture-drawn-into-a-picture                 3      4       52      132       2     0
   flood-fill-under-a-rotation                  1      3       15       24       0     0

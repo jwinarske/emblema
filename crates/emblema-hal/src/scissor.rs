@@ -146,6 +146,35 @@ impl Scissor {
         Self::new(left, top, right - left, bottom - top)
     }
 
+    /// The whole pixels a device-space rectangle *entirely* contains.
+    ///
+    /// The opposite rounding to [`Self::from_device_bounds`], and a separate function
+    /// rather than a flag because the two are wanted for opposite reasons. A clip asks
+    /// "which pixels may this draw touch", and rounding it in would clip a pixel the
+    /// caller asked for. This asks "which pixels does this shape certainly cover", and
+    /// rounding it out would claim a pixel the shape only partly covers -- which, where
+    /// the answer is used to cull something underneath, leaves a gap in the frame.
+    ///
+    /// Correct at any sample count. A sample lies inside its own pixel, so every sample
+    /// of a pixel whose square is inside the rectangle is inside the rectangle too.
+    pub fn covered_device_bounds(min: [f32; 2], max: [f32; 2], extent: Extent2D) -> Self {
+        if !min.iter().chain(&max).all(|v| v.is_finite()) {
+            return Self::EMPTY;
+        }
+        let inward = |v: f32, limit: u32, up: bool| {
+            let rounded = if up { v.ceil() } else { v.floor() };
+            rounded.clamp(0.0, limit as f32) as u32
+        };
+        let left = inward(min[0], extent.width, true);
+        let top = inward(min[1], extent.height, true);
+        let right = inward(max[0], extent.width, false);
+        let bottom = inward(max[1], extent.height, false);
+        if right <= left || bottom <= top {
+            return Self::EMPTY;
+        }
+        Self::new(left, top, right - left, bottom - top)
+    }
+
     pub fn from_device_bounds(min: [f32; 2], max: [f32; 2], extent: Extent2D) -> Self {
         if !min.iter().chain(&max).all(|v| v.is_finite()) {
             return Self::EMPTY;
@@ -173,6 +202,36 @@ mod tests {
         assert!(Scissor::covering(TARGET).covers(TARGET));
         assert!(!Scissor::new(1, 0, 99, 80).covers(TARGET));
         assert!(!Scissor::new(0, 0, 100, 79).covers(TARGET));
+    }
+
+    #[test]
+    fn covered_bounds_round_inward_where_a_clip_rounds_outward() {
+        // A rectangle inset by half a pixel on every side covers the pixels from 11
+        // to 59 inclusive, and touches 10 and 60 without covering them.
+        let covered = Scissor::covered_device_bounds([10.5, 10.5], [60.5, 60.5], TARGET);
+        assert_eq!(covered, Scissor::new(11, 11, 49, 49));
+        // The clip constructor rounds to nearest and would claim both.
+        assert_eq!(
+            Scissor::from_device_bounds([10.5, 10.5], [60.5, 60.5], TARGET),
+            Scissor::new(11, 11, 50, 50)
+        );
+
+        // Whole numbers are the same either way, which is the common case.
+        assert_eq!(
+            Scissor::covered_device_bounds([4.0, 6.0], [20.0, 30.0], TARGET),
+            Scissor::new(4, 6, 16, 24)
+        );
+
+        // Narrower than a pixel covers nothing, rather than rounding up to one.
+        assert_eq!(
+            Scissor::covered_device_bounds([4.2, 4.2], [4.8, 4.8], TARGET),
+            Scissor::EMPTY
+        );
+        // And a non-finite bound is refused rather than clamped into something.
+        assert_eq!(
+            Scissor::covered_device_bounds([f32::NAN, 0.0], [10.0, 10.0], TARGET),
+            Scissor::EMPTY
+        );
     }
 
     #[test]
