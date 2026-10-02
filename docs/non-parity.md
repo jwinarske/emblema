@@ -1242,12 +1242,21 @@ twice rather than one draw occluding another.
 
 **Why, on this side.** No reason on record beyond `Batch`'s note, which frames
 reordering as a way to cut pipeline binds rather than as a way to avoid overdraw --
-a smaller prize, and it is the one the comment weighs. The attachment is not the
-obstacle: `emblema-hal-vulkan`'s `stencil.rs` already allocates a combined
-`D24_UNORM_S8_UINT` or `D32_SFLOAT_S8_UINT` image for the clip, so the depth half is
-already allocated and already paid for on every target that clips. What is missing is
-depth state on the pipelines, which every one of them compiles ahead of time, and a
-pass over recorded draws that knows which are opaque.
+a smaller prize, and it is the one the comment weighs.
+
+**The attachment is the obstacle, which took a board to find out.** This entry used to
+say it was not: `emblema-hal-vulkan`'s `stencil.rs` allocates a combined
+`D24_UNORM_S8_UINT` or `D32_SFLOAT_S8_UINT` image for the clip, so the depth half looked
+paid for. It is not paid for here. `uses_stencil` derives the attachment from the draws,
+and `stacked interface` records twelve draws with none stencilled and none scissored, so
+that frame carries no such image and would be adding one.
+
+Measured 2026-10-02 on a Pi 5, two binaries differing only in whether the pass carries the
+attachment, no reordering in either: at **one sample it is free** -- 8.212 ms against
+8.217 on the field row -- and at **four samples it costs four times the pass**, 4.530
+against 18.51. `stacked interface` goes 16.07 to 30.20. Against a prize of 9.81 ms that is
+a loss of 14.1, and x86-64 puts the same cost at 9.4 per cent, so a desktop measurement
+would have waved it through. `docs/on-a-board.md` has the conditions.
 
 **Impact, estimated rather than measured, and small for the scene that prompted it.**
 In the bench's frame the only opaque draws are the gradient ground and the three
@@ -1320,9 +1329,23 @@ The two ways to get there were different pieces of work, and the second was take
   the piece still to build, and it now has eleven draws to work with on the frame where
   the prize was measured at forty per cent.
 
-Antialiasing is not the obstacle it looks like, and that is worth stating because it
-was the first thing checked. `Canvas::pass_samples` raises the whole pass's sample
-count when any draw asks for antialiasing, and no draw blends its own coverage for it,
-so an opaque solid fill is binary at every sample whether the pass is multisampled or
-not -- which is exactly what a depth test wants. A renderer that antialiased by
-blending coverage could not do this at all.
+Antialiasing is not the obstacle it looks like *for the predicate*, and that is worth
+stating because it was the first thing checked. `Canvas::pass_samples` raises the whole
+pass's sample count when any draw asks for antialiasing, and no draw blends its own
+coverage for it, so an opaque solid fill is binary at every sample whether the pass is
+multisampled or not -- which is exactly what a depth test wants. A renderer that
+antialiased by blending coverage could not do this at all.
+
+**It is the obstacle for the attachment, and that is the bind this repository created.** A
+draw is a safe occluder when the rasterizer decides its coverage, and asking the rasterizer
+for coverage is what raises the pass to four samples. Before the rectangle route flip the
+stacked frame was one sample and had no occluders; after it the frame has eleven and is
+four samples. The property that makes reordering possible is the property that makes its
+attachment unaffordable on this device, and the two arrived together.
+
+So **the depth route is closed on a tiler and the other way out is the live one.** The
+conservative interior above needs each draw's geometry rather than a boolean, and that same
+interface is what overlap analysis wants: eleven axis-aligned opaque rectangles over a
+gradient is a question about rectangles, answerable on the processor, needing no attachment
+and indifferent to the sample count. `BatchDraw` already carries a `clip: Option<Scissor>`
+for a backend to honor, which is where the answer would go.

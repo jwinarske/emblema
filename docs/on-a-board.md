@@ -1638,6 +1638,48 @@ guessed from one machine is not a margin. The first cap was five hundred and twe
 which let `earcutr` hang; the second was twenty-four, which the board measured at a
 loss. Both were set without the board.
 
+### Multisampled depth is what V3D cannot afford, measured 2026-10-02 at 5b85aaa
+
+`non-parity.md` 21 wanted a depth buffer to reorder opaque draws, and said the
+attachment was "already allocated and already paid for on every target that clips". The
+frame the prize was measured on clips nothing -- `stacked interface` records twelve draws,
+none stencilled and none scissored -- so it would pay for the attachment from scratch.
+Measured before building anything, with two binaries differing only in whether the pass
+carries a depth-stencil attachment and no reordering in either:
+
+| row | samples | without | with | |
+|---|---|---|---|---|
+| distance field | 1 | 8.212 ms | 8.217 | +0.1% |
+| tessellated | 1 | 3.696 | 3.702 | +0.2% |
+| tessellated | 4 | 4.530 | **18.51** | **+309%** |
+| stacked, wash | 4 | 10.42 | 24.59 | +136% |
+| stacked interface | 4 | 16.07 | 30.20 | +88% |
+
+Three runs a side, interleaved, 58.2 to 63.7 C, `throttled=0x0`, 2400000 throughout,
+load average 0.00. The clean numbers reproduce the baseline to a hundredth.
+
+**At one sample the attachment is free and at four it costs four times the pass.** That
+is the whole finding, and it is not what the entry assumed. x86-64 puts the same cost at
+9.4 per cent on `stacked interface` -- 1.790 against 1.958, three runs a side -- so this
+is a property of the tiler rather than of depth testing, and a desktop measurement would
+have waved it through.
+
+Not established here: *why*. A 1920x1080 four-sample D24S8 alongside four-sample color is
+more than this tile memory holds, and either smaller tiles or a spill would explain the
+factor. Which one it is wants a counter this project does not read, and the number above
+does not depend on knowing.
+
+**It leaves entry 21 in a bind that this repository created.** A draw is a safe occluder
+when the rasterizer decides its coverage, and asking the rasterizer for coverage is what
+raises the pass to four samples. Before the rectangle route flip the stacked frame was one
+sample and had no occluders; after it the frame has eleven and is four samples. The
+property that makes reordering possible is the property that makes its attachment
+unaffordable, on this device.
+
+So reordering by depth is not the way here, and the entry records the alternative it
+already named: overlap analysis on the CPU, which needs no attachment and is indifferent
+to the sample count.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and
