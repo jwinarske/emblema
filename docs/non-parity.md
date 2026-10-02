@@ -1004,14 +1004,14 @@ it: a pixel covered twice steps forward twice. So the route needs two-sided sten
 state in the backends first.
 
 **And the triangulating side got cheaper exactly where that distribution sits.** A
-single simple contour of twenty-four points or fewer is now triangulated by ear
-clipping rather than by lyon's sweep -- verified simple first, and sent to lyon when it
-is not, so fill rules are untouched. The bench's twelve-point concave recording goes
-from 0.175 ms to 0.119 ms, a third off. The cap is where proving a contour simple
-overtakes what the sweep costs, measured at about thirty points by
-`emblema-geometry`'s `ear-crossover` example; half the Berlin tile's rings are under
-eight. So the win lands on the common case, and every crossover above moves further
-out of the stencil's favor rather than toward it.
+single simple contour of sixteen points or fewer is now triangulated by ear clipping
+rather than by lyon's sweep -- verified simple first, and sent to lyon when it is not,
+so fill rules are untouched. The bench's twelve-point concave recording goes from
+0.175 ms to 0.118 ms, a third off. The cap is where proving a contour simple overtakes
+what the sweep costs, which `emblema-geometry`'s `ear-crossover` example puts at thirty
+points on x86-64 and at twenty on this project's reference A76; eighty-one per cent of
+the Berlin tile's rings are under sixteen. So the win lands on the common case, and
+every crossover above moves further out of the stencil's favor rather than toward it.
 
 **Impact.** A concave fill costs a CPU triangulation here and two draws plus a stencil
 attachment upstream. Which is dearer depends on the path and the part, measured above

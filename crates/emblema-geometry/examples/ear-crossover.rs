@@ -15,8 +15,11 @@
 //! crossover itself means raising `MAX_EAR_POINTS` first -- which is how the figures in
 //! its own doc comment were taken.
 //!
-//! The crossover moves with cache and memory, so a board is worth re-running before
-//! trusting a cap set here. See `docs/on-a-board.md`.
+//! The crossover moves with cache and memory, and by more than a margin guessed from
+//! one machine covers: it is at thirty points on an x86-64 desktop and at twenty on a
+//! Pi 5's A76, which is what moved the cap from twenty-four to sixteen. Run it on the
+//! board before trusting a cap set anywhere else -- `docs/on-a-board.md` has both
+//! sweeps and the conditions they were taken under.
 
 use emblema_geometry::tessellate::Tessellator;
 use emblema_geometry::Path;
