@@ -39,6 +39,7 @@ emblema-renderer = { workspace = true }
 
 [dev-dependencies]
 png = { workspace = true }
+proptest = { workspace = true }
 googletest = { workspace = true }
 emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
 emblema-hal-gles = { path = "../emblema-hal-gles" }
