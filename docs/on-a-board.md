@@ -1804,9 +1804,40 @@ the material set mirrored from `materials::create_layout`, which is `pub(crate)`
 reproduction has to be valid before it is evidence**, and an empty layout is the easy way to
 forget that.
 
-Left unestablished deliberately: which construct in that fragment shader does it. Narrowing
-further means bisecting fifteen hundred lines of WGSL, and the vendor can do that faster with
-what is here.
+**What it is not, which is most of the search space.** Probed with descriptor-free fragment
+shaders built by `glslangValidator`, each validated by `spirv-val`, run with an empty pipeline
+layout -- legal there, because they declare nothing:
+
+| probe | words | i.MX8MP |
+|---|---|---|
+| chained arithmetic | 214, 739, 4,915, 19,239, **76,531** | all compiled |
+| `dFdx`/`dFdy`/`fwidth` | 205 | compiled |
+| 32-iteration loop with a branch inside | 319 | compiled |
+| twelve-case `switch` | 612 | compiled |
+| derivatives inside branchy control flow, computing coverage from a distance | 503 | compiled |
+
+So **not size** -- a 76,531-word module compiles where our 9,347-word one does not -- and not
+derivatives, not loops, not switches. Not descriptors or texture sampling either:
+`effect-image` samples through a separate image and sampler and compiles with the same
+layout.
+
+What is left is the combination in one entry point: many material branches, descriptors and
+derivatives together. Narrowing past that means bisecting fifteen hundred lines of WGSL, and
+the vendor can do that faster with the above than this project can.
+
+**It is also not something precompiling could avoid, which is worth stating because it is the
+first thing suggested.** `impellerc` upstream is "host side tooling that consumes GLSL and
+generates libraries", with metadata "to construct rendering and compute pipelines *at
+runtime*" -- so it produces SPIR-V ahead of time, which is exactly what `build.rs` already
+does here through naga. `SOLID_SPV` *is* the precompiled artifact. The compiler that crashes
+is the vendor's SPIR-V to machine code stage inside `vkCreateGraphicsPipelines`, and nothing
+portable skips it: a `VkPipelineCache` blob has to be produced by that driver on that device,
+so surviving the compile once is a precondition for having one rather than a way around it.
+
+Where upstream does differ is granularity -- many small shaders against this tree's one
+`solid.wgsl` carrying every material -- and the size sweep above is the reason not to expect
+that to fix *this*. It would change which module is handed over, and might miss whatever the
+fault is, but it would not be addressing it.
 
 One observation from the same work, recorded because it means the suite and the bench do not
 compile the same shader: `SOLID_SPV` is 10,036 words in a debug build and 9,347 in a release
