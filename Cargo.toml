@@ -99,6 +99,12 @@ naga = "23"
 # hand-rolled four separate times as a vector of strings.
 googletest = "0.14"
 proptest = "1"
+# Golden images, test-only. Pure Rust (fdeflate/miniz_oxide underneath), so it
+# breaks neither the no-C-toolchain rule nor cross-compilation -- and it is a
+# dev-dependency, so it reaches no board binary. Raw PPM for the same images is
+# about twenty times the bytes, which matters for a file regenerated whenever a
+# rendering change is deliberate.
+png = "0.17"
 criterion = "0.5"
 image = "0.25"
 winit = "0.30"
