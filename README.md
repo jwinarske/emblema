@@ -30,6 +30,16 @@ through KMS with no compositor present.
 > system actually puts on screen, so both paths are exercised against a surface
 > with no window behind it and pin the property that decides it instead.
 
+Fill is where the time goes on the devices this targets, and two changes to it are
+measured rather than argued. A rectangle's fill is tessellated rather than evaluated
+as a distance field, which took thirty-four per cent off an interface frame on a
+Raspberry Pi 5 and thirty on a VisionFive 2 — the opposite of what the code
+assumed. And a draw is now confined to the pixels no later opaque draw replaces,
+which took two thirds off that same frame: 16.07 ms to 5.19 on V3D, 27.2 to 11.0 on
+an Adreno 640. Neither changes a picture; both are in
+[`docs/on-a-board.md`](https://github.com/jwinarske/emblema/blob/main/docs/on-a-board.md)
+with the conditions they were taken under.
+
 ## Why
 
 - **Tessellation-based, no compute shader requirement.** Runs correctly on
@@ -55,9 +65,14 @@ alongside windowed surfaces, not a third rendering backend.
 |            | WSI (windowed)      | DRM (direct scanout)                          |
 |------------|---------------------|-----------------------------------------------|
 | **Vulkan** | `VkSwapchainKHR`    | VkImage → dma-buf export → drm-rs FB → commit |
-| **GLES**   | EGL window surface  | EGL on GBM → gbm_surface → drm-rs FB → commit |
+| **GLES**   | EGL window surface  | *planned* — EGL on GBM → gbm_surface → drm-rs FB → commit |
 
-All four are Tier 1 on Linux. The windowed column works today against a surface
+**Three of the four are built.** GLES to direct scanout is not: there is no `gbm`
+anywhere in the tree, no dependency and no code, and that cell describes a route
+that does not exist yet. This table claimed all four until the code was read
+against it.
+
+The windowed column works today against a surface
 the caller supplies. The scanout column is **partial**: the frame loop above
 KMS is implemented and tested — the buffer ring, fence plumbing, and format and
 modifier negotiation — and dma-buf export from Vulkan is real. A buffer this
@@ -67,10 +82,12 @@ a framebuffer, the mode is set, and frames flip in turn.
 That is checked two ways rather than one. On a workstation it is the virtual KMS
 driver, because a compositor holds master on any card driving a display. On a
 Raspberry Pi 5 it is the hardware: no display server runs there, so the tests can
-take master, and all twenty-five in `emblema-present-drm` pass — including the
-five that set a mode and commit a frame — on `vc4` with `v3d` as a separate render
-node, which is the split render and display topology the virtual driver stands in
-for. The render fence rides each commit, so the kernel latches the flip when
+take master, and all thirty-nine in `emblema-present-drm` pass there — including the
+six that take master and set a mode and commit a frame — on `vc4` with `v3d` as a
+separate render node, which is the split render and display topology the virtual
+driver stands in for. Re-run on 2026-10-03; nothing in the three device binaries
+reported a skip, which matters because a skipped test passes and would read the
+same from here. The render fence rides each commit, so the kernel latches the flip when
 rendering completes and the frame loop blocks on nothing, except on a commit that
 also sets the mode: the virtual driver will not complete one with a fence attached,
 which happens once per output.
@@ -79,6 +96,15 @@ What keeps the column partial is therefore not the absence of real hardware. It 
 what neither lane reaches — writeback and CRC readback, resize storms, hotplug —
 and the quirks only a rack of boards finds: IOMMU faults, compressed-format corner
 cases, scaler limits.
+
+And one structural limit, which is the same one the GLES cell runs into:
+**this renderer allocates the scanout buffer and asks the display to accept it.**
+Where a display controller cannot import what the GPU chose, there is no fallback
+and the target refuses. That is measured on two boards — a Pi 4, whose display
+controller will not import render-node memory without an IOMMU, and an i.MX8M
+Plus, whose Vulkan export is scatter-gather where the controller needs it
+contiguous. [`docs/architecture.md`](https://github.com/jwinarske/emblema/blob/main/docs/architecture.md)
+has the comparison that named it.
 
 `cargo xtask drm` says whether a given machine could run that lane.
 
