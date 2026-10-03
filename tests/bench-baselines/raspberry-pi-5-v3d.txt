@@ -1,5 +1,5 @@
 # A Raspberry Pi 5, Mesa V3D 7.1.7.0, release build, fan fitted. Re-recorded
-# 2026-10-02 at 7155090: idle at 57.6 C, 61.5 C entering the recorded run and 63.7 C
+# 2026-10-03 at 1502b2a: idle at 57.6 C, 61.5 C entering the recorded run and 64.2 C
 # after it, `vcgencmd get_throttled` 0x0 before and after, the clock at 2400000
 # throughout, load average 0.00 and nothing holding the GPU.
 #
@@ -188,7 +188,24 @@
 # thing in this project that would have raised them at all, since a two-thirds improvement
 # elsewhere hides a doubling here in any summary statistic.
 #
-# Last checked against the board: 7155090
+# **One row was below its own spread, which is why this was re-recorded.** The previous
+# file had `gles / concave, 72 points` at 2.042 against a default tolerance of one per
+# cent, and `--check` flagged it in two runs of five at +1.0 and +1.5 per cent. Eleven
+# runs put the row between 2.048 and 2.073, so 2.042 was under the whole observed range
+# rather than near the middle of it, and ordinary variance crossed the tolerance from
+# below.
+#
+# **The commit since the last recording was ruled out by control rather than by argument.**
+# A binary built at 7155090, the commit this file was previously recorded at, reads 2.049
+# to 2.065 on that row -- the same range as the current one. So the draw-splitting guard
+# did not slow it, and nothing else in that commit touches a GLES fill. The row now reads
+# 2.047 and ten consecutive `--check` runs report nothing regressed.
+#
+# Two rows move by a last-digit step rather than by a real amount: `recording / frame, plus
+# cards` reads 0.012 against 0.011, which is nine per cent of a number printed to three
+# decimals and not nine per cent of anything.
+#
+# Last checked against the board: 1502b2a
 #
 # That line names the commit whose state a board run passed against, which is
 # never the commit that writes the line -- a hash cannot be recorded inside the
@@ -490,42 +507,42 @@
 recording	distance field, 1 sample	0.103	5.0
 recording	tessellated, 4 samples	0.241	10.0
 recording	tessellated, 1 sample	0.241	5.0
-recording	stroked field, 1 sample	0.105	5.0
-recording	stroked path, 1 sample	0.718	5.0
+recording	stroked field, 1 sample	0.103	5.0
+recording	stroked path, 1 sample	0.724	5.0
 recording	frame, gradient ground	0.009	15.0
-recording	frame, plus cards	0.011	15.0
+recording	frame, plus cards	0.012	15.0
 recording	frame, plus shadows	0.016	15.0
 recording	full frame, mixed content	0.019	10.0
 recording	stacked, wash	0.009	15.0
 recording	stacked, plus panels	0.013	15.0
 recording	stacked interface	0.036	15.0
-recording	concave, 12 points	0.450	5.0
-recording	concave, 72 points	4.008	5.0
-vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.207	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.527	2.0
-vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.693	2.0
-vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.781	2.0
-vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.187	3.0
-vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.419	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus cards	11.062	2.0
-vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.905	2.0
-vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.910	2.0
-vulkan:0 V3D 7.1.7.0	stacked, wash	10.419	2.0
-vulkan:0 V3D 7.1.7.0	stacked, plus panels	4.473	2.0
-vulkan:0 V3D 7.1.7.0	stacked interface	5.190	2.0
-vulkan:0 V3D 7.1.7.0	concave, 12 points	1.453	2.0
-vulkan:0 V3D 7.1.7.0	concave, 72 points	1.992	2.0
-gles V3D 7.1.7.0	distance field, 1 sample	8.553
-gles V3D 7.1.7.0	tessellated, 4 samples	5.459
-gles V3D 7.1.7.0	tessellated, 1 sample	3.638
-gles V3D 7.1.7.0	stroked field, 1 sample	9.146
-gles V3D 7.1.7.0	stroked path, 1 sample	1.311	2.0
-gles V3D 7.1.7.0	frame, gradient ground	11.767
-gles V3D 7.1.7.0	frame, plus cards	12.445
+recording	concave, 12 points	0.452	5.0
+recording	concave, 72 points	3.998	5.0
+vulkan:0 V3D 7.1.7.0	distance field, 1 sample	8.210	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 4 samples	4.529	2.0
+vulkan:0 V3D 7.1.7.0	tessellated, 1 sample	3.695	2.0
+vulkan:0 V3D 7.1.7.0	stroked field, 1 sample	8.785	2.0
+vulkan:0 V3D 7.1.7.0	stroked path, 1 sample	1.194	3.0
+vulkan:0 V3D 7.1.7.0	frame, gradient ground	10.423	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus cards	11.066	2.0
+vulkan:0 V3D 7.1.7.0	frame, plus shadows	11.912	2.0
+vulkan:0 V3D 7.1.7.0	full frame, mixed content	13.928	2.0
+vulkan:0 V3D 7.1.7.0	stacked, wash	10.424	2.0
+vulkan:0 V3D 7.1.7.0	stacked, plus panels	4.478	2.0
+vulkan:0 V3D 7.1.7.0	stacked interface	5.195	2.0
+vulkan:0 V3D 7.1.7.0	concave, 12 points	1.458	2.0
+vulkan:0 V3D 7.1.7.0	concave, 72 points	2.002	2.0
+gles V3D 7.1.7.0	distance field, 1 sample	8.551
+gles V3D 7.1.7.0	tessellated, 4 samples	5.458
+gles V3D 7.1.7.0	tessellated, 1 sample	3.644
+gles V3D 7.1.7.0	stroked field, 1 sample	9.144
+gles V3D 7.1.7.0	stroked path, 1 sample	1.318	2.0
+gles V3D 7.1.7.0	frame, gradient ground	11.768
+gles V3D 7.1.7.0	frame, plus cards	12.446
 gles V3D 7.1.7.0	frame, plus shadows	13.329
-gles V3D 7.1.7.0	full frame, mixed content	14.868
-gles V3D 7.1.7.0	stacked, wash	11.768
-gles V3D 7.1.7.0	stacked, plus panels	5.191
-gles V3D 7.1.7.0	stacked interface	6.140
-gles V3D 7.1.7.0	concave, 12 points	1.528
-gles V3D 7.1.7.0	concave, 72 points	2.042
+gles V3D 7.1.7.0	full frame, mixed content	14.859
+gles V3D 7.1.7.0	stacked, wash	11.769
+gles V3D 7.1.7.0	stacked, plus panels	5.188
+gles V3D 7.1.7.0	stacked interface	6.121
+gles V3D 7.1.7.0	concave, 12 points	1.531
+gles V3D 7.1.7.0	concave, 72 points	2.047

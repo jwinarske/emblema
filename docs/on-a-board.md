@@ -1286,14 +1286,14 @@ one decimal.
 **Confirmed on V3D, 2026-09-30 at 50b64f4, and it leans harder there.** The Pi 5's
 stage rows were recorded the same way, after a reboot with the governor pinned. The
 figures below are the baseline's current ones, first re-recorded 2026-10-01 at e026ac8 and
-re-recorded twice since, most recently at 7155090, and they have moved by a tenth of a
-per cent or less across all three -- none of the rectangle route flip, the convexity walk
+re-recorded three times since, most recently at 1502b2a, and they have moved by a tenth
+of a per cent or less across all four -- none of the rectangle route flip, the convexity walk
 or the occlusion culling touches this scene, whose cards are rounded and analytic:
 
 | route | ground | plus cards | plus shadows | frame | ground's share |
 |---|---|---|---|---|---|
-| Pi 5 Vulkan | 10.419 ms | 11.062 | 11.905 | 13.910 | **74.9%** |
-| Pi 5 GLES | 11.767 | 12.445 | 13.329 | 14.868 | **79.1%** |
+| Pi 5 Vulkan | 10.423 ms | 11.066 | 11.912 | 13.928 | **74.8%** |
+| Pi 5 GLES | 11.768 | 12.446 | 13.329 | 14.859 | **79.2%** |
 | VisionFive 2 Vulkan | 43.149 | 45.498 | 48.717 | 64.019 | **67.4%** |
 
 So a single full-screen five-stop gradient is three quarters of the frame on V3D and
