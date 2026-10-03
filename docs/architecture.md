@@ -259,6 +259,43 @@ named one. **The fence half is built** — see the GLES section above — so wha
 remains is the allocation: buffers in a layout the display accepts, which is
 the part GL cannot spell and GBM can.
 
+### It is not a GLES problem; it is which side allocates
+
+Everything above frames the missing buffer as a GLES gap, and the table's Vulkan row as
+done. Compared against `drm-cxx`'s `present/` layer on 2026-10-02 — a C++ tree solving
+the same problem on overlapping hardware — that framing is too narrow.
+
+The difference is one decision. `DrmScanoutTarget` has the **renderer** allocate: a
+Vulkan image, exported as a dma-buf, imported by KMS. `can_allocate_scanout()` is
+`export && modifiers`, and a device failing it is refused outright with "use the GBM
+path" — a path this tree does not have. `drm-cxx` allocates on the **display** side
+first, GBM falling back to a dumb buffer, and has Vulkan import that. Its reason, in its
+own comment: on a stack whose GBM backend allocates through the GPU driver, as i.MX and
+Vivante do, that memory is both scannable and native to the GPU, so the import aliases it.
+
+It also keeps tiers rather than a refusal. Its `VkScanoutProducer` scans Vulkan's memory
+directly where the display can, blits through GL where it cannot, and copies on the
+processor where neither works — reaching 60.7 fps at 1080p on an i.MX8M Plus whose
+Vulkan dma-buf export is scatter-gather and whose controller refuses that import.
+
+**Three limitations recorded separately in this project are that one decision.** The Pi 4
+cannot scan out what Vulkan allocated, because `vc4` will not import `v3d` memory without
+an IOMMU — see `emblema-present-drm`'s crate docs. The i.MX8M Plus refuses the import
+for a different reason, scatter-gather memory against a controller needing it contiguous.
+And the GLES lane above is blocked because V3D exports UIF while both controllers take
+LINEAR. Each was found on its own board and written up as its own problem; all three are
+the renderer choosing the allocation, and in all three the display choosing it would work.
+
+That does not make the GBM dependency cheaper. It would still be this tree's first
+link-time native dependency for the target, which the `drmkit` survey priced. What it
+changes is the scope: GBM is not a GLES feature, it is the allocator the Vulkan path needs
+on two of the four boards here — and the table's Vulkan row is "built" only for displays
+that can import what the GPU chose.
+
+What this project has that the comparison does not: `pacing.rs` counts missed flips from
+the kernel's vblank sequence, and `cpu_waits` records every commit that went without a
+`sync_file`.
+
 On non-Linux platforms only the WSI column applies. Future backends extend the
 rows, never the columns.
 
