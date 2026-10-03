@@ -425,6 +425,48 @@ impl BatchDraw {
         })
     }
 
+    /// Whether writing this draw's pixels twice gives what writing them once gives.
+    ///
+    /// The condition for splitting a draw into several, and it is not the same question
+    /// as [`Self::occludes`]. That one asks whether a draw hides what is under it; this
+    /// asks whether it is safe to draw *overlapping* copies of it -- which matters
+    /// because a driver may write a pixel outside the scissor it was given.
+    ///
+    /// **Measured, not hypothetical.** lavapipe on Mesa 25.2.8 and 15.0.6 writes the
+    /// pixel to the left of a scissor at half coverage when the pass is multisampled;
+    /// 26.1.7, RADV and PanVK are clean. `public_api.rs` probes for it. Where it happens,
+    /// two pieces of one draw overlap by a column -- and a translucent draw blends there
+    /// twice, which reads 90 against 121 on a half-transparent wash under an opaque bar.
+    /// An opaque one writes the same color twice and cannot tell.
+    ///
+    /// So a draw splits only where a second write is a no-op: `Src` replaces whatever the
+    /// alpha, and `SrcOver` replaces only where the source is opaque -- which means the
+    /// material, the absence of a color filter, an identity tint, and the vertex colors
+    /// the tint multiplies in, all four.
+    pub fn splits_safely(&self, vertices: &[Vertex], indices: &[u32]) -> bool {
+        if self.filter != ColorFilter::None || self.tint_blend != BlendMode::Modulate {
+            return false;
+        }
+        // Premultiplied, and interpolated across the triangle -- so a single translucent
+        // corner makes part of the draw translucent however opaque its material is.
+        let first = self.first_index as usize;
+        let count = self.index_count as usize;
+        let Some(range) = indices.get(first..first.saturating_add(count)) else {
+            return false;
+        };
+        for &index in range {
+            match vertices.get(index as usize) {
+                Some(v) if v.color[3] >= 1.0 => {}
+                _ => return false,
+            }
+        }
+        match self.blend {
+            BlendMode::Src => true,
+            BlendMode::SrcOver => self.material.is_opaque(),
+            _ => false,
+        }
+    }
+
     pub fn occludes(&self) -> bool {
         self.stencil == ClipState::UNCLIPPED
             && matches!(self.blend, BlendMode::Src | BlendMode::SrcOver)
@@ -887,6 +929,15 @@ impl Batch {
                     // it was, clip included. A draw that was never clipped keeps saying
                     // so, which is a distinction `BatchDraw::clip` documents.
                     Some(pieces) if pieces.len() == 1 && pieces[0] == own => out.push(draw),
+                    // More than one piece means overlapping writes on a driver that
+                    // does not honor a scissor exactly, so the draw has to survive
+                    // being written twice. One piece cannot overlap anything.
+                    Some(pieces)
+                        if pieces.len() > 1
+                            && !draw.splits_safely(&self.vertices, &self.indices) =>
+                    {
+                        out.push(draw);
+                    }
                     Some(pieces) => {
                         rewritten += 1;
                         for piece in pieces {

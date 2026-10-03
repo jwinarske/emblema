@@ -1229,6 +1229,37 @@ impl Material {
     /// Stops beyond the limit are dropped rather than resampled, and the count
     /// travels alongside so the shader ignores unused entries instead of
     /// blending toward whatever happens to be in them.
+    /// Whether every pixel this material writes comes out fully opaque.
+    ///
+    /// Used to decide whether a draw may be split into several, which is only safe when
+    /// writing a pixel twice gives what writing it once does. Under `SrcOver` that holds
+    /// exactly when the source is opaque.
+    ///
+    /// **False unless shown otherwise.** A solid fill carries its alpha and a gradient's
+    /// stops carry theirs. Everything else -- images, the analytic shapes, blurs, a
+    /// caller's own program -- is refused outright.
+    ///
+    /// A tabulated gradient still answers from its stops, and that is worth saying because
+    /// the first version of this refused one. `ramp` being `Some` means the *shader* reads
+    /// a texture instead of walking the list, not that the list is gone: the recorder maps
+    /// every stop into the material either way and bakes the ramp from the same list, by
+    /// interpolating between them. Interpolating between opaque colors gives an opaque
+    /// one, so the texels are opaque exactly when the stops are. Refusing a ramp cost the
+    /// whole of occlusion culling's benefit on the bench's frame, whose wash is five stops
+    /// against a `MAX_STOPS` of four.
+    pub fn is_opaque(&self) -> bool {
+        let stops_opaque =
+            |stops: &[Stop]| !stops.is_empty() && stops.iter().all(|s| s.color[3] >= 1.0);
+        match self {
+            Material::Solid(color) => color[3] >= 1.0,
+            Material::LinearGradient { stops, .. }
+            | Material::RadialGradient { stops, .. }
+            | Material::SweepGradient { stops, .. }
+            | Material::ConicalGradient { stops, .. } => stops_opaque(stops),
+            _ => false,
+        }
+    }
+
     /// Whether this material's shading reads screen-space derivatives.
     ///
     /// `dpdx` and `dpdy` are computed across a two-by-two quad of fragments, using helper
