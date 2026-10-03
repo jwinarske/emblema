@@ -1728,6 +1728,73 @@ compares every byte. One of them puts an opaque bar half a pixel off the grid, b
 rounding an occluder outward instead of inward passes every other scene and leaves one row
 of seam.
 
+### Culling on two more architectures, measured 2026-10-02 at 7155090
+
+The Pi 5 numbers above are V3D. Two other boards, same two binaries, to see whether the
+result is a property of that tiler or of the idea.
+
+**SA8155P, Adreno 640, Vulkan 1.1.128.** Three runs a side over `adb`:
+
+| row | before | after | |
+|---|---|---|---|
+| stacked, plus panels | 22.43 ms | **9.62** | −57% |
+| stacked interface | 27.23 | **11.03** | −60% |
+| full frame, mixed content | 24.52 | 24.57 | -- |
+| stacked, wash | 15.21 | 15.17 | -- |
+
+Three tile architectures now agree on direction and roughly on size: 68 per cent on V3D,
+60 on Adreno. The controls hold on both. This board is not quiet -- it runs its own
+services and the ninety-ninth percentiles are wide -- but the medians repeat to under a
+per cent across runs, which is enough for a two-thirds effect.
+
+**i.MX8MP, Vivante GC7000UL: the device half does not run at all, and that is not this
+change's doing.** `cargo xtask bench` segfaults in the Vulkan section -- exit 139, `sig=11`
+in the kernel audit log -- and the binary built from the commit *before* occlusion culling
+segfaults in the same place. So it is a standing fault on that device rather than something
+to attribute here.
+
+`xtask report` succeeds, so the device opens and its capabilities read back: Vulkan 1.3.0,
+max texture 8192, sample counts 1 and 4. There is no GLES device on that board, so Vulkan is
+the only path there and no second one to compare against.
+
+**Where it dies, from `gdb` on the board rather than from reasoning:**
+
+```
+#0  libVSC.so
+#1  VIR_Shader_CompositeConstruct        libVSC.so
+#2  libSPIRV_viv.so
+#4  gcSPV_Decode                         libSPIRV_viv.so
+#5  libvulkan_VSI.so.1
+#8  emblema_hal_vulkan ... submit_batch_textured
+```
+
+So it is the vendor's SPIR-V decoder, on the first batch that needs a pipeline -- not an
+allocation, not multisampling, not contention. The board was idle with nothing holding
+`card0`, `card1`, `renderD128` or `/dev/galcore`, and no compositor running, so none of the
+usual suspects on that device apply.
+
+**Which side is at fault is not established, and the backtrace does not establish it.** A
+crash inside a compiler is consistent with illegal SPIR-V and with a compiler bug equally.
+What weighs against the first: the same shaders are accepted by V3D, Adreno 640, RADV,
+lavapipe and llvmpipe, and CI runs them under the Vulkan validation layers. What would
+settle it is the thing the advanced-blend investigation above had to write in the end -- the
+same modules handed to `vkCreateShaderModule` and `vkCreateGraphicsPipelines` by a few
+hundred lines with no renderer in them. Until that exists this entry says where it crashed
+and not why.
+
+**Its recording rows do run, and they price the processor side on a slow core.** A
+quad-A53 against the Pi's A76:
+
+| row | before | after | |
+|---|---|---|---|
+| stacked, plus panels | 0.069 ms | 0.082 | +19% |
+| stacked interface | 0.097 | 0.195 | +101% |
+
+Ninety-eight microseconds rather than the Pi's twenty, for the same hundred and
+thirty-one draws. On V3D that buys eleven milliseconds of fill, so the trade is not close;
+on this board the device half cannot say yet, and the honest position is that culling's cost
+there is measured and its benefit is not.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and

@@ -7,6 +7,10 @@
 # directory of its own -- two thousand files of one got committed before this
 # was noticed.
 target/
+# Any cross-build tree too: a board binary is built with
+# CARGO_TARGET_DIR set aside so it does not evict the host's cache, and
+# one of those got committed once because this line only named `target`.
+/target-*
 **/*.rs.bk
 
 # Test output: diff images, JSON/JUnit reports, capture artifacts
