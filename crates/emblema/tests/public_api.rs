@@ -17188,7 +17188,7 @@ fn culling_hidden_pixels_changes_no_pixel() {
     /// A scene, whether culling should bite on it, and how to draw it.
     type Scene = (&'static str, bool, fn(&mut Canvas));
 
-    let scenes: [Scene; 6] = [
+    let scenes: [Scene; 7] = [
         ("a bar over a wash", true, |canvas| {
             canvas
                 .draw_rect(
@@ -17259,6 +17259,30 @@ fn culling_hidden_pixels_changes_no_pixel() {
         // covers, and culling the wash there leaves the clear color showing through
         // under a half-covered bar. Every other scene here is integer-aligned, where
         // inward and nearest agree and the mistake is invisible.
+        // A *translucent* victim, which is the case a scissor that leaks would show.
+        // Pieces of one draw are disjoint, so each pixel blends once -- unless the
+        // driver writes outside the scissor, where two pieces overlap by a column and
+        // blend twice. Opaque victims hide that: a second Src write is the same color.
+        ("a translucent wash under an opaque bar", true, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.9, 0.9, 0.9, 1.0)),
+                )
+                .expect("ground");
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.0, 0.0, 0.0, 0.5)),
+                )
+                .expect("a half-transparent wash");
+            canvas
+                .draw_rect(
+                    Rect::new(32.0, 32.0, 96.0, 80.0),
+                    &Paint::fill(Color::WHITE),
+                )
+                .expect("bar");
+        }),
         ("a bar half a pixel off the grid", true, |canvas| {
             canvas
                 .draw_rect(
