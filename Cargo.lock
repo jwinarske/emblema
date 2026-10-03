@@ -355,6 +355,7 @@ dependencies = [
  "googletest",
  "half",
  "png",
+ "proptest",
 ]
 
 [[package]]
