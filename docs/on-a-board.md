@@ -1773,14 +1773,45 @@ allocation, not multisampling, not contention. The board was idle with nothing h
 `card0`, `card1`, `renderD128` or `/dev/galcore`, and no compositor running, so none of the
 usual suspects on that device apply.
 
-**Which side is at fault is not established, and the backtrace does not establish it.** A
-crash inside a compiler is consistent with illegal SPIR-V and with a compiler bug equally.
-What weighs against the first: the same shaders are accepted by V3D, Adreno 640, RADV,
-lavapipe and llvmpipe, and CI runs them under the Vulkan validation layers. What would
-settle it is the thing the advanced-blend investigation above had to write in the end -- the
-same modules handed to `vkCreateShaderModule` and `vkCreateGraphicsPipelines` by a few
-hundred lines with no renderer in them. Until that exists this entry says where it crashed
-and not why.
+**It is the driver, and that took the bare-API reproduction to say.** The backtrace could
+not settle it: a crash inside a compiler fits illegal SPIR-V and a compiler bug equally.
+`compile-shaders`, an example in `emblema-hal-vulkan`, is that reproduction -- an instance, a
+device, `vkCreateShaderModule`, one `vkCreateGraphicsPipelines`, and nothing of this renderer
+but the SPIR-V.
+
+What it found, with the renderer's own pipeline layout and the smallest legal everything else:
+
+| module | i.MX8MP | RADV |
+|---|---|---|
+| `effect`, `effect-image`, `effect-mesh-uv`, `effect-two-images` | compiled | compiled |
+| `solid` | **segfault** | compiled |
+| `solid` vertex + `effect` fragment | compiled | compiled |
+| `effect` vertex + **`solid` fragment** | **segfault** | compiled |
+
+So pipeline creation works on that device, four of the five modules compile there, and what
+crashes it is `solid.wgsl`'s fragment entry point. SPIRV-Tools validates all five clean
+against both Vulkan 1.0 and 1.1 rules. A driver that crashes on a validated module which
+four of its siblings survive and another driver compiles is the driver's fault, whatever is
+in the module.
+
+**The first version of that reproduction was wrong, in the direction that matters.** It used
+an empty pipeline layout, on the reasoning that less state asks a cleaner question, and it
+segfaulted on RADV -- a driver that compiles these shaders every day. A pipeline whose layout
+does not cover the resources its shaders declare is invalid usage, so that crash was the
+program's own and the conclusion would have been a false accusation. The layout is now the
+renderer's: the texture set from `sampling::create_descriptor_layout` so it cannot drift, and
+the material set mirrored from `materials::create_layout`, which is `pub(crate)`. **A
+reproduction has to be valid before it is evidence**, and an empty layout is the easy way to
+forget that.
+
+Left unestablished deliberately: which construct in that fragment shader does it. Narrowing
+further means bisecting fifteen hundred lines of WGSL, and the vendor can do that faster with
+what is here.
+
+One observation from the same work, recorded because it means the suite and the bench do not
+compile the same shader: `SOLID_SPV` is 10,036 words in a debug build and 9,347 in a release
+one, from one source through one naga. The crash is on the release module, which is what the
+bench and every board binary carry, and the gate compiles the other.
 
 **Its recording rows do run, and they price the processor side on a slow core.** A
 quad-A53 against the Pi's A76:
