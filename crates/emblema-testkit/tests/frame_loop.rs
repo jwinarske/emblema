@@ -346,6 +346,21 @@ fn the_frame_loop_actually_renders() {
 /// taken before it existed, and this one does not yet. What is recorded is the
 /// reproduction and the bound.
 ///
+/// **One candidate is ruled out**, so the next person does not spend the hour
+/// again: it is not this backend's offscreen texture storage. `tex_storage_2d`
+/// leaves that uninitialized, which fits the shape exactly -- and zeroing it at
+/// creation with a `tex_sub_image_2d` of zeros leaves the difference at three
+/// levels, unchanged. Every pass this scene records already clears, a
+/// multisampled pass with no clear is refused outright at the top of
+/// `GlesContext::submit`, and the renderer allocates a fresh texture per pass at
+/// exactly the pass extent rather than pooling one. So whatever carries the
+/// previous frame's influence is below all of that.
+///
+/// What would settle it is a reproduction in bare GLES with no renderer in it --
+/// a multisample framebuffer, a draw under `GL_KHR_blend_equation_advanced`, a
+/// resolve, and a sample of the result -- which is what this tree's own rule
+/// asks for before a driver is named. That has not been written.
+///
 /// Asserted as a bound rather than as the defect, so a fix makes this pass
 /// rather than fail: zero is within three.
 #[test]
