@@ -6738,6 +6738,26 @@ fn fast_gradient_sections(rect: Rect, shader: &Shader) -> Option<Vec<GradientSec
     if stops.windows(2).any(|w| w[1].offset < w[0].offset) {
         return None;
     }
+    // One alpha across the list, and this is not a conservatism -- it is the
+    // one case where the two routes do not produce the same picture.
+    //
+    // A gradient is interpolated in *straight* color, which is what `dart:ui`
+    // and Skia do: the fragment walk interpolates the stops and premultiplies
+    // the result. A vertex color cannot work that way. What the rasterizer
+    // interpolates is what gets multiplied in, so the colors have to be
+    // premultiplied before they reach it -- and premultiplying then
+    // interpolating is not interpolating then premultiplying unless alpha is
+    // constant. Measured at 58 of 255 between the two routes on a two-stop
+    // gradient from alpha one to alpha a tenth.
+    //
+    // Uniform alpha is the ordinary case -- a wash is opaque, and a fading one
+    // is usually a layer's opacity rather than the gradient's -- so the route
+    // keeps the gradients it was built for and gives up the ones it would get
+    // wrong.
+    let alpha = stops[0].color.to_array()[3];
+    if stops.iter().any(|s| s.color.to_array()[3] != alpha) {
+        return None;
+    }
 
     // Which axis varies, and the two coordinates it runs between.
     let horizontal = start.y == end.y && start.x != end.x;

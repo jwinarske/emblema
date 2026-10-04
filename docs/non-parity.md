@@ -1042,6 +1042,23 @@ agree to **one level of 255**, where the reverted attempt managed two with a mea
 `the_two_gradient_routes_agree` asserts it, and asserts the two really took different
 routes.
 
+**One case the route gives up, found by generating the comparison rather than writing
+it.** A gradient is interpolated in *straight* color -- `dart:ui` and Skia both do, and the
+fragment walk follows, interpolating the stops and premultiplying the result. A vertex
+color cannot work that way: what the rasterizer interpolates is what gets multiplied in,
+so the colors are premultiplied before they reach it, and premultiplying then
+interpolating is not interpolating then premultiplying unless alpha is constant. Measured
+at **58 of 255** on a two-stop gradient from alpha one to alpha a tenth. So the predicate
+requires one alpha across the stop list, which is the ordinary case -- a wash is opaque,
+and a fading one is usually a layer's opacity rather than the gradient's.
+
+This landed with the route and was wrong for a day: the hand-written comparison used
+opaque stops, and `emblema-testkit`'s `gradient_routes.rs` failed on its fourth generated
+case. The same file records the other asymmetry it turned up, which is not this route's:
+past `MAX_STOPS` the fragment side samples a 256-texel ramp, so where a feature is narrow
+against a texel the **vertex route is the more accurate of the two** -- 3 of 255 on a spike
+a pixel and a half wide, and 0 for the same spike with four stops.
+
 Of the corpus's seventy-four scenes exactly one satisfies the strict half of the
 predicate, `gradient-many-stops`, which answers a question an earlier draft of this entry
 left open. Its golden is unchanged and its recorded cost went from four vertices, six
