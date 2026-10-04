@@ -1291,6 +1291,28 @@ impl Material {
         )
     }
 
+    /// Whether this material asks the target for a long run of nearly equal
+    /// values, and so wants a dither.
+    ///
+    /// The gradients, and nothing else -- the same set the shader used to test
+    /// for itself. Asked here because the shader cannot be the place that knows:
+    /// it tests the material *kind*, so a route that draws a gradient under a
+    /// different kind silently stops dithering. §19 of `docs/non-parity.md`
+    /// records that happening, in the reverted attempt at upstream's
+    /// vertex-interpolated fast gradient.
+    ///
+    /// **False unless shown otherwise.** Dithering something with no band to
+    /// break adds noise to a flat color.
+    pub fn dithers(&self) -> bool {
+        matches!(
+            self,
+            Material::LinearGradient { .. }
+                | Material::RadialGradient { .. }
+                | Material::SweepGradient { .. }
+                | Material::ConicalGradient { .. }
+        )
+    }
+
     pub fn to_uniform(&self) -> [f32; MATERIAL_FLOATS] {
         let mut out = [0.0f32; MATERIAL_FLOATS];
 

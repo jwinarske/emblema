@@ -505,7 +505,12 @@ impl BatchDraw {
         // Still zero for a target with no quantum to bridge. Half's precision
         // is relative, so there is no step to straddle and upstream's constant
         // would be noise added to a surface that had none.
-        out[dither] = if target.quantization_step() > 0.0 {
+        //
+        // Zero for a material with no band to break, which is every one but a
+        // gradient. That test was the shader's and is here now: it tested the
+        // material kind, so a second route to the same picture under another
+        // kind stopped dithering without saying so.
+        out[dither] = if self.material.dithers() && target.quantization_step() > 0.0 {
             1.0 / 64.0
         } else {
             0.0
@@ -970,6 +975,70 @@ mod tests {
     use super::*;
 
     const TRI: [[f32; 2]; 3] = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+
+    /// A draw carrying just the material, since the dither depends on nothing
+    /// else about it.
+    fn draw_of(material: Material) -> BatchDraw {
+        BatchDraw {
+            first_index: 0,
+            index_count: 3,
+            material,
+            filter: ColorFilter::None,
+            blend: BlendMode::SrcOver,
+            clip: None,
+            stencil: ClipState::UNCLIPPED,
+            tint_blend: BlendMode::Modulate,
+            paint_at_texture_coords: false,
+        }
+    }
+
+    fn wash() -> crate::Material {
+        crate::Material::LinearGradient {
+            axis: [1.0, 0.0],
+            to_local: [0.0; 12],
+            stops: vec![
+                crate::Stop::new([0.0, 0.0, 0.0, 1.0], 0.0),
+                crate::Stop::new([1.0, 1.0, 1.0, 1.0], 1.0),
+            ],
+            ramp: None,
+            tile: crate::TileMode::Clamp,
+        }
+    }
+
+    /// The dither amplitude follows the material, not the shader's reading of
+    /// the material's kind.
+    ///
+    /// This is the contract that replaced a branch in `solid.wgsl`. The shader
+    /// could only ask what kind a draw was, so a second route to a gradient
+    /// under another kind stopped dithering silently -- which is how the
+    /// reverted fast-gradient attempt lost it. See `Material::dithers` and §19
+    /// of `docs/non-parity.md`.
+    #[test]
+    fn only_a_material_that_asks_for_a_dither_gets_an_amplitude() {
+        let dither = crate::material::layout::DITHER;
+        let eight_bit = crate::PixelFormat::Rgba8Unorm;
+
+        let gradient = draw_of(wash()).to_uniform(eight_bit);
+        assert!(
+            gradient[dither] > 0.0,
+            "a gradient on an eight-bit target got no dither"
+        );
+
+        let solid = draw_of(Material::Solid([1.0, 0.0, 0.0, 1.0])).to_uniform(eight_bit);
+        assert_eq!(
+            solid[dither], 0.0,
+            "a solid fill was dithered, which adds noise to a flat color"
+        );
+    }
+
+    /// And a target with no quantum to bridge gets none whatever the material
+    /// asks for: half's precision is relative, so there is no step to straddle.
+    #[test]
+    fn a_float_target_gets_no_dither_even_for_a_gradient() {
+        let dither = crate::material::layout::DITHER;
+        let packed = draw_of(wash()).to_uniform(crate::PixelFormat::Rgba16Float);
+        assert_eq!(packed[dither], 0.0, "a float target was dithered");
+    }
 
     #[test]
     fn indices_are_rebased_onto_the_shared_buffer() {
