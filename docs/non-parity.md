@@ -1122,6 +1122,12 @@ So the order is: a dithering material first, then the predicate's interface, the
 Reverted rather than carried, because a half-landed route that silently drops dither is
 worse than none.
 
+**The first of those is done.** `Material::dithers` carries the decision and
+`Batch::to_uniform` writes the amplitude from it, so the shader tests only whether there
+is an amplitude. The kind test it used to run -- `params.y` against the four gradient
+kinds -- was the mechanism by which the reverted attempt lost its dither: a route drawing
+a gradient under another kind answered no. A route now dithers by saying so.
+
 The remaining prerequisite, before any of that: an axis-aligned rect gradient in the
 bench, which `stacked, wash` now is. Then the path, whose predicate is cheap and whose
 geometry is the sections upstream already describes. The paint block's

@@ -1273,17 +1273,13 @@ fn ordered_dither(frag: vec2<f32>) -> f32 {
 /// the target stores and rounds. Alpha is left alone -- perturbing coverage
 /// would move an edge rather than break a band.
 fn dithered(color: vec4<f32>, frag: vec2<f32>) -> vec4<f32> {
-    // The amplitude first and on its own, because it is zero for every target
-    // with no quantum to bridge and for every draw that is not a gradient's --
-    // which is nearly all of them. The kind test below is four comparisons that
-    // were being run before the answer that discards them.
+    // The amplitude carries the whole decision: zero for a target with no
+    // quantum to bridge and for every material that asks for no dither, which
+    // the recorder decides because it knows the material. This used to test
+    // `params.y` for a gradient kind as well, which made the route and not the
+    // intent the thing being asked about -- see `Material::dithers`.
     let amplitude = paint.filter_params.z;
     if (amplitude <= 0.0) {
-        return color;
-    }
-    let kind = paint.params.y;
-    let gradient = (kind > 0.5 && kind < 3.5) || (kind > 8.5 && kind < 9.5);
-    if (!gradient) {
         return color;
     }
     let offset = ordered_dither(frag) * amplitude;

@@ -750,13 +750,8 @@ vec4 dithered(vec4 color_1, vec2 frag_1) {
     if ((amplitude <= 0.0)) {
         return color_1;
     }
-    float kind_1 = _group_1_binding_0_fs.params.y;
-    bool gradient_2 = (((kind_1 > 0.5) && (kind_1 < 3.5)) || ((kind_1 > 8.5) && (kind_1 < 9.5)));
-    if (!(gradient_2)) {
-        return color_1;
-    }
-    float _e24 = ordered_dither(frag_1);
-    float offset_2 = (_e24 * amplitude);
+    float _e8 = ordered_dither(frag_1);
+    float offset_2 = (_e8 * amplitude);
     return vec4((color_1.xyz + vec3(offset_2)), color_1.w);
 }
 
@@ -766,8 +761,8 @@ vec4 shade(VertexOutput in_2) {
     bool covered = false;
     vec4 _e4 = _group_1_binding_0_fs.stops[0];
     color_2 = _e4;
-    float kind_2 = _group_1_binding_0_fs.params.y;
-    if ((kind_2 < 0.5)) {
+    float kind_1 = _group_1_binding_0_fs.params.y;
+    if ((kind_1 < 0.5)) {
         vec4 _e12 = color_2;
         float _e15 = color_2.w;
         float _e18 = color_2.w;
@@ -775,7 +770,7 @@ vec4 shade(VertexOutput in_2) {
     }
     float _e23 = _group_1_binding_0_fs.params.x;
     int count_2 = int(_e23);
-    if (((kind_2 > 0.5) && (kind_2 < 1.5))) {
+    if (((kind_1 > 0.5) && (kind_1 < 1.5))) {
         vec4 _e32 = _group_1_binding_0_fs.geometry;
         vec2 axis = _e32.zw;
         float length_squared = max(dot(axis, axis), 1e-6);
@@ -786,14 +781,14 @@ vec4 shade(VertexOutput in_2) {
         vec4 _e46 = gradient_color(_e44.x, count_2);
         color_2 = (_e46 * _e44.y);
     } else {
-        if (((kind_2 > 1.5) && (kind_2 < 2.5))) {
+        if (((kind_1 > 1.5) && (kind_1 < 2.5))) {
             vec2 _e54 = gradient_space(in_2);
             float _e59 = _group_1_binding_0_fs.params.z;
             vec2 _e60 = tile_gradient(length(_e54), _e59);
             vec4 _e62 = gradient_color(_e60.x, count_2);
             color_2 = (_e62 * _e60.y);
         } else {
-            if (((kind_2 > 2.5) && (kind_2 < 3.5))) {
+            if (((kind_1 > 2.5) && (kind_1 < 3.5))) {
                 vec2 _e70 = gradient_space(in_2);
                 float angle = atan(_e70.y, _e70.x);
                 float start_angle = _group_1_binding_0_fs.geometry.z;
@@ -806,7 +801,7 @@ vec4 shade(VertexOutput in_2) {
                 vec4 _e98 = gradient_color(_e96.x, count_2);
                 color_2 = (_e98 * _e96.y);
             } else {
-                if (((kind_2 > 8.5) && (kind_2 < 9.5))) {
+                if (((kind_1 > 8.5) && (kind_1 < 9.5))) {
                     vec2 _e106 = gradient_space(in_2);
                     float separation = _group_1_binding_0_fs.params.w;
                     float r0_ = _group_1_binding_0_fs.geometry.z;
@@ -850,7 +845,7 @@ vec4 shade(VertexOutput in_2) {
             }
         }
     }
-    switch(int((kind_2 + 0.5))) {
+    switch(int((kind_1 + 0.5))) {
         case 4: {
             vec4 _e196 = sample_image(in_2.clip);
             return _e196;
@@ -888,7 +883,7 @@ vec4 shade(VertexOutput in_2) {
             break;
         }
     }
-    if (((kind_2 > 4.5) && (kind_2 < 5.5))) {
+    if (((kind_1 > 4.5) && (kind_1 < 5.5))) {
         vec4 _e230 = textureLod(_group_0_binding_0_fs, vec2(in_2.uv), 0.0);
         float coverage_2 = _e230.x;
         vec4 tint_5 = _group_1_binding_0_fs.stops[0];
