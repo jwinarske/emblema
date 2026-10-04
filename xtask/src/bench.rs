@@ -1192,12 +1192,20 @@ mod tests {
     #[test]
     fn what_in_each_bench_frame_is_a_safe_occluder() {
         let occluding = |recording: &Recording| -> (usize, usize) {
-            let draws: Vec<_> = recording
-                .passes
-                .iter()
-                .flat_map(|pass| pass.batch.draws())
-                .collect();
-            (draws.iter().filter(|d| d.occludes()).count(), draws.len())
+            // Per pass, because `occludes` reads the vertex colors and those
+            // live in the pass's own buffers.
+            let mut occluding = 0usize;
+            let mut total = 0usize;
+            for pass in &recording.passes {
+                let (vertices, indices) = (pass.batch.vertices(), pass.batch.indices());
+                for draw in pass.batch.draws() {
+                    total += 1;
+                    if draw.occludes(vertices, indices) {
+                        occluding += 1;
+                    }
+                }
+            }
+            (occluding, total)
         };
 
         assert_eq!(
@@ -1228,7 +1236,7 @@ mod tests {
             )
             .expect("a solid triangle");
         assert!(
-            batch.draws()[0].occludes(),
+            batch.draws()[0].occludes(batch.vertices(), batch.indices()),
             "an opaque solid fill is what the predicate exists to admit"
         );
     }

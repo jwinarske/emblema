@@ -284,6 +284,14 @@ impl BatchDraw {
     ///   one after the material produced it.
     /// - **`Modulate` tinting.** It is the identity against the white a solid
     ///   fill carries; another mode is a second color this cannot see.
+    /// - **Every vertex carrying white.** A vertex color multiplies the
+    ///   material, so a translucent one makes a translucent draw out of an
+    ///   opaque material -- and `Material::Solid` is exactly the pairing
+    ///   `draw_vertices` produces for a caller's mesh. This is why the vertex
+    ///   buffer is a parameter: the material cannot answer it, and the draw
+    ///   does not hold it. Refused for any non-white color rather than only a
+    ///   translucent one, since a colored-but-opaque vertex still has to be
+    ///   read to know that, and it costs nothing to say no.
     /// - **Unclipped.** A `Narrow` or `Widen` draw writes the stencil rather
     ///   than color and is sequencing, not content. A clipped `Content` draw
     ///   writes color but depends on stencil state that the draws around it
@@ -467,13 +475,34 @@ impl BatchDraw {
         }
     }
 
-    pub fn occludes(&self) -> bool {
+    pub fn occludes(&self, vertices: &[Vertex], indices: &[u32]) -> bool {
         self.stencil == ClipState::UNCLIPPED
             && matches!(self.blend, BlendMode::Src | BlendMode::SrcOver)
             && self.filter == ColorFilter::None
             && self.tint_blend == BlendMode::Modulate
             && !self.paint_at_texture_coords
             && matches!(self.material, Material::Solid(color) if color[3] >= 1.0)
+            // Last, because it is the only test here that reads a buffer.
+            && self.vertices_are_white(vertices, indices)
+    }
+
+    /// Whether every vertex this draw names carries white, the identity for a
+    /// color that multiplies the material.
+    ///
+    /// A draw naming a vertex or an index that is not there answers no. That
+    /// cannot happen in a batch this crate built, and a predicate whose wrong
+    /// answer is a wrong picture does not get to assume it.
+    fn vertices_are_white(&self, vertices: &[Vertex], indices: &[u32]) -> bool {
+        let first = self.first_index as usize;
+        let Some(end) = first.checked_add(self.index_count as usize) else {
+            return false;
+        };
+        let Some(range) = indices.get(first..end) else {
+            return false;
+        };
+        range
+            .iter()
+            .all(|&i| vertices.get(i as usize).is_some_and(|v| v.color == WHITE))
     }
 
     /// The uniform block this draw's shader reads.
@@ -905,7 +934,7 @@ impl Batch {
         for index in (0..self.draws.len()).rev() {
             let draw = self.draws[index].clone();
             let covered = draw
-                .occludes()
+                .occludes(&self.vertices, &self.indices)
                 .then(|| draw.covered(&self.vertices, &self.indices, extent))
                 .flatten();
 
@@ -1206,6 +1235,79 @@ mod occlusion {
         batch.draws().first().expect("one draw").clone()
     }
 
+    /// The buffers `one` builds: three vertices carrying white, indexed in
+    /// order. `occludes` reads them, so every call here needs a pair, and these
+    /// are the ones a plain `push` produces.
+    const WHITE_TRI_INDICES: [u32; 3] = [0, 1, 2];
+
+    fn white_tri() -> Vec<Vertex> {
+        vec![Vertex::at([0.0, 0.0]); 3]
+    }
+
+    /// A vertex color multiplies the material, so a translucent one makes a
+    /// translucent draw out of an opaque `Material::Solid` -- which is exactly
+    /// the pairing `draw_vertices` builds for a caller's mesh.
+    ///
+    /// This was reachable from the public API and wrong by 128 of 255: an
+    /// indexed quad with translucent vertex colors passed both `occludes` and
+    /// `covered`, so the draw beneath it was culled and showed through nothing.
+    /// §19 of `docs/non-parity.md` predicted the unsoundness as a blocker for
+    /// upstream's vertex-interpolated gradient; it was already live.
+    #[test]
+    fn a_translucent_vertex_color_is_not_an_occluder() {
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &TRI,
+                &[0, 1, 2],
+                Material::solid([1.0; 4]),
+                BlendMode::SrcOver,
+            )
+            .unwrap();
+        let draw = batch.draws().first().expect("one draw").clone();
+
+        let opaque = vec![Vertex::at([0.0, 0.0]); 3];
+        assert!(
+            draw.occludes(&opaque, &WHITE_TRI_INDICES),
+            "white vertices leave an opaque solid fill an occluder"
+        );
+
+        let translucent = vec![Vertex::at([0.0, 0.0]).with_color([1.0, 0.0, 0.0, 0.25]); 3];
+        assert!(
+            !draw.occludes(&translucent, &WHITE_TRI_INDICES),
+            "a translucent vertex color was called an occluder"
+        );
+
+        // Opaque but colored is refused too: knowing it is opaque means reading
+        // it, and the predicate says no to anything it has to reason about.
+        let tinted = vec![Vertex::at([0.0, 0.0]).with_color([1.0, 0.0, 0.0, 1.0]); 3];
+        assert!(
+            !draw.occludes(&tinted, &WHITE_TRI_INDICES),
+            "a colored vertex was called an occluder"
+        );
+    }
+
+    /// A draw naming a vertex or an index that is not there answers no.
+    #[test]
+    fn a_draw_naming_absent_vertices_is_not_an_occluder() {
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &TRI,
+                &[0, 1, 2],
+                Material::solid([1.0; 4]),
+                BlendMode::SrcOver,
+            )
+            .unwrap();
+        let draw = batch.draws().first().expect("one draw").clone();
+        assert!(!draw.occludes(&[], &WHITE_TRI_INDICES), "no vertices");
+        assert!(!draw.occludes(&white_tri(), &[]), "no indices");
+        assert!(
+            !draw.occludes(&white_tri(), &[0, 1]),
+            "fewer indices than the draw names"
+        );
+    }
+
     const TARGET: Extent2D = Extent2D::new(100, 80);
 
     /// A quad over the given clip-space box, as `fan_fill` emits one.
@@ -1486,8 +1588,10 @@ mod occlusion {
     /// An opaque solid fill is what the predicate exists to admit.
     #[test]
     fn an_opaque_solid_fill_occludes() {
-        assert!(one(Material::solid([1.0; 4]), BlendMode::SrcOver).occludes());
-        assert!(one(Material::solid([0.2, 0.3, 0.4, 1.0]), BlendMode::Src).occludes());
+        assert!(one(Material::solid([1.0; 4]), BlendMode::SrcOver)
+            .occludes(&white_tri(), &WHITE_TRI_INDICES));
+        assert!(one(Material::solid([0.2, 0.3, 0.4, 1.0]), BlendMode::Src)
+            .occludes(&white_tri(), &WHITE_TRI_INDICES));
     }
 
     /// And every reason to refuse is refused, each on its own.
@@ -1499,8 +1603,12 @@ mod occlusion {
     fn nothing_the_predicate_cannot_prove_occludes() {
         // Translucent: the destination shows through, which is the whole
         // question.
-        assert!(!one(Material::solid([1.0, 1.0, 1.0, 0.5]), BlendMode::SrcOver).occludes());
-        assert!(!one(Material::solid([0.0; 4]), BlendMode::SrcOver).occludes());
+        assert!(
+            !one(Material::solid([1.0, 1.0, 1.0, 0.5]), BlendMode::SrcOver)
+                .occludes(&white_tri(), &WHITE_TRI_INDICES)
+        );
+        assert!(!one(Material::solid([0.0; 4]), BlendMode::SrcOver)
+            .occludes(&white_tri(), &WHITE_TRI_INDICES));
 
         // A mode that reads the destination cannot have the destination moved
         // out from under it.
@@ -1512,7 +1620,7 @@ mod occlusion {
             BlendMode::Plus,
         ] {
             assert!(
-                !one(Material::solid([1.0; 4]), blend).occludes(),
+                !one(Material::solid([1.0; 4]), blend).occludes(&white_tri(), &WHITE_TRI_INDICES),
                 "{blend:?} reads what it is drawn over"
             );
         }
@@ -1538,7 +1646,7 @@ mod occlusion {
         ];
         for material in analytic {
             assert!(
-                !one(material, BlendMode::SrcOver).occludes(),
+                !one(material, BlendMode::SrcOver).occludes(&white_tri(), &WHITE_TRI_INDICES),
                 "an analytic shape computes coverage and blends it"
             );
         }
@@ -1548,25 +1656,31 @@ mod occlusion {
     #[test]
     fn a_filter_or_a_tint_refuses_it() {
         let mut filtered = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
-        assert!(filtered.occludes(), "the draw is otherwise admissible");
+        assert!(
+            filtered.occludes(&white_tri(), &WHITE_TRI_INDICES),
+            "the draw is otherwise admissible"
+        );
 
         filtered.filter = ColorFilter::Blend {
             color: [1.0, 1.0, 1.0, 0.25],
             mode: BlendMode::SrcOver,
         };
-        assert!(!filtered.occludes(), "a blend filter can lower alpha");
+        assert!(
+            !filtered.occludes(&white_tri(), &WHITE_TRI_INDICES),
+            "a blend filter can lower alpha"
+        );
 
         let mut tinted = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
         tinted.tint_blend = BlendMode::Plus;
         assert!(
-            !tinted.occludes(),
+            !tinted.occludes(&white_tri(), &WHITE_TRI_INDICES),
             "only Modulate is the identity against a solid fill's white"
         );
 
         let mut sampled = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
         sampled.paint_at_texture_coords = true;
         assert!(
-            !sampled.occludes(),
+            !sampled.occludes(&white_tri(), &WHITE_TRI_INDICES),
             "reading the paint elsewhere is a value this cannot see"
         );
     }
@@ -1582,7 +1696,7 @@ mod occlusion {
             let mut draw = one(Material::solid([1.0; 4]), BlendMode::SrcOver);
             draw.stencil = stencil;
             assert!(
-                !draw.occludes(),
+                !draw.occludes(&white_tri(), &WHITE_TRI_INDICES),
                 "{stencil:?} either writes the stencil or depends on it"
             );
         }
