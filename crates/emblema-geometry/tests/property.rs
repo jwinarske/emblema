@@ -6,11 +6,12 @@
 //! tests, and mixing them in here would only rediscover those.
 
 use emblema_geometry::flatten::{
-    cubic_segment_count, eval_cubic, eval_quad, quad_segment_count, DEFAULT_TOLERANCE,
+    cubic_segment_count, eval_cubic, eval_quad, quad_segment_count, tolerance_for_scale,
+    DEFAULT_TOLERANCE, MAX_SEGMENTS,
 };
 use emblema_geometry::tessellate::{covered_area, polygon_area, Tessellator};
-use emblema_geometry::{flatten, PathBuilder};
-use glam::Vec2;
+use emblema_geometry::{flatten, max_scale, PathBuilder};
+use glam::{Affine2, Vec2};
 use proptest::prelude::*;
 
 /// Coordinates within a generous but finite viewport.
@@ -25,6 +26,74 @@ fn point() -> impl Strategy<Value = Vec2> {
 /// Tolerances spanning the useful range, from coarse to text-quality.
 fn tolerance() -> impl Strategy<Value = f32> {
     0.01f32..4.0f32
+}
+
+/// Coordinates for the tests that also scale, small enough that the product
+/// stays where `f32` resolves a fraction of a pixel. The full range at a scale
+/// of fifty reaches half a million, where the float spacing is a twentieth of a
+/// pixel and a quarter-pixel bound measures the arithmetic.
+fn small_coord() -> impl Strategy<Value = f32> {
+    -1_000.0f32..1_000.0f32
+}
+
+fn small_point() -> impl Strategy<Value = Vec2> {
+    (small_coord(), small_coord()).prop_map(|(x, y)| Vec2::new(x, y))
+}
+
+/// The largest singular value of an affine's linear part, exactly: the
+/// reference [`max_scale`] estimates. From the eigenvalues of `M^T M`, whose
+/// trace is the squared Frobenius norm.
+///
+/// In the test rather than the library because `max_scale` exists to avoid
+/// computing it per draw.
+fn largest_singular_value(transform: &Affine2) -> f32 {
+    let m = transform.matrix2;
+    let frobenius_squared = m.x_axis.length_squared() + m.y_axis.length_squared();
+    let determinant = m.determinant();
+    let discriminant =
+        (frobenius_squared * frobenius_squared - 4.0 * determinant * determinant).max(0.0);
+    ((frobenius_squared + discriminant.sqrt()) * 0.5).sqrt()
+}
+
+/// Distance from a point to a line segment.
+fn distance_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let length_squared = ab.length_squared();
+    if length_squared <= 0.0 {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / length_squared).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length()
+}
+
+/// The furthest the curve strays from the polyline approximating it.
+///
+/// Sampled rather than solved -- the distance from a cubic to a polyline has no
+/// closed form. Sampling the *curve* is the direction that matters: a dropped
+/// segment leaves a curve point with nothing near it.
+fn worst_deviation(curve: impl Fn(f32) -> Vec2, polyline: &[Vec2]) -> f32 {
+    const SAMPLES: usize = 512;
+    let mut worst = 0.0f32;
+    for i in 0..=SAMPLES {
+        let t = i as f32 / SAMPLES as f32;
+        let p = curve(t);
+        let mut nearest = f32::INFINITY;
+        for pair in polyline.windows(2) {
+            nearest = nearest.min(distance_to_segment(p, pair[0], pair[1]));
+        }
+        worst = worst.max(nearest);
+    }
+    worst
+}
+
+/// Float slack for a distance at these coordinates: the magnitude's own
+/// resolution, so the allowance does not depend on the generated scale.
+fn float_slack(points: &[Vec2]) -> f32 {
+    let magnitude = points
+        .iter()
+        .map(|p| p.abs().max_element())
+        .fold(0.0f32, f32::max);
+    (magnitude * f32::EPSILON * 16.0).max(1e-3)
 }
 
 proptest! {
@@ -85,6 +154,133 @@ proptest! {
         prop_assert!(
             cubic_segment_count(p0, p1, p1, p2, fine)
                 >= cubic_segment_count(p0, p1, p1, p2, coarse)
+        );
+    }
+
+    /// Flattening must land within its tolerance of the curve.
+    ///
+    /// The three properties above are about where the samples are, not how
+    /// many, so a flattener undercounting its segments satisfies all of them.
+    ///
+    /// Skipped at `MAX_SEGMENTS`, where the cap and not the tolerance decides.
+    #[test]
+    fn flattening_lands_within_tolerance_of_the_curve(
+        p0 in point(), c0 in point(), c1 in point(), p3 in point(),
+        tol in tolerance(),
+    ) {
+        prop_assume!(cubic_segment_count(p0, c0, c1, p3, tol) < MAX_SEGMENTS);
+        let mut b = PathBuilder::new();
+        b.move_to(p0).cubic_to(c0, c1, p3);
+        let lines = flatten(&b.build(), tol);
+        prop_assert_eq!(lines.len(), 1);
+
+        let worst = worst_deviation(|t| eval_cubic(p0, c0, c1, p3, t), &lines[0]);
+        let slack = float_slack(&[p0, c0, c1, p3]);
+        prop_assert!(
+            worst <= tol + slack,
+            "flattening at tolerance {} left the curve by {} (slack {})",
+            tol, worst, slack
+        );
+    }
+
+    /// And the same bound after the transform, which is the space the tolerance
+    /// is in: the renderer shrinks it by the largest scale, flattens in path
+    /// space, then transforms.
+    ///
+    /// A similarity, which is the family where `max_scale` is exact. The
+    /// skewed case is below.
+    #[test]
+    fn flattening_lands_within_tolerance_after_a_similarity(
+        p0 in small_point(), c0 in small_point(), c1 in small_point(), p3 in small_point(),
+        tol in tolerance(),
+        scale in 0.05f32..50.0,
+        angle in 0.0f32..std::f32::consts::TAU,
+        translate in small_point(),
+    ) {
+        let transform = Affine2::from_translation(translate)
+            * Affine2::from_angle(angle)
+            * Affine2::from_scale(Vec2::splat(scale));
+        let path_tolerance = tolerance_for_scale(tol, max_scale(&transform));
+        prop_assume!(cubic_segment_count(p0, c0, c1, p3, path_tolerance) < MAX_SEGMENTS);
+
+        let mut b = PathBuilder::new();
+        b.move_to(p0).cubic_to(c0, c1, p3);
+        let lines = flatten(&b.build(), path_tolerance);
+        prop_assert_eq!(lines.len(), 1);
+
+        // Both sides into device space: the polyline the renderer would draw,
+        // and the curve it is meant to approximate.
+        let device: Vec<Vec2> = lines[0].iter().map(|p| transform.transform_point2(*p)).collect();
+        let worst = worst_deviation(
+            |t| transform.transform_point2(eval_cubic(p0, c0, c1, p3, t)),
+            &device,
+        );
+        let slack = float_slack(&device);
+        prop_assert!(
+            worst <= tol + slack,
+            "at scale {} the flattening left the curve by {} in device space, \
+             past a tolerance of {} (slack {})",
+            scale, worst, tol, slack
+        );
+    }
+
+    /// `max_scale` bounds the true largest singular value from below, by at
+    /// most `sqrt(2)`. Its own doc comment says so; this checks it, because the
+    /// bound above rests on it.
+    ///
+    /// Both halves matter: above the true value only wastes segments, while
+    /// more than `sqrt(2)` below leaves a curve outside its tolerance.
+    #[test]
+    fn max_scale_is_within_root_two_below_the_true_largest_stretch(
+        a in -50.0f32..50.0, b in -50.0f32..50.0,
+        c in -50.0f32..50.0, d in -50.0f32..50.0,
+    ) {
+        let transform = Affine2::from_cols(Vec2::new(a, b), Vec2::new(c, d), Vec2::ZERO);
+        let estimate = max_scale(&transform);
+        let truth = largest_singular_value(&transform);
+        let slack = truth * 1e-4 + 1e-4;
+        prop_assert!(
+            estimate <= truth + slack,
+            "max_scale {estimate} exceeded the true largest stretch {truth}"
+        );
+        prop_assert!(
+            estimate * std::f32::consts::SQRT_2 + slack >= truth,
+            "max_scale {estimate} fell more than root two below {truth}"
+        );
+    }
+
+    /// Under a skew the estimate is low, so the device-space error may exceed
+    /// the tolerance by up to `sqrt(2)` -- the accepted cost of not
+    /// decomposing per draw. A quarter pixel can show as a third. Exceeding
+    /// the factor is the defect.
+    #[test]
+    fn a_skew_costs_no_more_than_the_stated_factor(
+        p0 in small_point(), c0 in small_point(), c1 in small_point(), p3 in small_point(),
+        tol in tolerance(),
+        sx in 0.1f32..20.0, sy in 0.1f32..20.0,
+        skew in -4.0f32..4.0,
+        angle in 0.0f32..std::f32::consts::TAU,
+    ) {
+        let mut linear = Affine2::from_angle(angle) * Affine2::from_scale(Vec2::new(sx, sy));
+        linear.matrix2.y_axis.x += skew;
+        let path_tolerance = tolerance_for_scale(tol, max_scale(&linear));
+        prop_assume!(cubic_segment_count(p0, c0, c1, p3, path_tolerance) < MAX_SEGMENTS);
+
+        let mut b = PathBuilder::new();
+        b.move_to(p0).cubic_to(c0, c1, p3);
+        let lines = flatten(&b.build(), path_tolerance);
+        prop_assert_eq!(lines.len(), 1);
+
+        let device: Vec<Vec2> = lines[0].iter().map(|p| linear.transform_point2(*p)).collect();
+        let worst = worst_deviation(
+            |t| linear.transform_point2(eval_cubic(p0, c0, c1, p3, t)),
+            &device,
+        );
+        let allowed = tol * std::f32::consts::SQRT_2 + float_slack(&device);
+        prop_assert!(
+            worst <= allowed,
+            "a skew left the curve by {} in device space, past the {} this is allowed",
+            worst, allowed
         );
     }
 

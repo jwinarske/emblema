@@ -329,6 +329,7 @@ dependencies = [
  "emblema-hal",
  "emblema-hal-vulkan",
  "glam",
+ "proptest",
 ]
 
 [[package]]

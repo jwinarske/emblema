@@ -23,3 +23,7 @@ emblema-hal = { workspace = true }
 # A concrete backend is needed to check that geometry lands on the pixels it
 # should. This is a test-only dependency; the renderer itself stays generic.
 emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
+# Generated transforms, for the two steps the tessellator's own property tests
+# cannot reach: the tolerance a transform decides, and the clip-space
+# conversion after it.
+proptest = { workspace = true }
