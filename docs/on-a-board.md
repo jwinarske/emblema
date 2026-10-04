@@ -1357,12 +1357,17 @@ its evaluation. That is exactly the kind of question the opening of
 `non-parity.md` says is answered against the target devices rather than against
 upstream's shape.
 
-It also bounds `non-parity.md` 19. A vertex-interpolated path does no per-fragment
-gradient work at all, so the most it can recover is the evaluation share: about 1.9
-ms of a 13.9 ms frame under Vulkan, 2.9 of 14.9 under GLES. That is worth having --
-fourteen per cent of a frame is not nothing -- but it is not the three quarters the
-ground's share invites you to read, and nothing about the gradient path touches the
-fill underneath it.
+It also bounds `non-parity.md` 19, which has since landed. A vertex-interpolated path
+does no per-fragment gradient work at all, so the most it can recover is the evaluation
+share: about 1.9 ms of a 13.9 ms frame under Vulkan, 2.9 of 14.9 under GLES. That is
+worth having -- fourteen per cent of a frame is not nothing -- but it is not the three
+quarters the ground's share invites you to read, and nothing about the gradient path
+touches the fill underneath it.
+
+**What the path actually recovers here has not been measured.** It is built and its
+picture is checked, and the bench's `stacked, wash` row is the one that would show it,
+but no run on this board has been taken since. The figure above is the ceiling, not the
+result.
 
 **These numbers are not gated, which is a weakness and is stated rather than
 hidden.** They came from a throwaway probe -- three extra rows built from the

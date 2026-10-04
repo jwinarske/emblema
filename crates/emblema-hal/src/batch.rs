@@ -470,7 +470,16 @@ impl BatchDraw {
         }
         match self.blend {
             BlendMode::Src => true,
-            BlendMode::SrcOver => self.material.is_opaque(),
+            // `VertexGradient` shades opaque white, and the tint above is
+            // `Modulate`, so the result's alpha *is* the vertex alpha -- which
+            // the loop has just checked. `Material::is_opaque` cannot say so:
+            // it answers about the material alone, and the colors are not
+            // there. Without this a vertex-interpolated gradient is never
+            // split, so the wash under an interface paints every pixel the
+            // panels cover.
+            BlendMode::SrcOver => {
+                self.material.is_opaque() || matches!(self.material, Material::VertexGradient)
+            }
             _ => false,
         }
     }
@@ -1285,6 +1294,45 @@ mod occlusion {
             !draw.occludes(&tinted, &WHITE_TRI_INDICES),
             "a colored vertex was called an occluder"
         );
+    }
+
+    /// An interpolated gradient splits when its vertex alphas are opaque, and
+    /// not otherwise.
+    ///
+    /// `Material::is_opaque` answers no for `VertexGradient` -- the colors are
+    /// not in the material -- so without the vertex test above it this draw
+    /// would never be confined by culling, and a wash under an interface would
+    /// paint every pixel the panels over it cover. The bench notices:
+    /// `the_stacked_frame_overdraws_by_what_its_prose_claims` reads 131 draws
+    /// with this and 127 without.
+    #[test]
+    fn an_interpolated_gradient_splits_when_its_vertices_are_opaque() {
+        let mut batch = Batch::new();
+        batch
+            .push(
+                &TRI,
+                &[0, 1, 2],
+                Material::VertexGradient,
+                BlendMode::SrcOver,
+            )
+            .unwrap();
+        let draw = batch.draws().first().expect("one draw").clone();
+
+        let opaque = vec![Vertex::at([0.0, 0.0]).with_color([0.2, 0.4, 0.8, 1.0]); 3];
+        assert!(
+            draw.splits_safely(&opaque, &WHITE_TRI_INDICES),
+            "every vertex alpha is one, so the result is opaque"
+        );
+
+        let translucent = vec![Vertex::at([0.0, 0.0]).with_color([0.2, 0.4, 0.8, 0.5]); 3];
+        assert!(
+            !draw.splits_safely(&translucent, &WHITE_TRI_INDICES),
+            "a translucent vertex makes part of the draw translucent"
+        );
+
+        // Still not an *occluder*: `occludes` admits only `Material::Solid`,
+        // and this one's color is not in the material.
+        assert!(!draw.occludes(&opaque, &WHITE_TRI_INDICES));
     }
 
     /// A draw naming a vertex or an index that is not there answers no.

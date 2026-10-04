@@ -1028,7 +1028,26 @@ they do not agree on the most basic question of how a fill is rasterized. Nobody
 should infer the C++ design from this one, which is the reason this entry leads
 with the mechanism instead of the consequence.
 
-## 19. An axis-aligned gradient is shaded per fragment here; upstream interpolates it across vertices
+## 19. An axis-aligned gradient is interpolated across vertices, as upstream's is
+
+**Closed.** This renderer now has upstream's three linear-gradient paths, and the
+predicate that selects the first of them. What follows is the account of the difference
+and of the two prerequisites that had to land first; the route itself is
+`fast_gradient_sections` and `Canvas::draw_gradient_sections`, tried before the uniform
+walk exactly as `LinearGradientContents::Render` tries `CanApplyFastGradient`.
+
+Measured on landing, against the per-fragment route over identical geometry: the pictures
+agree to **one level of 255**, where the reverted attempt managed two with a mean of 0.74
+-- the difference being that the dither is now on both sides.
+`the_two_gradient_routes_agree` asserts it, and asserts the two really took different
+routes.
+
+Of the corpus's seventy-four scenes exactly one satisfies the strict half of the
+predicate, `gradient-many-stops`, which answers a question an earlier draft of this entry
+left open. Its golden is unchanged and its recorded cost went from four vertices, six
+indices, one baked ramp and one texture slot to twenty vertices, thirty indices and
+neither -- the ramp is what a five-stop gradient no longer needs.
+
 
 **What differs.** Upstream has three linear-gradient paths and this renderer has
 two. `LinearGradientContents::Render` tries `CanApplyFastGradient()` *first*: if
@@ -1124,8 +1143,18 @@ Three things stopped it, and none is the arithmetic:
   `draw_masked`, so the shape drew sharp and unmasked.
 
 So the order was: a dithering material first, then the predicate's interface, then this.
-**The first two are done** -- see below and the `occludes` note above -- and what remains
-is the route itself.
+All three are done.
+
+**One thing the second attempt found that the first did not.** The sections merge into a
+single draw, and `BatchDraw::splits_safely` refused it -- `Material::is_opaque` answers no
+for `VertexGradient`, because the colors are not in the material. A refused draw is never
+confined by culling, so the wash under the bench's interface painted every pixel the
+panels cover: `the_stacked_frame_overdraws_by_what_its_prose_claims` read 127 draws
+instead of 131. `splits_safely` already walks the vertices to check their alphas, and for
+this material the result *is* the vertex color, so it can answer where the material cannot.
+With that, the bench's draw counts and its occluder census are unchanged by the whole
+change -- which is the result worth having, since trading a per-fragment evaluation for
+forty per cent more fill would not have been one.
 Reverted rather than carried, because a half-landed route that silently drops dither is
 worse than none.
 
