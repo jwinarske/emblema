@@ -17188,7 +17188,7 @@ fn culling_hidden_pixels_changes_no_pixel() {
     /// A scene, whether culling should bite on it, and how to draw it.
     type Scene = (&'static str, bool, fn(&mut Canvas));
 
-    let scenes: [Scene; 7] = [
+    let scenes: [Scene; 8] = [
         ("a bar over a wash", true, |canvas| {
             canvas
                 .draw_rect(
@@ -17322,6 +17322,40 @@ fn culling_hidden_pixels_changes_no_pixel() {
                 )
                 .expect("in the layer");
             canvas.restore();
+        }),
+        // A mesh whose vertex colors are translucent, over a wash it covers
+        // exactly. The paint is opaque white and the tint is `Modulate`, so
+        // the material alone reads as an occluder -- and the vertex colors,
+        // which multiply it, are what make the draw translucent. Indexed,
+        // because `BatchDraw::covered` wants four distinct vertices and six
+        // indices; the unindexed form of the same quad has six and is refused
+        // there, which is what kept this latent.
+        //
+        // Culling must not bite. It used to: the wash went and the picture was
+        // wrong by 128 of 255.
+        ("a translucent mesh over a wash", false, |canvas| {
+            canvas
+                .draw_rect(
+                    Rect::new(0.0, 0.0, 128.0, 128.0),
+                    &Paint::fill(Color::linear(0.1, 0.2, 0.4, 1.0)),
+                )
+                .expect("wash");
+            let mesh = Vertices::full(
+                VertexMode::Triangles,
+                vec![
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(128.0, 0.0),
+                    Vec2::new(128.0, 128.0),
+                    Vec2::new(0.0, 128.0),
+                ],
+                Vec::new(),
+                vec![Color::linear(1.0, 0.0, 0.0, 0.25); 4],
+                vec![0, 1, 3, 1, 2, 3],
+            )
+            .expect("mesh");
+            canvas
+                .draw_vertices(&mesh, &Paint::fill(Color::WHITE))
+                .expect("mesh");
         }),
     ];
 

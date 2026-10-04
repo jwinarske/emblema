@@ -1107,22 +1107,29 @@ Three things stopped it, and none is the arithmetic:
   dithering measured *worse* than rounding, 0.000574 against 0.000543, because there
   was none. Closing that means a material that dithers an interpolated vertex color,
   which is a shader change rather than a route.
-- **It makes `BatchDraw::occludes` unsound.** That predicate admits
-  `Material::Solid` with opaque alpha, on the reasoning that a solid fill carries no
-  per-vertex color -- which was true until this path produced exactly that pairing
-  with colors that may be translucent. `BatchDraw` cannot see the vertex buffer, so
-  the fix is an interface change, and entry 21 depends on that predicate.
+- **It makes `BatchDraw::occludes` unsound** -- and that turned out to be live
+  already, not a consequence of this path. `draw_vertices` builds the same pairing for
+  a caller's mesh: an opaque `Material::Solid` under `Modulate` with per-vertex colors
+  that may be translucent. An indexed quad of them passed both `occludes` and
+  `covered`, so the draw beneath was culled and the picture was wrong by 128 of 255.
+  The unindexed form of the same quad is refused by `covered`, which wants four
+  distinct vertices against its six, and that is what kept it latent. Fixed by giving
+  `occludes` the vertex buffer, which is the interface change this entry predicted;
+  entry 21 depends on that predicate, so it was worth fixing before either path
+  reaches it.
 - **Several tests pin the structure it changes**, beyond the two above: a recording's
   ramp count, a mask blur over a gradient, a runtime-effect filter, and every corpus
   scene's cost row. The mask blur one was a real defect in the attempt rather than a
   pinned invariant -- the fast path went straight to the batch and skipped
   `draw_masked`, so the shape drew sharp and unmasked.
 
-So the order is: a dithering material first, then the predicate's interface, then this.
+So the order was: a dithering material first, then the predicate's interface, then this.
+**The first two are done** -- see below and the `occludes` note above -- and what remains
+is the route itself.
 Reverted rather than carried, because a half-landed route that silently drops dither is
 worse than none.
 
-**The first of those is done.** `Material::dithers` carries the decision and
+**The dithering material.** `Material::dithers` carries the decision and
 `Batch::to_uniform` writes the amplitude from it, so the shader tests only whether there
 is an amplitude. The kind test it used to run -- `params.y` against the four gradient
 kinds -- was the mechanism by which the reverted attempt lost its dither: a route drawing
