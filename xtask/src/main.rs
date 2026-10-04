@@ -37,6 +37,7 @@ mod drivers;
 mod drm;
 mod gallery;
 mod gate;
+mod release;
 mod report;
 mod verify;
 
@@ -61,6 +62,8 @@ Commands:
                     docs/architecture.md.
   gallery [path]    Render every corpus scene onto one sheet to look at.
                     Defaults to corpus.ppm.
+  release           The order to publish this workspace's crates in, and what
+                    each step needs. Prints; publishes nothing.
   gate              Lint, format, build, the feature matrix and the suite,
                     stopping at the first failure. Exits non-zero if any step
                     did not pass.
@@ -304,6 +307,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("release") => print!("{}", release::report()),
         Some("help") | Some("--help") | Some("-h") | None => print!("{USAGE}"),
         Some(other) => {
             // Named rather than merely refused, and alongside what does exist,
