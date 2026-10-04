@@ -610,7 +610,28 @@ fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()>
 /// of step the moment the scene format grew, which is how a frame-loop test
 /// ended up reading a field that no longer existed.
 pub fn record_scene(scene: &Scene) -> Result<Recording> {
+    record_scene_with(scene, Culling::Applied)
+}
+
+/// Whether the recording keeps the draws occlusion culling would remove.
+///
+/// `Kept` is what makes culling testable at all: the same scene recorded both
+/// ways must render to the same bytes, since culling is defined as removing
+/// only what nothing can see. A predicate that admits a draw it should not makes
+/// the two differ, which is how a translucent mesh treated as an occluder was
+/// found -- see `occludes` in `emblema-hal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Culling {
+    Applied,
+    Kept,
+}
+
+/// Turn a scene into a recording, saying whether culling runs.
+pub fn record_scene_with(scene: &Scene, culling: Culling) -> Result<Recording> {
     let mut canvas = Canvas::new(scene.size).with_samples(scene.samples);
+    if culling == Culling::Kept {
+        canvas.keep_hidden_draws();
+    }
     canvas.clear(color_of(scene.background));
     let anti_alias = scene.samples > 1;
     for node in &scene.items {
@@ -647,7 +668,20 @@ pub fn render_scene_into<H: Hal>(
 where
     H::Context: HalContext<Hal = H>,
 {
-    let recording = record_scene(scene)?;
+    render_scene_culled_into::<H>(ctx, scene, format, Culling::Applied)
+}
+
+/// The same, saying whether culling runs on the recording first.
+pub fn render_scene_culled_into<H: Hal>(
+    ctx: &mut H::Context,
+    scene: &Scene,
+    format: PixelFormat,
+    culling: Culling,
+) -> Result<Image>
+where
+    H::Context: HalContext<Hal = H>,
+{
+    let recording = record_scene_with(scene, culling)?;
     // Uploaded per scene that asks for it rather than held by the caller,
     // which keeps every consumer of this function -- the window, the
     // comparison, the sheet renderer -- from having to know that some scenes
