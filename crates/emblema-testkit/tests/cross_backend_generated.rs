@@ -47,10 +47,57 @@ fn color() -> impl Strategy<Value = [f32; 4]> {
     (0.0f32..1.0, 0.0f32..1.0, 0.0f32..1.0, alpha()).prop_map(|(r, g, b, a)| [r, g, b, a])
 }
 
+/// Whether both backends here offer advanced blending.
+///
+/// Probed once, because it decides what the generator may produce. A scene
+/// naming an advanced mode on a device without the capability is not a
+/// comparison -- `Scene::supported_by` refuses it -- and generating them anyway
+/// is what made this test abort: at 512 cases it hit 355 successes against 1024
+/// rejects and proptest gave up, because this workstation's Vulkan device has no
+/// advanced blending while its GLES context does, and four of the six modes
+/// below are advanced.
+///
+/// So the capability is read rather than assumed, and the modes follow it: where
+/// both offer advanced blending the advanced path is covered, and where one does
+/// not the comparison keeps every case and says what it gave up.
+///
+/// **Neither environment measured offers it on both sides**, and the first
+/// version of this comment claimed CI did. Measured 2026-10-04: this
+/// workstation's Mesa 26.2.3 gives `advanced_blend` false on the Vulkan device
+/// `Auto` selects, true on lavapipe and true on GLES; CI's Mesa 25.2.8 gives
+/// false on both Vulkan preferences and true on GLES, so lavapipe gained the
+/// capability between those versions. The pair this test uses -- `Auto` and
+/// GLES, matching `cross_backend.rs` -- therefore omits advanced modes in both
+/// places today. Comparing them across backends stays the corpus's job, where
+/// the catalog's advanced-blend scenes are held wherever a device reports the
+/// capability and named in the skip census where it does not.
+fn advanced_blending_everywhere() -> bool {
+    static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(|| {
+        let vulkan = Validated::new(DevicePreference::Auto)
+            .map(|ctx| ctx.capabilities().advanced_blend)
+            .unwrap_or(false);
+        let gles = GlesValidated::new(DisplayTarget::Surfaceless)
+            .map(|ctx| ctx.capabilities().advanced_blend)
+            .unwrap_or(false);
+        if !(vulkan && gles) {
+            eprintln!(
+                "generating no advanced blend modes: vulkan has them = {vulkan}, \
+                 gles has them = {gles}"
+            );
+        }
+        vulkan && gles
+    })
+}
+
 /// Modes that reach different machinery on GLES: Porter-Duff ones are fixed
 /// function, the advanced ones go through `GL_KHR_blend_equation_advanced` with
 /// a blend-qualified copy of the fragment stage and a barrier.
-fn blend() -> impl Strategy<Value = BlendMode> {
+fn blend() -> BoxedStrategy<BlendMode> {
+    let porter_duff = prop_oneof![3 => Just(BlendMode::SrcOver), 1 => Just(BlendMode::Src)];
+    if !advanced_blending_everywhere() {
+        return porter_duff.boxed();
+    }
     prop_oneof![
         3 => Just(BlendMode::SrcOver),
         1 => Just(BlendMode::Src),
@@ -59,6 +106,7 @@ fn blend() -> impl Strategy<Value = BlendMode> {
         1 => Just(BlendMode::Overlay),
         1 => Just(BlendMode::Difference),
     ]
+    .boxed()
 }
 
 /// A rectangle on integer coordinates, which is the boundary of what two
