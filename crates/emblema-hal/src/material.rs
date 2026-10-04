@@ -580,6 +580,22 @@ pub type ToLocal = [f32; 12];
 #[derive(Debug, Clone, PartialEq)]
 pub enum Material {
     Solid([f32; 4]),
+    /// Color comes from the vertices, and the result is dithered.
+    ///
+    /// Shades as opaque white, so the per-vertex color under `Modulate` -- which
+    /// is the identity against white -- is the whole result. That is the
+    /// arrangement `draw_vertices` already uses for a caller's mesh; what this
+    /// adds is that it dithers, which `Solid` must not.
+    ///
+    /// It exists for a gradient the rasterizer interpolates instead of the
+    /// fragment stage evaluating. A long run of nearly equal values is what
+    /// bands on an eight-bit target whichever stage produced it, and a route
+    /// that could not say so would drop the dither silently -- which is what
+    /// §19 of `docs/non-parity.md` records killing the first attempt at it.
+    ///
+    /// Carries no data: a section's colors ride on its vertices, and the
+    /// premultiplied alpha rides with them.
+    VertexGradient,
     /// A gradient along an axis, starting at a point **in clip space**.
     ///
     /// Clip space for the start, because the fragment stage locates itself from
@@ -1032,6 +1048,8 @@ impl Material {
     /// occasions on which enumerating them missed one.
     pub fn sampling(&self) -> Option<Sampling> {
         match self {
+            // Samples nothing: the color arrives on the vertices.
+            Self::VertexGradient => None,
             Self::Image { sampling, .. } | Self::Mesh { sampling, .. } => Some(*sampling),
             // Reads a texture and states no filter: a blur and a morphology
             // sample their own target at offsets they compute, and a glyph reads
@@ -1110,6 +1128,12 @@ impl Material {
             }
             Self::Mesh { alpha, .. } | Self::Image { alpha, .. } => *alpha *= factor,
             Self::Runtime { .. } | Self::Blur { .. } | Self::Morphology { .. } => {}
+            // Nothing here to scale -- the alpha is premultiplied into the
+            // vertex colors, which this cannot see. The one caller is the thin
+            // stroke above, and a fill passes a factor of one, so the route
+            // that uses this material never asks. A route that did would have
+            // to bake the factor in when it builds the sections.
+            Self::VertexGradient => {}
         }
         self
     }
@@ -1118,6 +1142,9 @@ impl Material {
     pub fn is_invisible(&self) -> bool {
         match self {
             Self::Solid(color) | Self::PointField { color } => color[3] <= 0.0,
+            // The colors are on the vertices, so the only honest answer is
+            // that it might draw something.
+            Self::VertexGradient => false,
             Self::LinearGradient { stops, .. }
             | Self::RadialGradient { stops, .. }
             | Self::SweepGradient { stops, .. }
@@ -1171,6 +1198,7 @@ impl Material {
 
     pub fn texture_slot(&self) -> Option<u32> {
         match self {
+            Self::VertexGradient => None,
             Self::Image { slot, .. }
             | Self::Mesh { slot, .. }
             | Self::Glyph { slot, .. }
@@ -1200,6 +1228,8 @@ impl Material {
     /// The stops, for any material that has them.
     fn stops(&self) -> &[Stop] {
         match self {
+            // Its stops became vertex colors when the sections were built.
+            Self::VertexGradient => &[],
             Self::Solid(_)
             | Self::PointField { .. }
             | Self::Image { .. }
@@ -1284,6 +1314,7 @@ impl Material {
         !matches!(
             self,
             Material::Solid(_)
+                | Material::VertexGradient
                 | Material::LinearGradient { .. }
                 | Material::RadialGradient { .. }
                 | Material::SweepGradient { .. }
@@ -1306,7 +1337,11 @@ impl Material {
     pub fn dithers(&self) -> bool {
         matches!(
             self,
-            Material::LinearGradient { .. }
+            // The one non-gradient here, and the reason this predicate is not
+            // simply "is a gradient": what it draws is a gradient, with the
+            // rasterizer interpolating it instead of the fragment stage.
+            Material::VertexGradient
+                | Material::LinearGradient { .. }
                 | Material::RadialGradient { .. }
                 | Material::SweepGradient { .. }
                 | Material::ConicalGradient { .. }
@@ -1318,6 +1353,18 @@ impl Material {
 
         if let Self::Solid(color) = self {
             out[layout::STOPS..layout::STOPS + 4].copy_from_slice(color);
+            out[layout::PARAMS] = 1.0;
+            out[layout::PARAMS + 1] = kind::SOLID;
+            return out;
+        }
+
+        // Opaque white under the solid kind, which is the identity for the
+        // `Modulate` tint that carries the vertex color. Packed here rather
+        // than falling through, because the machinery below reads `stops` and
+        // this material has none -- a gradient with no stops packs as
+        // transparent black, which is the opposite of an identity.
+        if matches!(self, Self::VertexGradient) {
+            out[layout::STOPS..layout::STOPS + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
             out[layout::PARAMS] = 1.0;
             out[layout::PARAMS + 1] = kind::SOLID;
             return out;
@@ -1512,6 +1559,7 @@ impl Material {
 
         match self {
             Self::Solid(_)
+            | Self::VertexGradient
             | Self::PointField { .. }
             | Self::Image { .. }
             | Self::Mesh { .. }
@@ -1617,6 +1665,38 @@ pub enum MaterialVariant {
 
 #[cfg(test)]
 mod tests {
+
+    /// `VertexGradient` packs as the identity for the tint that colors it, and
+    /// asks for a dither where `Solid` does not.
+    #[test]
+    fn a_vertex_gradient_packs_as_white_and_dithers() {
+        let packed = Material::VertexGradient.to_uniform();
+        assert_eq!(
+            &packed[layout::STOPS..layout::STOPS + 4],
+            &[1.0, 1.0, 1.0, 1.0],
+            "opaque white is the identity for a `Modulate` tint"
+        );
+        assert_eq!(packed[layout::PARAMS + 1], kind::SOLID);
+        assert_eq!(packed[layout::PARAMS], 1.0);
+
+        assert!(Material::VertexGradient.dithers());
+        assert!(!Material::solid([1.0; 4]).dithers());
+    }
+
+    /// And answers the rest of the predicates the way its shading does: no
+    /// texture, no derivatives, and nothing knowable about its coverage.
+    #[test]
+    fn a_vertex_gradient_answers_the_other_predicates() {
+        let m = Material::VertexGradient;
+        assert!(!m.needs_screen_derivatives(), "a vertex color reads none");
+        assert_eq!(m.sampling(), None);
+        assert_eq!(m.texture_slot(), None);
+        assert!(!m.is_invisible(), "the colors are on the vertices");
+        assert!(
+            !m.is_opaque(),
+            "the vertex alphas are not visible from here"
+        );
+    }
     use super::*;
 
     /// What a material can say about a texture read, and what it cannot.

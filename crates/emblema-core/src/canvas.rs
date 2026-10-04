@@ -2545,6 +2545,27 @@ impl Canvas {
             return Ok(self);
         }
 
+        // Upstream tries its vertex-interpolated gradient first, and so does
+        // this: `LinearGradientContents::Render` calls `CanApplyFastGradient`
+        // before reaching the uniform walk. Here rather than in `draw_rect`
+        // because everything above has to run first -- a mask blur or a
+        // runtime-effect filter takes its own route, and the first attempt at
+        // this path intercepted earlier and drew a masked shape sharp and
+        // unmasked. §19 of `docs/non-parity.md` records that.
+        //
+        // The shape has to be a rectangle recorded as one, which `draw_rect`
+        // and a zero-radius `draw_rrect` do and an arbitrary path with four
+        // corners does not: the predicate needs the rectangle's edges, and a
+        // path that happens to trace them has not said they are edges.
+        if matches!(paint.style, Style::Fill) {
+            if let Some((rect, 0.0)) = path.as_rounded_rect() {
+                let rect = Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
+                if let Some(sections) = fast_gradient_sections(rect, &paint.shader) {
+                    return self.draw_gradient_sections(&sections, paint);
+                }
+            }
+        }
+
         // Resolved before the clip is read, since it may add a slot to this
         // pass's table.
         let material = self.material_for(&paint.shader);
@@ -2581,6 +2602,56 @@ impl Canvas {
                 self.transform,
                 &render_paint,
             )?,
+        }
+        Ok(self)
+    }
+
+    /// Draw a gradient as one quad per pair of stops, letting the rasterizer
+    /// interpolate between them.
+    ///
+    /// The material shades opaque white and the vertex colors carry the result
+    /// under `Modulate`, which is the identity against white -- the arrangement
+    /// `draw_vertices` already uses for a caller's mesh. What `VertexGradient`
+    /// adds over `Solid` is that it dithers, which is the whole of why it is a
+    /// material of its own: a long run of nearly equal values bands on an
+    /// eight-bit target whichever stage produced it.
+    ///
+    /// One push per section rather than one for all of them, so each quad's six
+    /// indices address its own four vertices -- which is also what lets
+    /// `BatchDraw::covered` recognize a section, and what makes the batch's own
+    /// merging decide whether they coalesce.
+    fn draw_gradient_sections(
+        &mut self,
+        sections: &[GradientSection],
+        paint: &Paint,
+    ) -> Result<&mut Self> {
+        let to_clip = self.target.projection() * self.transform;
+        for section in sections {
+            let vertices: Vec<Vertex> = section
+                .corners
+                .iter()
+                .zip(&section.colors)
+                .map(|(position, color)| {
+                    let clip = to_clip.project_homogeneous(*position);
+                    Vertex::projected([clip.x, clip.y, clip.z], [0.0, 0.0]).with_color(*color)
+                })
+                .collect();
+            self.batch.push_mesh_tinted(
+                &vertices,
+                // Two triangles sharing the diagonal from corner zero to corner
+                // two, which is the winding `fan_fill` emits for a quad and what
+                // `BatchDraw::covered` matches against.
+                &[0, 1, 2, 0, 2, 3],
+                Material::VertexGradient,
+                paint.color_filter,
+                paint.blend,
+                self.clip,
+                ClipState::content(self.depth),
+                paint.tint_blend,
+                // The color comes from the vertices, not from a coordinate, so
+                // there is nothing for the material to read a position for.
+                false,
+            )?;
         }
         Ok(self)
     }
@@ -6610,6 +6681,130 @@ pub(crate) fn blur_reach(sigma: f32) -> f32 {
 /// Premultiplied, because a vertex color is interpolated across a triangle and
 /// straight color interpolated between differing alphas is wrong at every point
 /// between the ends.
+/// The largest number of sections a vertex-interpolated gradient will emit.
+///
+/// Sections are geometry, so stop count is not bounded here the way the paint
+/// block's four are -- but it is not unbounded either: each section is four
+/// vertices and six indices, and past some count the fragment walk is cheaper
+/// than the vertices. The shader route is always available, so the cap is a
+/// fallback rather than a refusal.
+const MAX_GRADIENT_SECTIONS: usize = 64;
+
+/// Whether this gradient can be drawn by interpolating across vertices instead
+/// of evaluating per fragment, and the sections to draw if so.
+///
+/// Upstream's `CanApplyFastGradient` asks three things, and so does this: the
+/// gradient is axis-aligned, its endpoints land on the edges of the rectangle
+/// being covered, and the geometry is a rectangle at all. When they hold, the
+/// parameter runs exactly zero to one across the shape, so one quad per pair of
+/// stops with the stop colors on its corners is the same picture the fragment
+/// walk produces -- see §19 of `docs/non-parity.md` for the measured agreement.
+///
+/// Axis-aligned means the two endpoints share a coordinate: an x for a vertical
+/// wash, a y for a horizontal one. Landing on the edges is the strict half, and
+/// it is what makes the tile mode irrelevant -- the parameter never leaves
+/// `[0, 1]` inside the shape, so there is nothing outside for clamping,
+/// repeating or decaling to decide.
+///
+/// Returned in rectangle space. The caller transforms the corners, which is
+/// what keeps this independent of the transform: a rotated or skewed rectangle
+/// is still a rectangle in its own space, and the gradient still runs along one
+/// of its axes.
+/// One quad of a vertex-interpolated gradient: the corners in the rectangle's
+/// own space, and the premultiplied color at each.
+///
+/// Wound top-left, top-right, bottom-right, bottom-left, which is what
+/// `draw_gradient_sections` indexes against.
+struct GradientSection {
+    corners: [Vec2; 4],
+    colors: [[f32; 4]; 4],
+}
+
+fn fast_gradient_sections(rect: Rect, shader: &Shader) -> Option<Vec<GradientSection>> {
+    let Shader::LinearGradient {
+        start, end, stops, ..
+    } = shader
+    else {
+        return None;
+    };
+    if stops.len() < 2 || stops.len() > MAX_GRADIENT_SECTIONS + 1 {
+        return None;
+    }
+    // Non-decreasing and inside the unit interval. A stop list that is neither
+    // is the shader route's to interpret, not this one's to guess at.
+    if stops.first()?.offset != 0.0 || stops.last()?.offset != 1.0 {
+        return None;
+    }
+    if stops.windows(2).any(|w| w[1].offset < w[0].offset) {
+        return None;
+    }
+
+    // Which axis varies, and the two coordinates it runs between.
+    let horizontal = start.y == end.y && start.x != end.x;
+    let vertical = start.x == end.x && start.y != end.y;
+    let (from, to) = if horizontal {
+        (start.x, end.x)
+    } else if vertical {
+        (start.y, end.y)
+    } else {
+        return None;
+    };
+
+    // The endpoints are the shape's own edges, in either order. Exact, because
+    // anything else leaves a parameter outside `[0, 1]` somewhere in the shape
+    // and the tile mode starts to matter.
+    let (low, high) = if horizontal {
+        (rect.left, rect.right)
+    } else {
+        (rect.top, rect.bottom)
+    };
+    if (from.min(to), from.max(to)) != (low, high) {
+        return None;
+    }
+
+    let mut sections = Vec::with_capacity(stops.len() - 1);
+    for pair in stops.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        // A zero-width section contributes nothing and would be a degenerate
+        // quad; a repeated offset is how a caller asks for a hard edge, and
+        // skipping it is what produces one.
+        if a.offset == b.offset {
+            continue;
+        }
+        let at = |t: f32| from + (to - from) * t;
+        let (p, q) = (at(a.offset), at(b.offset));
+        let (ca, cb) = (premultiplied(a.color), premultiplied(b.color));
+        // Wound the same way for both orientations -- top-left, top-right,
+        // bottom-right, bottom-left of the section -- so the colors differ
+        // instead of the corners. Which corners sit at the section's start
+        // depends on which axis varies: along x it is the first and last, along
+        // y the first two.
+        let (corners, colors) = if horizontal {
+            (
+                [
+                    Vec2::new(p, rect.top),
+                    Vec2::new(q, rect.top),
+                    Vec2::new(q, rect.bottom),
+                    Vec2::new(p, rect.bottom),
+                ],
+                [ca, cb, cb, ca],
+            )
+        } else {
+            (
+                [
+                    Vec2::new(rect.left, p),
+                    Vec2::new(rect.right, p),
+                    Vec2::new(rect.right, q),
+                    Vec2::new(rect.left, q),
+                ],
+                [ca, ca, cb, cb],
+            )
+        };
+        sections.push(GradientSection { corners, colors });
+    }
+    (!sections.is_empty()).then_some(sections)
+}
+
 fn premultiplied(color: Color) -> [f32; 4] {
     let [r, g, b, a] = color.to_array();
     [r * a, g * a, b * a, a]

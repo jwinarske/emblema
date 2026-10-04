@@ -607,119 +607,356 @@ fn dithering_tracks_a_gradient_better_than_rounding_does() {
     let Some(mut ctx) = context() else { return };
     let extent = Extent2D::new(256, 64);
 
-    let render = |ctx: &mut Context, format: PixelFormat, lo: f32, hi: f32| -> Vec<u8> {
-        let mut canvas = Canvas::new(extent);
-        canvas.clear(Color::BLACK);
-        canvas
-            .draw_rect(
-                Rect::new(0.0, 0.0, 256.0, 64.0),
-                &Paint::default()
-                    .with_shader(Shader::LinearGradient {
-                        start: Vec2::ZERO,
-                        end: Vec2::new(256.0, 0.0),
-                        stops: vec![
-                            GradientStop {
-                                offset: 0.0,
-                                color: Color::srgb(lo, lo, lo, 1.0),
-                            },
-                            GradientStop {
-                                offset: 1.0,
-                                color: Color::srgb(hi, hi, hi, 1.0),
-                            },
-                        ],
-                        tile: TileMode::Clamp,
-                    })
-                    .with_anti_alias(false),
-            )
-            .expect("gradient");
-        let mut surface = ctx.create_surface(extent, format).expect("surface");
-        ctx.draw(&mut surface, &canvas.finish()).expect("draw");
-        let pixels = ctx.read(&mut surface).expect("read");
-        ctx.destroy_surface(surface);
-        pixels
-    };
+    // `interpolated` picks the route. A rectangle recorded as one takes the
+    // vertex-interpolated path, where the rasterizer produces the color and
+    // `Material::dithers` is what gets a dither applied to it at all; the same
+    // rectangle traced as a path takes the fragment walk. Both are measured,
+    // because they dither in different places -- and before the material
+    // carried the decision, the first of them measured dithering *worse* than
+    // rounding, which is what §19 of `docs/non-parity.md` records.
+    let render =
+        |ctx: &mut Context, format: PixelFormat, lo: f32, hi: f32, interpolated: bool| -> Vec<u8> {
+            let mut canvas = Canvas::new(extent);
+            canvas.clear(Color::BLACK);
+            let paint = Paint::default()
+                .with_shader(Shader::LinearGradient {
+                    start: Vec2::ZERO,
+                    end: Vec2::new(256.0, 0.0),
+                    stops: vec![
+                        GradientStop {
+                            offset: 0.0,
+                            color: Color::srgb(lo, lo, lo, 1.0),
+                        },
+                        GradientStop {
+                            offset: 1.0,
+                            color: Color::srgb(hi, hi, hi, 1.0),
+                        },
+                    ],
+                    tile: TileMode::Clamp,
+                })
+                .with_anti_alias(false);
+            if interpolated {
+                canvas
+                    .draw_rect(Rect::new(0.0, 0.0, 256.0, 64.0), &paint)
+                    .expect("gradient");
+            } else {
+                let mut b = PathBuilder::new();
+                b.move_to(Vec2::new(0.0, 0.0))
+                    .line_to(Vec2::new(256.0, 0.0))
+                    .line_to(Vec2::new(256.0, 64.0))
+                    .line_to(Vec2::new(0.0, 64.0))
+                    .close();
+                canvas.draw_path(&b.build(), &paint).expect("gradient");
+            }
+            let mut surface = ctx.create_surface(extent, format).expect("surface");
+            ctx.draw(&mut surface, &canvas.finish()).expect("draw");
+            let pixels = ctx.read(&mut surface).expect("read");
+            ctx.destroy_surface(surface);
+            pixels
+        };
 
     // A slow ramp, which is what bands. Dark and bright both, since a run this
     // shallow rounds into steps wherever it sits.
-    for (band, lo, hi) in [("dark", 0.10f32, 0.16f32), ("bright", 0.60, 0.66)] {
-        let stored = render(&mut ctx, PixelFormat::Rgba8Unorm, lo, hi);
-        // The ramp's own arithmetic, rather than the same ramp rendered into a
-        // half-float target. That was the reference until it was measured
-        // against this one: a half-float's step near six tenths is about five
-        // ten-thousandths, and the dithered error being measured is between one
-        // and three ten-thousandths -- so the reference's own quantization was
-        // the larger part of the number, and the threshold below had been
-        // fitted to whatever that came to on one device. It passed there by one
-        // per cent and failed everywhere else.
-        //
-        // Exact here because the gradient is linear between two stops in the
-        // space the pipeline stores, so the value at a pixel's center is the
-        // interpolation and nothing more. Checked against the half-float render
-        // when this was written: the two agree to within one half-float step,
-        // which is the reference being coarse rather than this being wrong.
-        let ideal = |x: usize| {
-            let t = (x as f64 + 0.5) / extent.width as f64;
-            lo as f64 + (hi - lo) as f64 * t
-        };
+    for (route, interpolated) in [("interpolated", true), ("per fragment", false)] {
+        for (band, lo, hi) in [("dark", 0.10f32, 0.16f32), ("bright", 0.60, 0.66)] {
+            let stored = render(&mut ctx, PixelFormat::Rgba8Unorm, lo, hi, interpolated);
+            // The ramp's own arithmetic, rather than the same ramp rendered into a
+            // half-float target. That was the reference until it was measured
+            // against this one: a half-float's step near six tenths is about five
+            // ten-thousandths, and the dithered error being measured is between one
+            // and three ten-thousandths -- so the reference's own quantization was
+            // the larger part of the number, and the threshold below had been
+            // fitted to whatever that came to on one device. It passed there by one
+            // per cent and failed everywhere else.
+            //
+            // Exact here because the gradient is linear between two stops in the
+            // space the pipeline stores, so the value at a pixel's center is the
+            // interpolation and nothing more. Checked against the half-float render
+            // when this was written: the two agree to within one half-float step,
+            // which is the reference being coarse rather than this being wrong.
+            let ideal = |x: usize| {
+                let t = (x as f64 + 0.5) / extent.width as f64;
+                lo as f64 + (hi - lo) as f64 * t
+            };
 
-        // What the device is out by across the whole band, before asking how
-        // the dither did. Every device here carries some -- a fraction of an
-        // eight-bit step, from the last bits of a gradient's interpolation --
-        // and it is not what dithering is for. Dithering makes a *local* mean
-        // track the ramp; a constant offset is the device, and leaving it in
-        // measured the device instead. It is under a tenth of one level on all
-        // three devices this was run on, and worst on the two real GPUs.
-        let mut bias = 0.0f64;
-        for y in 0..extent.height as usize {
-            for x in 0..extent.width as usize {
-                let at = (y * extent.width as usize + x) * 4;
-                bias += stored[at] as f64 / 255.0 - ideal(x);
-            }
-        }
-        let bias = bias / (extent.width as usize * extent.height as usize) as f64;
-
-        let (mut dithered_error, mut rounded_error, mut blocks) = (0.0f64, 0.0f64, 0usize);
-        for top in (0..extent.height as usize - 7).step_by(8) {
-            for left in (0..extent.width as usize - 7).step_by(8) {
-                let (mut want, mut got, mut rounded) = (0.0f64, 0.0f64, 0.0f64);
-                for y in top..top + 8 {
-                    for x in left..left + 8 {
-                        let at = (y * extent.width as usize + x) * 4;
-                        let value = ideal(x);
-                        want += value;
-                        got += stored[at] as f64 / 255.0;
-                        // The same pixel with no dither: the target's own
-                        // rounding, and nothing else.
-                        rounded += (value * 255.0).round() / 255.0;
-                    }
+            // What the device is out by across the whole band, before asking how
+            // the dither did. Every device here carries some -- a fraction of an
+            // eight-bit step, from the last bits of a gradient's interpolation --
+            // and it is not what dithering is for. Dithering makes a *local* mean
+            // track the ramp; a constant offset is the device, and leaving it in
+            // measured the device instead. It is under a tenth of one level on all
+            // three devices this was run on, and worst on the two real GPUs.
+            let mut bias = 0.0f64;
+            for y in 0..extent.height as usize {
+                for x in 0..extent.width as usize {
+                    let at = (y * extent.width as usize + x) * 4;
+                    bias += stored[at] as f64 / 255.0 - ideal(x);
                 }
-                dithered_error += (got - want - bias * 64.0).abs() / 64.0;
-                rounded_error += (rounded - want).abs() / 64.0;
-                blocks += 1;
             }
-        }
-        let (dithered_error, rounded_error) = (
-            dithered_error / blocks as f64,
-            rounded_error / blocks as f64,
-        );
+            let bias = bias / (extent.width as usize * extent.height as usize) as f64;
 
-        assert!(
-            dithered_error <= rounded_error,
-            "{band}: dithering tracks worse than rounding, \
+            let (mut dithered_error, mut rounded_error, mut blocks) = (0.0f64, 0.0f64, 0usize);
+            for top in (0..extent.height as usize - 7).step_by(8) {
+                for left in (0..extent.width as usize - 7).step_by(8) {
+                    let (mut want, mut got, mut rounded) = (0.0f64, 0.0f64, 0.0f64);
+                    for y in top..top + 8 {
+                        for x in left..left + 8 {
+                            let at = (y * extent.width as usize + x) * 4;
+                            let value = ideal(x);
+                            want += value;
+                            got += stored[at] as f64 / 255.0;
+                            // The same pixel with no dither: the target's own
+                            // rounding, and nothing else.
+                            rounded += (value * 255.0).round() / 255.0;
+                        }
+                    }
+                    dithered_error += (got - want - bias * 64.0).abs() / 64.0;
+                    rounded_error += (rounded - want).abs() / 64.0;
+                    blocks += 1;
+                }
+            }
+            let (dithered_error, rounded_error) = (
+                dithered_error / blocks as f64,
+                rounded_error / blocks as f64,
+            );
+
+            assert!(
+                dithered_error <= rounded_error,
+                "{band}, {route}: dithering tracks worse than rounding, \
              {dithered_error:.6} against {rounded_error:.6}"
-        );
-        // Three, and the margin is stated because the last number here had
-        // none. Measured on three devices with this reference: the dark band
-        // comes out between seven and eight, the bright band between three and
-        // a half and seven and a half -- the two real GPUs near the bottom of
-        // that and the software rasterizer at the top, which is a gradient
-        // interpolated in fewer bits rather than a dither that works less well.
-        assert!(
-            rounded_error / dithered_error > 3.0,
-            "{band}: dithering barely helped, \
+            );
+            // Three, and the margin is stated because the last number here had
+            // none. Measured on three devices with this reference: the dark band
+            // comes out between seven and eight, the bright band between three and
+            // a half and seven and a half -- the two real GPUs near the bottom of
+            // that and the software rasterizer at the top, which is a gradient
+            // interpolated in fewer bits rather than a dither that works less well.
+            assert!(
+                rounded_error / dithered_error > 3.0,
+                "{band}, {route}: dithering barely helped, \
              {dithered_error:.6} against {rounded_error:.6}"
-        );
+            );
+        }
     }
+}
+
+/// The two gradient routes paint the same picture.
+///
+/// A rectangle recorded as one takes the vertex-interpolated path, where the
+/// rasterizer produces the color; the same rectangle traced as a path takes the
+/// fragment walk. Nothing about the result is supposed to differ, and this is
+/// the only check that says so -- the corpus compares the renderer against
+/// itself, and after this change both of its sides take whichever route the
+/// scene's geometry selects.
+///
+/// One level, not zero. Both sides dither, and the dither is a function of the
+/// fragment's position rather than of the route, so the two agree wherever the
+/// interpolation does: what is left is that one side interpolates in the
+/// rasterizer's precision and the other evaluates in the shader's.
+#[test]
+fn the_two_gradient_routes_agree() {
+    let Some(mut ctx) = context() else { return };
+    let stops = || {
+        vec![
+            GradientStop::new(Color::srgb(0.9, 0.1, 0.2, 1.0), 0.0),
+            GradientStop::new(Color::srgb(0.1, 0.3, 0.9, 1.0), 0.45),
+            GradientStop::new(Color::srgb(0.2, 0.8, 0.3, 1.0), 1.0),
+        ]
+    };
+    let shader = || Shader::LinearGradient {
+        start: Vec2::new(0.0, 0.0),
+        end: Vec2::new(128.0, 0.0),
+        stops: stops(),
+        tile: TileMode::Clamp,
+    };
+
+    let mut fast = Canvas::new(SIZE);
+    fast.clear(Color::BLACK);
+    fast.draw_rect(
+        Rect::new(0.0, 0.0, 128.0, 128.0),
+        &Paint::fill(Color::WHITE).with_shader(shader()),
+    )
+    .expect("the interpolated route");
+    let interpolated = fast.finish();
+
+    let mut slow = Canvas::new(SIZE);
+    slow.clear(Color::BLACK);
+    let mut b = PathBuilder::new();
+    b.move_to(Vec2::new(0.0, 0.0))
+        .line_to(Vec2::new(128.0, 0.0))
+        .line_to(Vec2::new(128.0, 128.0))
+        .line_to(Vec2::new(0.0, 128.0))
+        .close();
+    slow.draw_path(&b.build(), &Paint::fill(Color::WHITE).with_shader(shader()))
+        .expect("the per-fragment route");
+    let per_fragment = slow.finish();
+
+    // The two really did take different routes, or the comparison is between a
+    // picture and itself.
+    let materials = |r: &emblema::Recording| -> Vec<emblema_hal::Material> {
+        r.passes
+            .iter()
+            .flat_map(|p| p.batch.draws())
+            .map(|d| d.material.clone())
+            .collect()
+    };
+    assert!(
+        materials(&interpolated)
+            .iter()
+            .any(|m| matches!(m, emblema_hal::Material::VertexGradient)),
+        "the rectangle did not take the interpolated route"
+    );
+    assert!(
+        materials(&per_fragment)
+            .iter()
+            .any(|m| matches!(m, emblema_hal::Material::LinearGradient { .. })),
+        "the traced path did not take the per-fragment route"
+    );
+
+    let a = render_recording(&mut ctx, &interpolated);
+    let b2 = render_recording(&mut ctx, &per_fragment);
+    assert_eq!(a.len(), b2.len());
+    let mut worst = 0i32;
+    for (x, y) in a.iter().zip(b2.iter()) {
+        worst = worst.max((*x as i32 - *y as i32).abs());
+    }
+    assert!(
+        worst <= 1,
+        "the two gradient routes disagree by {worst} levels"
+    );
+}
+
+/// What the interpolated route refuses, and why each refusal matters.
+#[test]
+fn the_interpolated_route_refuses_what_it_cannot_draw() {
+    let axis_aligned = |start: Vec2, end: Vec2, stops: Vec<GradientStop>| Shader::LinearGradient {
+        start,
+        end,
+        stops,
+        tile: TileMode::Clamp,
+    };
+    let two = || {
+        vec![
+            GradientStop::new(Color::srgb(1.0, 0.0, 0.0, 1.0), 0.0),
+            GradientStop::new(Color::srgb(0.0, 0.0, 1.0, 1.0), 1.0),
+        ]
+    };
+    let rect = Rect::new(0.0, 0.0, 128.0, 128.0);
+    let took_it = |shader: Shader, build: &dyn Fn(&mut Canvas, &Paint)| -> bool {
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        let paint = Paint::fill(Color::WHITE).with_shader(shader);
+        build(&mut canvas, &paint);
+        canvas
+            .finish()
+            .passes
+            .iter()
+            .flat_map(|p| p.batch.draws())
+            .any(|d| matches!(d.material, emblema_hal::Material::VertexGradient))
+    };
+    let as_rect = |canvas: &mut Canvas, paint: &Paint| {
+        canvas.draw_rect(rect, paint).expect("rect");
+    };
+
+    assert!(
+        took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(128.0, 0.0), two()),
+            &as_rect
+        ),
+        "a horizontal wash on the rectangle's edges is the case this exists for"
+    );
+    assert!(
+        took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(0.0, 128.0), two()),
+            &as_rect
+        ),
+        "upstream's predicate takes a vertical wash as readily as a horizontal one"
+    );
+    // Reversed endpoints are the same gradient drawn the other way.
+    assert!(
+        took_it(
+            axis_aligned(Vec2::new(128.0, 0.0), Vec2::ZERO, two()),
+            &as_rect
+        ),
+        "the endpoints may arrive in either order"
+    );
+
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(128.0, 128.0), two()),
+            &as_rect
+        ),
+        "a diagonal gradient is not axis-aligned and the sections would be wrong"
+    );
+    // The strict half of upstream's predicate. Short of the edge the parameter
+    // leaves `[0, 1]` inside the shape, and what happens there is the tile
+    // mode's to say -- which sections cannot express.
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::new(16.0, 0.0), Vec2::new(112.0, 0.0), two()),
+            &as_rect
+        ),
+        "endpoints inside the rectangle leave a region no section covers"
+    );
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(256.0, 0.0), two()),
+            &as_rect
+        ),
+        "endpoints past the rectangle put the whole ramp in part of the shape"
+    );
+
+    // A path that traces the rectangle has not said its edges are edges.
+    let as_path = |canvas: &mut Canvas, paint: &Paint| {
+        let mut b = PathBuilder::new();
+        b.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(128.0, 0.0))
+            .line_to(Vec2::new(128.0, 128.0))
+            .line_to(Vec2::new(0.0, 128.0))
+            .close();
+        canvas.draw_path(&b.build(), paint).expect("path");
+    };
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(128.0, 0.0), two()),
+            &as_path
+        ),
+        "a traced rectangle is not a recorded one"
+    );
+
+    // A stroke's geometry is not the rectangle.
+    let stroked = |canvas: &mut Canvas, paint: &Paint| {
+        canvas
+            .draw_rect(
+                rect,
+                &paint
+                    .clone()
+                    .with_style(Style::Stroke(StrokeStyle::new(8.0))),
+            )
+            .expect("stroke");
+    };
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(128.0, 0.0), two()),
+            &stroked
+        ),
+        "a stroked rectangle covers its border, not its area"
+    );
+
+    // A mask blur has to take its own route, which is the defect that killed
+    // the first attempt at this path -- it drew masked shapes sharp.
+    let blurred = |canvas: &mut Canvas, paint: &Paint| {
+        canvas
+            .draw_rect(rect, &paint.clone().with_mask_blur(4.0))
+            .expect("mask blur");
+    };
+    assert!(
+        !took_it(
+            axis_aligned(Vec2::ZERO, Vec2::new(128.0, 0.0), two()),
+            &blurred
+        ),
+        "a mask blur must reach the masked route, not this one"
+    );
 }
 
 /// What does not get dithered: a float target, and anything but a gradient.
@@ -12251,9 +12488,14 @@ fn a_recording_drawn_into_another_keeps_its_own_layers_and_ramps() {
             Rect::new(8.0, 24.0, 56.0, 40.0),
             &Paint::fill(Color::srgb(1.0, 1.0, 1.0, 1.0))
                 .with_anti_alias(false)
+                // Diagonal on purpose. An axis-aligned gradient whose
+                // endpoints land on this rectangle's edges takes the
+                // vertex-interpolated route, which bakes no ramp -- and a ramp
+                // is what this test needs in order to check the renumbering.
+                // The subject here is the index arithmetic, not the route.
                 .with_shader(Shader::LinearGradient {
-                    start: Vec2::new(8.0, 0.0),
-                    end: Vec2::new(56.0, 0.0),
+                    start: Vec2::new(8.0, 24.0),
+                    end: Vec2::new(56.0, 40.0),
                     stops: ramped_stops(0),
                     tile: TileMode::Clamp,
                 }),
@@ -12282,9 +12524,12 @@ fn a_recording_drawn_into_another_keeps_its_own_layers_and_ramps() {
             Rect::new(0.0, 108.0, 128.0, 128.0),
             &Paint::fill(Color::linear(1.0, 1.0, 1.0, 1.0))
                 .with_anti_alias(false)
+                // Diagonal for the same reason as the picture's own gradient
+                // below: this test needs a ramp on each side, and the
+                // vertex-interpolated route bakes none.
                 .with_shader(Shader::LinearGradient {
-                    start: Vec2::new(0.0, 0.0),
-                    end: Vec2::new(128.0, 0.0),
+                    start: Vec2::new(0.0, 108.0),
+                    end: Vec2::new(128.0, 128.0),
                     stops: ramped_stops(1),
                     tile: TileMode::Clamp,
                 }),

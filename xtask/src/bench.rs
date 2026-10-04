@@ -1294,15 +1294,19 @@ mod tests {
                 .sum::<usize>()
                 / 4
         };
-        assert_eq!(rects(frames::Stacked::Wash), 1, "the wash alone");
+        // The wash is four quads, not one: it is an axis-aligned gradient on a
+        // rectangle, so it takes the vertex-interpolated route and arrives as
+        // one section per pair of its five stops. The count is still a property
+        // of the scene rather than of culling -- the stops decide it.
+        assert_eq!(rects(frames::Stacked::Wash), 4, "the wash's four sections");
         assert_eq!(
             rects(frames::Stacked::Panels),
-            4,
-            "bar, sidebar, panel over it"
+            4 + 3,
+            "the wash's sections, then bar, sidebar and panel over them"
         );
         assert_eq!(
             rects(frames::Stacked::All),
-            4 + frames::ROWS,
+            4 + 3 + frames::ROWS,
             "one rectangle per list row on top"
         );
 
@@ -1310,6 +1314,13 @@ mod tests {
         // rectangles over a full-screen gradient is a great deal of overlap, and this is
         // the shape of frame culling turns into many small draws. `docs/on-a-board.md`
         // has what that costs and what it saves.
+        //
+        // Unchanged by the wash taking the vertex-interpolated route, and that
+        // is the thing to check rather than a number that moved: its sections
+        // merge into one draw, and `BatchDraw::splits_safely` admits that draw
+        // because the vertex alphas it carries are opaque -- so culling confines
+        // it exactly as it confined the per-fragment wash. Were it refused, this
+        // would read 127 and the wash would paint every pixel the panels cover.
         let draws = |stage| frames::stacked(stage).draw_count();
         assert_eq!(draws(frames::Stacked::Wash), 1, "nothing to cull against");
         assert_eq!(draws(frames::Stacked::Panels), 15);
