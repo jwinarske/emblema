@@ -7,7 +7,14 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
-## Unreleased
+## 0.2.0 — 2026-10-05
+
+The first release under the `emblema` names. `impeller-rs 0.1.0` and its thirteen
+`impeller-*` crates stay on the registry as the record of what shipped on
+2026-09-21; this is a hundred and two merges later and the names it publishes
+under are new, so the number starts again rather than continuing theirs.
+
+### The rename, and the filters
 
 **The project is `emblema`.** It was `impeller-rs`, a name that read as a port of
 upstream Impeller and set the expectation this renderer is measured against
@@ -192,6 +199,87 @@ Additive, so nothing a caller has written changes. `Capability` is not
 `#[non_exhaustive]`: the backends are separate crates and a wildcard arm would let
 one honor a new variant while the other ignored it, which means adding a variant
 later is a breaking change. That is written down beside the type.
+
+### What a frame costs
+
+**A draw that a later opaque draw covers is no longer drawn.** `Batch` confines
+each draw to the pixels nothing above it replaces, by scissor rather than by
+reordering — depth was measured first and ruled out, which
+`docs/non-parity.md` 21 records along with why. On a Pi 5, three runs a side:
+`stacked interface` goes from 16.074 ms to **5.198** under Vulkan and 17.304 to
+**6.134** on GLES; `stacked, plus panels` from 13.686 to **4.478** and 14.977 to
+**5.195**. Two thirds of the frame, sixty-two frames a second to a hundred and
+ninety-three. `full frame, mixed content` is the control and does not move, its
+cards being rounded and so not occluders. Nothing about the API changes and no
+picture changes; `culling_hidden_pixels_changes_no_pixel` is what says so, and
+`Canvas::keep_hidden_draws` turns it off for that comparison.
+
+**A small simple contour is triangulated by ear clipping rather than by a
+sweep.** Verified simple first — a quadratic edge-pair test — and sent to `lyon`
+when it is not, so fill rules are untouched. The bench's twelve-point concave
+recording goes 0.175 ms to 0.118, a third off. The cap is sixteen points, taken
+from where proving a contour simple overtakes what the sweep costs on this
+project's reference A76 rather than on a workstation, which puts it at twenty
+there and thirty on x86-64.
+
+**A rectangle's fill is tessellated rather than evaluated from a distance
+field.** Upstream's `FillRectGeometry` emits a four-vertex strip for the same
+reason, and the measurement is the one that decided it: multisampling a rect
+fill costs 1.23x on V3D and 2.62x on PowerVR, not the four an analytic route was
+avoiding. Strokes stay analytic.
+
+**An axis-aligned gradient on a rectangle is interpolated across vertices.**
+Upstream tries the same path before its uniform walk. One quad per pair of stops
+carries the stop colors and the rasterizer interpolates, so no fragment
+evaluates a gradient and a five-stop wash bakes no 256-texel ramp. It applies
+where the endpoints are the rectangle's own edges, the stops share one alpha, and
+the tile mode is `Clamp` — the last two because the two routes genuinely differ
+otherwise, by 58 and 56 of 255 respectively, both measured. Elsewhere the
+fragment walk runs as before.
+
+### Fixed
+
+**A translucent vertex-colored mesh was treated as an occluder, and the picture
+was wrong by 128 of 255.** `draw_vertices` builds an opaque `Material::Solid`
+under `Modulate` with per-vertex colors that multiply it, which the occluder
+predicate admitted on the reasoning that a solid fill carries no per-vertex
+color. An indexed quad of translucent vertices culled the draw beneath it. The
+predicate reads the vertex colors now and refuses any that is not white.
+
+**Dithering is a property of the material rather than of the shader's reading of
+it.** It was decided in the fragment stage by testing the material kind against
+the four gradient kinds, which made the route and not the intent the thing being
+asked — and a second route to a gradient under another kind stopped dithering
+without saying so. No picture changes.
+
+### What the suite checks
+
+The corpus is pinned as images now (`tests/golden/`), which is the first
+comparison here against something other than another render of this renderer.
+Generated scenes are executed on a device rather than stopping at the recording,
+and four comparisons that were written by hand for one change each are
+properties over generated input: that culling changes no pixel, that the two
+gradient routes agree, that the two backends agree, and that a scene renders the
+same after other frames have run. Flattening's tolerance is asserted as a bound
+for the first time, in device space as well as path space.
+
+### Known, and recorded rather than worked around
+
+`cargo xtask gate --software` is clean again on a machine whose lavapipe reports
+advanced blending. Two driver defects are why it needs probes to stay that way:
+a group composited under an advanced blend writes nothing on lavapipe, which is
+reduced in bare `ash` and filed as mesa/mesa work item 16243, and a multisampled
+layer holding a mask-blurred advanced-blend draw renders differently on GLES
+depending on what preceded it, which is reproduced and open.
+`docs/on-a-board.md` has both. A Vivante GC7000UL segfaults in its own SPIR-V
+front end on one of this renderer's fragment shaders, reduced to a 192-word
+module with no project code in it.
+
+### Also
+
+`cargo xtask release` prints the order the fourteen crates publish in and what
+each step needs, with tests holding the two ways a manifest can make a crate
+unpublishable while the workspace still builds.
 
 ## 0.1.0 — 2026-09-21
 

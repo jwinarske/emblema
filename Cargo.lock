@@ -187,7 +187,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "emblema"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema",
  "emblema-core",
@@ -206,14 +206,14 @@ dependencies = [
 
 [[package]]
 name = "emblema-capi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-core",
 ]
 
 [[package]]
 name = "emblema-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-geometry",
  "emblema-hal",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-entity"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-geometry",
  "emblema-hal",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-geometry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "earcutr",
  "glam",
@@ -244,14 +244,14 @@ dependencies = [
 
 [[package]]
 name = "emblema-hal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "emblema-hal-gles"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-hal",
  "emblema-shaders",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-hal-vulkan"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ash",
  "emblema-hal",
@@ -274,7 +274,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-present"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-core",
  "emblema-hal",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-present-drm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "drm",
  "emblema-core",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-present-egl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-hal",
  "emblema-hal-gles",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-present-vk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ash",
  "emblema-core",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-renderer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-geometry",
  "emblema-hal",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-shaders"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-hal",
  "naga",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-core",
  "emblema-geometry",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "emblema-text"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "equivalent"
@@ -1275,7 +1275,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emblema-core",
  "emblema-hal",

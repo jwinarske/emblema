@@ -6,7 +6,7 @@ members = ["crates/*", "xtask"]
 exclude = ["playground"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # Checked rather than asserted: the `msrv` job in `.github/workflows/ci.yml`
 # builds the workspace on exactly this toolchain. It was 1.82 and untrue --
@@ -112,20 +112,20 @@ cosmic-text = "0.12"
 usvg = "0.43"
 
 # --- internal ---
-emblema-core = { path = "crates/emblema-core", version = "0.1.0" }
-emblema-entity = { path = "crates/emblema-entity", version = "0.1.0" }
-emblema-geometry = { path = "crates/emblema-geometry", version = "0.1.0" }
-emblema-hal = { path = "crates/emblema-hal", version = "0.1.0" }
-emblema-hal-gles = { path = "crates/emblema-hal-gles", version = "0.1.0" }
-emblema-hal-vulkan = { path = "crates/emblema-hal-vulkan", version = "0.1.0" }
-emblema-present = { path = "crates/emblema-present", version = "0.1.0" }
-emblema-present-drm = { path = "crates/emblema-present-drm", version = "0.1.0" }
-emblema-present-egl = { path = "crates/emblema-present-egl", version = "0.1.0" }
-emblema-present-vk = { path = "crates/emblema-present-vk", version = "0.1.0" }
-emblema-renderer = { path = "crates/emblema-renderer", version = "0.1.0" }
-emblema-shaders = { path = "crates/emblema-shaders", version = "0.1.0" }
-emblema-testkit = { path = "crates/emblema-testkit", version = "0.1.0" }
-emblema-text = { path = "crates/emblema-text", version = "0.1.0" }
+emblema-core = { path = "crates/emblema-core", version = "0.2.0" }
+emblema-entity = { path = "crates/emblema-entity", version = "0.2.0" }
+emblema-geometry = { path = "crates/emblema-geometry", version = "0.2.0" }
+emblema-hal = { path = "crates/emblema-hal", version = "0.2.0" }
+emblema-hal-gles = { path = "crates/emblema-hal-gles", version = "0.2.0" }
+emblema-hal-vulkan = { path = "crates/emblema-hal-vulkan", version = "0.2.0" }
+emblema-present = { path = "crates/emblema-present", version = "0.2.0" }
+emblema-present-drm = { path = "crates/emblema-present-drm", version = "0.2.0" }
+emblema-present-egl = { path = "crates/emblema-present-egl", version = "0.2.0" }
+emblema-present-vk = { path = "crates/emblema-present-vk", version = "0.2.0" }
+emblema-renderer = { path = "crates/emblema-renderer", version = "0.2.0" }
+emblema-shaders = { path = "crates/emblema-shaders", version = "0.2.0" }
+emblema-testkit = { path = "crates/emblema-testkit", version = "0.2.0" }
+emblema-text = { path = "crates/emblema-text", version = "0.2.0" }
 
 [profile.release]
 lto = "thin"

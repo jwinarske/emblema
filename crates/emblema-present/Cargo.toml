@@ -28,7 +28,7 @@ emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
 # like this when it packages, so this crate publishes even though
 # `emblema-testkit` never will. Written as `{ workspace = true }` -- which is
 # how every other dependency here is written -- it would inherit a version and
-# ask the registry for `emblema-testkit 0.1.0`, which does not exist.
+# ask the registry for `emblema-testkit 0.2.0`, which does not exist.
 # `xtask/src/release.rs` has the measurement and the test that holds this.
 emblema-testkit = { path = "../emblema-testkit" }
 emblema-renderer = { path = "../emblema-renderer" }

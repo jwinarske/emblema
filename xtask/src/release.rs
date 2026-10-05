@@ -19,19 +19,19 @@
 //!   it is a trap because the tidy spelling is the broken one. Every other
 //!   dependency in this workspace is `{ workspace = true }`, and the workspace
 //!   table gives `emblema-testkit` a version -- so writing it that way asks the
-//!   registry for `emblema-testkit 0.1.0`, which does not exist and will not.
+//!   registry for `emblema-testkit 0.2.0`, which does not exist and will not.
 //!   `emblema-present` spells it `{ path = "../emblema-testkit" }` instead,
 //!   with no version, and cargo strips a dev-dependency like that when it
 //!   packages. Measured: adding the version form to `emblema-geometry` fails
 //!   `cargo package` with "failed to select a version for the requirement
-//!   `emblema-testkit = ^0.1.0`"; the path form packages 19 files.
+//!   `emblema-testkit = ^0.2.0`"; the path form packages 19 files.
 //!
 //! # What this does not do
 //!
 //! It does not publish, and it does not run `cargo package`. Packaging a crate
 //! whose workspace dependencies are not yet on the registry at this version
 //! fails by construction -- the names are reserved at 0.0.1 and the tree is at
-//! 0.1.0 -- so the check would report a problem that publishing in order is
+//! 0.2.0 -- so the check would report a problem that publishing in order is
 //! what fixes. Verify the leaf, publish in order, and let each step make the
 //! next one resolvable.
 
@@ -232,8 +232,48 @@ pub fn report() -> String {
             ));
         }
     }
+    out.push_str(CHECKLIST);
     out
 }
+
+/// The steps either side of the publishing, and the three that are easy to
+/// forget because nothing fails when they are missed.
+///
+/// Here rather than in a document because this is the command someone runs when
+/// they are about to do it, and a checklist in a file is a checklist nobody
+/// reads at the moment it matters.
+const CHECKLIST: &str = "
+Before:
+  - `cargo xtask gate` and `cargo xtask gate --software`, both green.
+  - CI green at this commit. The gate prints its last answer; a stale line
+    there is not a pass.
+  - The CHANGELOG's top entry carries today's date. This file's own rule is
+    that a date is the day the version reached crates.io, so a release that
+    slips needs the date moved.
+  - `cargo package -p emblema-geometry --no-verify`, which is the one crate
+    that can be packaged before anything is up. The rest cannot: their
+    workspace dependencies are not on the registry at this version yet, and
+    publishing in order is what fixes that rather than a check.
+
+After each `cargo publish`:
+  - Read the index, not the transcript: `https://index.crates.io/<a>/<b>/<name>`
+    lists a `vers` per line and is what says a crate is live. `cargo publish`'s
+    own index timeout is cosmetic. A 404 body is not JSON, so guard the parse.
+  - A new *version* of an existing crate uses a loose rate limit; only a
+    brand-new crate spends a `PublishNew` token, and all fourteen names are
+    already taken, so the clock should not come into it.
+
+After all fourteen:
+  - Flip the README's Releases section, which says the release is prepared and
+    will not resolve. It is written to be true before the push, not after.
+  - Read each docs.rs build at
+    `https://docs.rs/crate/<name>/<version>/builds/<id>`. It builds on nightly,
+    whose lints run ahead of stable cargo's, so a clean local `cargo doc` is
+    not an answer. `status.json` reports `doc_status: false` while a build is
+    still running, so waiting for the field to appear reports a failure that
+    did not happen -- wait for the page.
+  - Tag the commit.
+";
 
 #[cfg(test)]
 mod tests {

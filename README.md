@@ -283,21 +283,30 @@ defect is visible at all.
 
 ## Releases
 
-`emblema 0.1.0` is on crates.io, as are the thirteen crates it is assembled
-from.
+**No release under this name has been published yet.** `emblema` and the
+thirteen crates it is assembled from hold `0.0.0` and `0.0.1` on crates.io, and
+both contain **no API**: they reserved the names ahead of the first real release
+under them. Nothing should depend on either.
+
+The prepared release is `0.2.0`, and until it is pushed the dependency below
+will not resolve. `cargo xtask release` prints the order it goes up in and what
+each step needs.
 
 ```toml
 [dependencies]
-emblema = "0.1.0"
+emblema = "0.2.0"
 ```
 
-Its default features are Vulkan and its swapchain, but docs.rs builds it with
-`all-features`, so the GLES backend and both presentation paths are documented
+What *is* on the registry is the old name: `impeller-rs 0.1.0` and thirteen
+`impeller-*` crates, published 2026-09-21 before the rename. They are a snapshot
+of this project from that day and will not move again; crates.io does not delete,
+so they stay as a record. A hundred and two merges have landed since.
+
+`emblema`'s default features are Vulkan and its swapchain, but docs.rs builds it
+with `all-features`, so the GLES backend and both presentation paths are documented
 there whatever a caller enables. The links in this file are absolute for a
 related reason -- a relative one resolves here and 404s on a crate page.
 
-`emblema 0.0.0` also exists and contains **no API**: it reserved the name ahead
-of the first release under it. Nothing should depend on it.
 
 Fourteen of this workspace's seventeen crates publish; `emblema-capi`,
 `emblema-testkit` and `xtask` refuse, each saying why in its own manifest
