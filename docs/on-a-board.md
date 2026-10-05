@@ -1373,15 +1373,39 @@ upstream's shape.
 
 It also bounds `non-parity.md` 19, which has since landed. A vertex-interpolated path
 does no per-fragment gradient work at all, so the most it can recover is the evaluation
-share: about 1.9 ms of a 13.9 ms frame under Vulkan, 2.9 of 14.9 under GLES. That is
-worth having -- fourteen per cent of a frame is not nothing -- but it is not the three
-quarters the ground's share invites you to read, and nothing about the gradient path
-touches the fill underneath it.
+share: about 1.9 ms of a 13.9 ms frame under Vulkan, 2.9 of 14.9 under GLES.
 
-**What the path actually recovers here has not been measured.** It is built and its
-picture is checked, and the bench's `stacked, wash` row is the one that would show it,
-but no run on this board has been taken since. The figure above is the ceiling, not the
-result.
+**Measured 2026-10-05, and the bound above does not hold.** One binary, the route
+turned off by an environment variable so both sides are the same code and the same
+layout, three runs a side on a Pi 5 with all four cores pinned to `performance`,
+nothing throttled, load zero, `--skip llvmpipe`, from `/tmp`:
+
+| row | Vulkan, route off → on | GLES, route off → on |
+|---|---|---|
+| `stacked, wash` | 9.804 → **4.519** ms, −54% | 11.107 → **4.866**, −56% |
+| `stacked, plus panels` | 4.057 → **3.667**, −9.6% | 5.110 → **4.634**, −9.3% |
+| `stacked interface` | 4.770 → **4.377**, −8.2% | 5.995 → **5.525**, −7.8% |
+| `full frame, mixed content` | 13.194 → 13.196, -- | 14.065 → 14.063, -- |
+
+Medians of three; the spread within a side is at most 0.013 ms against gaps of 0.4 to
+6.2, so the clusters do not come close to overlapping and the bimodality this board
+shows on other work does not arise. `full frame` is the control: its wash is diagonal,
+so it never takes the route, and it does not move -- which is what says the switch
+changes only what it claims to.
+
+**Two things to read out of it, and the first contradicts the paragraph above.** The
+wash alone saves 5.285 ms under Vulkan where the ceiling said at most 1.930, so the
+evaluation-share argument underestimates what this route removes. Why is not settled:
+the 1.930 figure was taken on a differently shaped frame, and with the route the
+material shades as a solid and takes the cheapest branch in `shade()` rather than the
+gradient chain, so more than the fetch goes away. That is a candidate and not a
+measurement, and it is left as one.
+
+The second is that **an interface frame saves an eighth of what its wash does** --
+0.39 ms against 5.29. Occlusion culling is why: the bar, the sidebar and the panel
+cover most of the wash, and culling already removed those fragments, so the gradient
+work the route would have saved is work that was no longer being done. The two
+optimizations overlap, and the order they landed in is why this looks small.
 
 **These numbers are not gated, which is a weakness and is stated rather than
 hidden.** They came from a throwaway probe -- three extra rows built from the
