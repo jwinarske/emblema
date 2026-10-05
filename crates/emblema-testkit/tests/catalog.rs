@@ -209,26 +209,22 @@ const ADVANCED_BLEND_DIVERGENCES: &[&str] = &[
 /// `[186, 143, 104]` and `[114, 74, 61]` where the formula says `[124, 80, 52]`,
 /// `[186, 143, 104]` and `[115, 74, 62]`.
 ///
-/// **Whether the fault is this renderer's or lavapipe's is undetermined**, and
-/// no device here can settle it. Vulkan advanced blending is reported by exactly
-/// one of them, and it is the one that is wrong:
+/// **It is lavapipe's, it is diagnosed, and it is filed.**
+/// `docs/on-a-board.md`'s section "A group's advanced blend, when the group does
+/// not fill the frame" has the whole of it, from a reproduction written in bare
+/// `ash` with no renderer in it, and reported as
+/// `gitlab.freedesktop.org/mesa/mesa/-/work_items/16243`: the advanced blend
+/// samples the source **once for the whole primitive** rather than per fragment,
+/// and blends every fragment against that one color and alpha. A layer is
+/// cleared to transparent black, so a group whose contents do not reach its edge
+/// has a transparent texel where the driver looks and the composite contributes
+/// nothing -- which is exactly what this probe detects.
 ///
-/// | device | Vulkan advanced blend |
-/// |---|---|
-/// | the workstation's GPU, which `Auto` picks | no |
-/// | lavapipe, Mesa 26.2.3 | **yes** |
-/// | lavapipe, Mesa 25.2.8, which CI has | no |
-/// | Adreno 640 on the SA8155P | no |
-/// | Vivante GC7000UL on the i.MX8MP | no |
-///
-/// So a second opinion needs a bare-API Vulkan reproduction rather than another
-/// board, which `docs/architecture.md`'s rule asks for before a driver is named
-/// and which has not been written. What is certain is the asymmetry: a solid
-/// source under an advanced blend agrees between the backends to a level, and a
-/// non-solid one does not -- a group's image writes nothing, an image or atlas
-/// source writes something else. `blend_modes.rs` compares every one of the
-/// twenty-nine modes against its equation on this same Vulkan device and passes,
-/// so what fails is not the arithmetic of a mode.
+/// Read that section before touching this. Nothing here is undetermined, and a
+/// second opinion from another board is not what is missing: the Adreno 640 on
+/// the SA8155P and the Vivante GC7000UL on the i.MX8MP both report no advanced
+/// blending at all, so lavapipe is the only Vulkan device that reaches this path
+/// and the comparison cannot be held on it.
 fn composites_a_group_under_an_advanced_blend(ctx: &mut Validated) -> bool {
     let ground = |items: Vec<Node>| {
         let mut all = vec![Node::Draw(Box::new(Item::fill(

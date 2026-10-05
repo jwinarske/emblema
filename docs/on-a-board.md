@@ -317,11 +317,25 @@ of the work.
 ## A group's advanced blend, when the group does not fill the frame
 
 `cargo xtask gate --software` is the command that runs what CI runs, and on this
-machine it is not clean. Fourteen `blend/blend-mode-src-alpha-*` plates -- a
-group composited at half alpha with an advanced mode -- come out up to ninety
+machine it used to be unclean. Fourteen `blend/blend-mode-src-alpha-*` plates --
+a group composited at half alpha with an advanced mode -- came out up to ninety
 levels apart between llvmpipe's Vulkan and its GLES. CI does not see it: that
 machine has llvmpipe from LLVM 20.1.2 and this one has 22.1.8, and the same
 plates agree there.
+
+**The lane is clean again as of 2026-10-05**, and the count had grown to
+nineteen plates at up to 211 levels by then -- the image and atlas sources and
+the clipped case joined the group family as Mesa moved. `catalog.rs` probes for
+the defect rather than asserting through it: a group whose contents do not reach
+its edge, composited under `Multiply`, has to match the same circle drawn
+directly, and where it does not the twenty affected plates are skipped and named
+in the gaps census. A device whose advanced blending is sound still compares all
+four hundred and thirty-eight.
+
+That probe cost a long re-derivation that this section would have saved, which is
+worth saying here because this is the section that would have saved it: the
+answer below was already written, already reduced to bare `ash`, and already
+filed. Read it before investigating an advanced-blend disagreement.
 
 Narrowed by varying one thing at a time, and the answer is not what any of the
 obvious guesses said. Not the gradient behind the group, not whether the layer
