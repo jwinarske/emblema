@@ -6701,10 +6701,23 @@ const MAX_GRADIENT_SECTIONS: usize = 64;
 /// walk produces -- see §19 of `docs/non-parity.md` for the measured agreement.
 ///
 /// Axis-aligned means the two endpoints share a coordinate: an x for a vertical
-/// wash, a y for a horizontal one. Landing on the edges is the strict half, and
-/// it is what makes the tile mode irrelevant -- the parameter never leaves
-/// `[0, 1]` inside the shape, so there is nothing outside for clamping,
-/// repeating or decaling to decide.
+/// wash, a y for a horizontal one. Landing on the edges is the strict half.
+///
+/// **`Clamp` only, and the reasoning that admitted every tile mode was wrong.**
+/// It said that endpoints on the edges make the mode irrelevant, the parameter
+/// never leaving `[0, 1]` inside the shape. That holds only while the edges fall
+/// between pixels. Give the rectangle a fractional edge and the rasterizer
+/// covers pixels whose centers lie just outside the gradient's span, so the
+/// fragment walk's parameter does leave the interval -- and `Repeat` wraps it to
+/// the far end, which is a whole stop's difference rather than a rounding one.
+/// Sections cannot wrap: their vertices carry the end colors and interpolation
+/// stays between them.
+///
+/// Measured by `gradient_routes.rs` on lavapipe at Mesa 26.2.3: a vertical
+/// gradient on a rectangle whose edges sit at `y = 38.5003` and `62.5003`,
+/// tiling by `Repeat`, differs between the two routes by **56 of 255** -- the
+/// full range of the only channel its stops move. `Clamp` is what the two agree
+/// on, because clamping is what interpolation already does.
 ///
 /// Returned in rectangle space. The caller transforms the corners, which is
 /// what keeps this independent of the transform: a rotated or skewed rectangle
@@ -6722,11 +6735,18 @@ struct GradientSection {
 
 fn fast_gradient_sections(rect: Rect, shader: &Shader) -> Option<Vec<GradientSection>> {
     let Shader::LinearGradient {
-        start, end, stops, ..
+        start,
+        end,
+        stops,
+        tile,
     } = shader
     else {
         return None;
     };
+    // See the note above: only clamping agrees with what sections do at an edge.
+    if *tile != TileMode::Clamp {
+        return None;
+    }
     if stops.len() < 2 || stops.len() > MAX_GRADIENT_SECTIONS + 1 {
         return None;
     }
