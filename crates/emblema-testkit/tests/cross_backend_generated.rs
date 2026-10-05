@@ -93,9 +93,25 @@ fn advanced_blending_everywhere() -> bool {
 /// Modes that reach different machinery on GLES: Porter-Duff ones are fixed
 /// function, the advanced ones go through `GL_KHR_blend_equation_advanced` with
 /// a blend-qualified copy of the fragment stage and a barrier.
-fn blend() -> BoxedStrategy<BlendMode> {
+fn blend(aliased: bool, solid_only: bool) -> BoxedStrategy<BlendMode> {
     let porter_duff = prop_oneof![3 => Just(BlendMode::SrcOver), 1 => Just(BlendMode::Src)];
-    if !advanced_blending_everywhere() {
+    // Advanced modes only where a device here can be held to them, which is a
+    // narrower set than the capability bit says and is measured rather than
+    // assumed. Two restrictions, both recorded in `catalog.rs`:
+    //
+    // - **Single-sampled only.** An advanced blend under multisampling draws
+    //   nothing at all on this machine's Vulkan software rasterizer, which is
+    //   why the catalog's blend plates are `single_sampled_plate`.
+    // - **Over a flat solid only**, which `solid_only` carries. An advanced
+    //   blend whose source is a gradient, an image, an atlas sprite or a group's
+    //   image diverges between the two backends here -- by 232 of 255 on a
+    //   diagonal gradient under `Difference`, and `catalog.rs`'s
+    //   `ADVANCED_BLEND_DIVERGENCES` and its group probe hold the rest of the
+    //   family. A solid source agrees to a level.
+    //
+    // Generating either combination would be generating a case no device here
+    // can be held to, which is a reject or a failure rather than coverage.
+    if !aliased || !solid_only || !advanced_blending_everywhere() {
         return porter_duff.boxed();
     }
     prop_oneof![
@@ -165,9 +181,15 @@ fn fill_for(min: [f32; 2], max: [f32; 2]) -> impl Strategy<Value = Fill> {
 }
 
 /// A quad as a mesh, indexed or not, colored or not.
-fn mesh() -> impl Strategy<Value = MeshSpec> {
-    (rect(), color(), any::<bool>(), any::<bool>(), blend()).prop_map(
-        |((min, max), color, indexed, colored, blend)| {
+fn mesh(aliased: bool) -> impl Strategy<Value = MeshSpec> {
+    (
+        rect(),
+        color(),
+        any::<bool>(),
+        any::<bool>(),
+        blend(aliased, false),
+    )
+        .prop_map(|((min, max), color, indexed, colored, blend)| {
             let corners = [
                 [min[0], min[1]],
                 [max[0], min[1]],
@@ -202,35 +224,45 @@ fn mesh() -> impl Strategy<Value = MeshSpec> {
                 image_filter: emblema_core::ImageFilter::None,
                 mask_blur: emblema_testkit::scene::MaskBlur::default(),
             }
-        },
-    )
+        })
 }
 
-fn node() -> impl Strategy<Value = Node> {
+/// A shape, a fill, and a blend the fill is allowed to carry.
+///
+/// The fill is drawn first because it decides which blends may go with it: see
+/// `blend`, where an advanced mode is admitted only over a flat solid.
+fn shape_fill_blend(
+    aliased: bool,
+) -> impl Strategy<Value = (([f32; 2], [f32; 2]), Fill, BlendMode)> {
+    rect()
+        .prop_flat_map(move |(min, max)| (Just((min, max)), fill_for(min, max)))
+        .prop_flat_map(move |((min, max), fill)| {
+            let solid = matches!(fill, Fill::Solid(_));
+            (Just((min, max)), Just(fill), blend(aliased, solid))
+        })
+}
+
+fn node(aliased: bool) -> impl Strategy<Value = Node> {
     prop_oneof![
-        3 => rect()
-            .prop_flat_map(|(min, max)| (Just((min, max)), fill_for(min, max), blend()))
-            .prop_map(|((min, max), fill, blend)| {
-                Node::Draw(Box::new(
-                    Item::filled(Shape::Rect { min, max }, fill).with_blend(blend),
-                ))
-            }),
-        2 => rect()
-            .prop_flat_map(|(min, max)| (Just((min, max)), fill_for(min, max), blend()))
-            .prop_map(|((min, max), fill, blend)| {
-                Node::Draw(Box::new(
-                    Item::filled(
-                        Shape::RoundedRect {
-                            min,
-                            max,
-                            radius: 6.0,
-                        },
-                        fill,
-                    )
-                    .with_blend(blend),
-                ))
-            }),
-        2 => mesh().prop_map(|m| Node::Mesh(Box::new(m))),
+        3 => shape_fill_blend(aliased).prop_map(|((min, max), fill, blend)| {
+            Node::Draw(Box::new(
+                Item::filled(Shape::Rect { min, max }, fill).with_blend(blend),
+            ))
+        }),
+        2 => shape_fill_blend(aliased).prop_map(|((min, max), fill, blend)| {
+            Node::Draw(Box::new(
+                Item::filled(
+                    Shape::RoundedRect {
+                        min,
+                        max,
+                        radius: 6.0,
+                    },
+                    fill,
+                )
+                .with_blend(blend),
+            ))
+        }),
+        2 => mesh(aliased).prop_map(|m| Node::Mesh(Box::new(m))),
     ]
 }
 
@@ -240,10 +272,15 @@ fn node() -> impl Strategy<Value = Node> {
 /// backend establishes its own way -- a resolve attachment on one, a
 /// framebuffer with a renderbuffer on the other.
 fn scene() -> impl Strategy<Value = Scene> {
-    (
-        prop::collection::vec(node(), 1..5),
-        prop_oneof![3 => Just(1u32), 1 => Just(4u32)],
-    )
+    // The sample count first, because an advanced blend and multisampling do
+    // not go together on every device and the modes have to follow.
+    prop_oneof![3 => Just(1u32), 1 => Just(4u32)]
+        .prop_flat_map(|samples| {
+            (
+                prop::collection::vec(node(samples == 1), 1..5),
+                Just(samples),
+            )
+        })
         .prop_map(|(items, samples)| {
             Scene::tree("cross-backend-generated", items).with_samples(samples)
         })
