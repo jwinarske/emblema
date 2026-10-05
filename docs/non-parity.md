@@ -1065,6 +1065,14 @@ left open. Its golden is unchanged and its recorded cost went from four vertices
 indices, one baked ramp and one texture slot to twenty vertices, thirty indices and
 neither -- the ramp is what a five-stop gradient no longer needs.
 
+**What it costs on hardware, measured 2026-10-05 on a Pi 5.** The bench's `stacked, wash`
+row goes 9.804 ms to **4.519** under Vulkan and 11.107 to **4.866** on GLES, a little over
+half either way. An interface frame saves an eighth of that -- `stacked interface` 4.770 to
+4.377 and 5.995 to 5.525, about eight per cent -- because occlusion culling has already
+removed the wash fragments the panels cover, so most of the gradient work this route would
+have saved is work no longer being done. The two overlap, and the order they landed in is
+why this reads small. `docs/on-a-board.md` has the method, the spread and the control row.
+
 
 **What differs.** Upstream has three linear-gradient paths and this renderer has
 two. `LinearGradientContents::Render` tries `CanApplyFastGradient()` *first*: if
@@ -1099,13 +1107,16 @@ in an interface — a vertical or horizontal wash behind a card or a bar — ups
 does zero per-fragment gradient work where this renderer does a four-stop walk or a
 filtered texture fetch per fragment.
 
-What that is worth has a ceiling, and §1's later measurement supplies it. A
-vertex-interpolated path removes *all* per-fragment gradient evaluation and nothing
-else, so the most it can recover is the evaluation share of the draw: on the Pi 5,
-1.930 ms of a 13.911 ms frame under Vulkan and 2.924 of 14.866 under GLES. That is
-**13.9 and 19.7 per cent of a frame** — worth building, and not the three quarters
-that the gradient ground's share of the frame invites you to read. Four fifths of
-that draw is the fill underneath, which no gradient path touches.
+What that is worth was given a ceiling here from §1's measurement — the evaluation
+share of the draw, on the Pi 5 1.930 ms of a 13.911 ms frame under Vulkan and 2.924 of
+14.866 under GLES, so **13.9 and 19.7 per cent of a frame**.
+
+**The ceiling was wrong in both directions**, which the measurement recorded below
+shows: the wash row saves 5.285 ms under Vulkan, well past it, and an interface frame
+saves 0.39, well short of it. What still stands is that four fifths of that draw is the
+fill underneath, which no gradient path touches — that is why the interface figure is
+small. What the argument did not account for is occlusion culling removing the covered
+fill first, nor whatever makes the wash saving exceed the evaluation share.
 
 The earlier wording here pointed at the ground's 43.1 ms of 64.0 on the VisionFive 2
 as the reason to expect this to matter, which overstated it in exactly that way.
