@@ -957,6 +957,25 @@ fn the_interpolated_route_refuses_what_it_cannot_draw() {
         ),
         "a mask blur must reach the masked route, not this one"
     );
+
+    // And only clamping. The other three tile modes decide what happens outside
+    // `[0, 1]`, and at a fractional edge the fragment walk's parameter does
+    // leave it -- `Repeat` wrapping to the far end, which sections cannot do
+    // because their vertices carry the end colors. Measured by
+    // `emblema-testkit`'s `gradient_routes.rs` at 56 of 255 before this refusal
+    // existed.
+    for mode in [TileMode::Repeat, TileMode::Mirror, TileMode::Decal] {
+        let shader = Shader::LinearGradient {
+            start: Vec2::ZERO,
+            end: Vec2::new(128.0, 0.0),
+            stops: two(),
+            tile: mode,
+        };
+        assert!(
+            !took_it(shader, &as_rect),
+            "{mode:?} decides what happens outside the span, which sections cannot express"
+        );
+    }
 }
 
 /// What does not get dithered: a float target, and anything but a gradient.

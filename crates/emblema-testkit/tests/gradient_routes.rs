@@ -95,13 +95,17 @@ fn rect() -> impl Strategy<Value = ([f32; 2], [f32; 2])> {
         .prop_map(|(x, y, w, h)| ([x, y], [x + w, y + h]))
 }
 
+/// Clamping only, which is the one mode the interpolated route takes.
+///
+/// The predicate used to admit all four, on the reasoning that endpoints on the
+/// shape's edges leave nothing outside for a tile mode to decide. This test is
+/// what disproved it -- at a fractional edge the fragment walk's parameter does
+/// leave `[0, 1]` and `Repeat` wraps to the far end, 56 of 255 apart. So the
+/// other three are refused now, which
+/// `the_interpolated_route_refuses_what_it_cannot_draw` pins, and generating
+/// them here would only re-assert that refusal through a failed route check.
 fn tile() -> impl Strategy<Value = emblema_hal::TileMode> {
-    prop_oneof![
-        Just(emblema_hal::TileMode::Clamp),
-        Just(emblema_hal::TileMode::Repeat),
-        Just(emblema_hal::TileMode::Mirror),
-        Just(emblema_hal::TileMode::Decal),
-    ]
+    Just(emblema_hal::TileMode::Clamp)
 }
 
 /// Whether the gradient runs along x or y, and in which direction.
