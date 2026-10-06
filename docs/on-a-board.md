@@ -1975,7 +1975,7 @@ crossing them. The rows above hold regularly blocked content that is not the
 frame at all -- 159 distinct colors in a sampled grid, mostly dark -- which is
 what some other buffer read through the wrong layout looks like.
 
-Four things are ruled out.
+Four things were ruled out on the way to the mechanism below.
 
 - **It is not the render.** Reading the same exported image back through Vulkan
   gives the color the scene draws in all fifteen pixels sampled across it. The
@@ -1991,20 +1991,58 @@ Four things are ruled out.
   agrees is the last 12 rows of 1600, 120 KiB of 16,000. At 1024x768 it is the
   last 256 of 768, 1 MiB of 3,072. Neither two thirds nor two megabytes.
 
-No mechanism is written down, because this document's own rule is that one is
-written from a bare-API reproduction and that has not been done. The cheapest
-untested guess is about where the export lands:
-`VulkanContext::create_exportable_texture` asks for `DEVICE_LOCAL` and nothing
-else, and vkms composites on the CPU through a kernel map of the imported
-buffer, which is not the access a real controller's DMA makes. A real controller
-has never shown this -- the whole `emblema-present-drm` suite passes on a Pi 5
-against vc4 with a display attached -- so what is at stake is whether the export
-is fit for a CPU-reading importer, not whether the frame is right.
+### What it is: the heap the export lands in, measured 2026-10-06
 
-What the test does about it is take the software device, which is the device the
-ladder names for this rung anyway and the one CI would have. That keeps the
-comparison sensitive to the thing it exists to catch, a fourcc or a stride meant
-differently by the two sides, and it does not pretend to have settled this.
+`VulkanContext::create_exportable_texture` asks `find_memory_type` for
+`DEVICE_LOCAL` and nothing else, and that function returns the *first* matching
+type. Changing which type it lands in is the whole of it. Three placements of
+the same image, everything else held, with the frame read back three ways --
+through Vulkan, through a userspace `mmap` of the exported fd, and through the
+controller's own composition:
+
+| memory type | heap | `mmap` of the dma-buf | the controller's composition |
+|---|---|---|---|
+| 0, `DEVICE_LOCAL` | device | **`EPERM`** | wrong, 512 of 768 rows |
+| 3, `DEVICE_LOCAL \| HOST_VISIBLE \| HOST_COHERENT` | device | correct, 0 of 768 rows differ from the Vulkan readback | **still wrong**, 73.9% of pixels |
+| 2, `HOST_VISIBLE \| HOST_COHERENT` | host | correct | **right -- all three tests pass** |
+
+The middle row is the one that settles it. **CPU-visibility of the pages is not
+the discriminator**: at type 3 a plain userspace map of the very same file
+descriptor returns the frame exactly, byte for byte against what the GPU wrote,
+and the kernel's own read of it is still wrong. What changes between the row
+that fails and the row that passes is the *heap* -- which is to say the
+placement, system memory against the device's own -- and not whether a CPU can
+reach it.
+
+So the disagreement needs a reader that maps the import in the kernel, which is
+what `vkms` does when it composites and what no real controller does. A Pi 5
+proves the other side of that: `vc4` compositing a frame V3D exported matches to
+within a byte, recorded above.
+
+**What is not established** is whose it is to fix. The remaining step is a
+bare-API reproduction -- plain `ash` allocating, filling and exporting, with no
+renderer in it -- and this document's rule is that a driver is not named before
+one exists. Nothing above names one; it reports which knob moves the outcome.
+
+**The fraction is stable but not invariant.** Six consecutive runs at type 0
+read 524,288 of 786,432 pixels every time. One run immediately after a rebuild
+read 581,448. The wrong region holds whatever else is resident, so its extent
+can move; a reader reproducing this should expect the shape rather than the
+number.
+
+What the test does about it is take the software device by default, which is the
+device the ladder names for this rung anyway and the one CI would have. That
+keeps the comparison sensitive to the thing it exists to catch, a fourcc or a
+stride meant differently by the two sides.
+`EMBLEMA_WRITEBACK_DEVICE=auto` is both the board setting and the one-command
+reproduction of the table above.
+
+**No allocation change was made.** Forcing the export into host memory would
+make this lane pass, and it was tried -- that is the third row. It is not
+shipped, because the only reader it helps is a software controller nobody ships
+against, the cost on a part where device-local matters is unmeasured, and a
+change justified by one bench lane is the kind this document exists to argue
+against.
 
 One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
