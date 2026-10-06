@@ -283,3 +283,225 @@ pub fn run(seconds: u64, skip: &[String]) -> Result<String, String> {
         ))
     }
 }
+
+/// The scanout half: the ring driven for minutes rather than for sixty frames.
+///
+/// `a_long_run_neither_leaks_nor_loses_blanks` is the sixty-frame version, and
+/// its comment says what it is watching -- the framebuffers the output keeps,
+/// the descriptors the process keeps, the ring's depth and the CPU-wait count,
+/// which are the resources the DRM path exchanges every frame. Sixty frames is
+/// one second. This drives the same loop for as long as it is given and samples
+/// those four per bucket, which is the difference between "does the ring work"
+/// and "does the ring keep working".
+///
+/// It also reports **missed blanks per bucket**, which is the figure
+/// `docs/architecture.md`'s L4 row says is printed and never bounded. A bound
+/// still is not asserted here -- the row's reason stands, a figure worth having
+/// comes from a release build on a quiet board and this command cannot know it
+/// has one -- but a run that misses nothing for minutes is evidence a reader of
+/// that row currently has nowhere to get.
+pub mod scanout {
+    use super::{leaks, resident_kib, Bucket, BUCKETS};
+    use emblema_hal::{Batch, BlendMode, Material, PassDescriptor};
+    use emblema_hal_vulkan::{DevicePreference, VulkanContext, VulkanHal};
+    use emblema_present::PresentTarget;
+    use emblema_present_drm::{DrmScanoutTarget, KmsOutput};
+    use std::time::{Duration, Instant};
+
+    const FULL: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+    const QUAD: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+    /// What the ring held at the end of a bucket, beside the bucket itself.
+    struct Held {
+        framebuffers: usize,
+        descriptors: usize,
+        ring_depth: usize,
+        cpu_waits: u64,
+        flips: u64,
+        missed: u64,
+    }
+
+    /// Open descriptors, which is how the sixty-frame test spots a leaked fd.
+    fn open_descriptors() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .map(|d| d.count())
+            .unwrap_or(0)
+    }
+
+    /// The card to drive: the one named, or the first that opens.
+    fn output() -> Option<KmsOutput> {
+        if let Ok(path) = std::env::var("EMBLEMA_DRM_CARD") {
+            return match KmsOutput::open(&path) {
+                Ok(output) => Some(output),
+                Err(e) => {
+                    eprintln!("{path} was named and cannot be driven ({e})");
+                    None
+                }
+            };
+        }
+        // Named rather than guessed is the better way round here, for the reason
+        // the sixty-frame test gives: a Pi 5 lists the DSI controller first and
+        // the HDMI one second, and "can this drive a display" is not the
+        // question a board is worth running on to answer.
+        for entry in std::fs::read_dir("/dev/dri").ok()?.flatten() {
+            let name = entry.file_name().into_string().ok()?;
+            if !name.starts_with("card") {
+                continue;
+            }
+            if let Ok(output) = KmsOutput::open(&entry.path().to_string_lossy()) {
+                return Some(output);
+            }
+        }
+        None
+    }
+
+    pub fn run(seconds: u64) -> Result<String, String> {
+        let Some(output) = output() else {
+            return Ok("scanout\n  no card this process can drive\n".to_string());
+        };
+        let mut ctx = VulkanContext::new(DevicePreference::Auto)
+            .map_err(|e| format!("scanout: no Vulkan device ({e})"))?;
+        let mut target = DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3)
+            .map_err(|e| format!("scanout: building the target ({e})"))?;
+
+        // Taken after the ring is built, so the buffers it imports on purpose
+        // are not counted as growth.
+        let base = Held {
+            framebuffers: target.output().framebuffer_count(),
+            descriptors: open_descriptors(),
+            ring_depth: target.ring_depth(),
+            cpu_waits: target.cpu_waits(),
+            flips: target.output().pacing().flips(),
+            missed: 0,
+        };
+
+        let slice = Duration::from_secs_f64(seconds as f64 / BUCKETS as f64);
+        let mut buckets: Vec<(Bucket, Held)> = Vec::with_capacity(BUCKETS);
+        let mut frame = 0u64;
+        let mut last_flips = base.flips;
+        let mut last_missed = 0u64;
+
+        for _ in 0..BUCKETS {
+            let until = Instant::now() + slice;
+            let mut times = Vec::new();
+            loop {
+                let started = Instant::now();
+                let image = target
+                    .acquire(&mut ctx)
+                    .map_err(|e| format!("frame {frame}: acquire ({e})"))?;
+                let mut batch = Batch::new();
+                let t = (frame % 8) as f32 / 8.0;
+                batch
+                    .push(
+                        &FULL,
+                        &QUAD,
+                        Material::solid([t, 0.4, 1.0 - t, 1.0]),
+                        BlendMode::Src,
+                    )
+                    .map_err(|e| format!("frame {frame}: push ({e})"))?;
+                let fence = ctx
+                    .submit_batch_deferred(image, &batch, PassDescriptor::clear([0.0; 4]))
+                    .map_err(|e| format!("frame {frame}: submit ({e})"))?;
+                target
+                    .set_frame_fence(fence)
+                    .map_err(|e| format!("frame {frame}: fence ({e})"))?;
+                target
+                    .present(&mut ctx)
+                    .map_err(|e| format!("frame {frame}: present ({e})"))?;
+                times.push(started.elapsed());
+                frame += 1;
+                if Instant::now() >= until {
+                    break;
+                }
+            }
+            let pacing = target.output().pacing();
+            let missed = pacing.missed().unwrap_or(0);
+            buckets.push((
+                Bucket {
+                    frames: times.len(),
+                    resident_kib: resident_kib().unwrap_or(0),
+                    median_ms: super::median(times),
+                },
+                Held {
+                    framebuffers: target.output().framebuffer_count(),
+                    descriptors: open_descriptors(),
+                    ring_depth: target.ring_depth(),
+                    cpu_waits: target.cpu_waits(),
+                    flips: pacing.flips() - last_flips,
+                    missed: missed - last_missed,
+                },
+            ));
+            last_flips = pacing.flips();
+            last_missed = missed;
+        }
+
+        let mut out = format!(
+            "\nscanout {} ({} frames, ring {})\n",
+            target.output().path(),
+            frame,
+            base.ring_depth
+        );
+        out.push_str("  bucket  frames   flips  missed  resident  fbs  fds  waits  median\n");
+        for (i, (b, h)) in buckets.iter().enumerate() {
+            let note = if i == 0 { "  (warm-up)" } else { "" };
+            out.push_str(&format!(
+                "  {:>6}  {:>6}  {:>6}  {:>6}  {:>6} KiB  {:>3}  {:>3}  {:>5}  {:>6.3} ms{note}\n",
+                i,
+                b.frames,
+                h.flips,
+                h.missed,
+                b.resident_kib,
+                h.framebuffers,
+                h.descriptors,
+                h.cpu_waits,
+                b.median_ms
+            ));
+        }
+
+        // The four the sixty-frame test holds constant, held over the whole run.
+        let grew: Vec<String> = buckets
+            .iter()
+            .skip(1)
+            .enumerate()
+            .filter_map(|(i, (_, h))| {
+                let mut why = Vec::new();
+                if h.framebuffers != base.framebuffers {
+                    why.push(format!(
+                        "framebuffers {} against {}",
+                        h.framebuffers, base.framebuffers
+                    ));
+                }
+                if h.descriptors > base.descriptors {
+                    why.push(format!(
+                        "descriptors {} against {}",
+                        h.descriptors, base.descriptors
+                    ));
+                }
+                if h.ring_depth != base.ring_depth {
+                    why.push(format!("ring {} against {}", h.ring_depth, base.ring_depth));
+                }
+                (!why.is_empty()).then(|| format!("bucket {}: {}", i + 1, why.join(", ")))
+            })
+            .collect();
+
+        let total_missed: u64 = buckets.iter().skip(1).map(|(_, h)| h.missed).sum();
+        out.push_str(&format!(
+            "  missed {total_missed} blanks after the warm-up, over {} flips\n",
+            buckets.iter().skip(1).map(|(_, h)| h.flips).sum::<u64>()
+        ));
+
+        let plain: Vec<Bucket> = buckets.into_iter().map(|(b, _)| b).collect();
+        let mut problems = grew;
+        if leaks(&plain) {
+            problems.push("resident size rose in every bucket after the warm-up".to_string());
+        }
+        if problems.is_empty() {
+            Ok(out)
+        } else {
+            Err(format!(
+                "{out}\nthe ring did not hold steady: {}",
+                problems.join("; ")
+            ))
+        }
+    }
+}

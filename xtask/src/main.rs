@@ -71,6 +71,9 @@ Commands:
                     in every bucket after the warm-up.
                     --seconds N  per device, default 120.
                     --skip NAME  as for bench.
+                    --scanout    drive the DRM ring instead, watching the four
+                    resources the sixty-frame test holds constant and reporting
+                    missed blanks per bucket.
   gate              Lint, format, build, the feature matrix and the suite,
                     stopping at the first failure. Exits non-zero if any step
                     did not pass.
@@ -333,11 +336,22 @@ fn main() {
                             std::process::exit(2);
                         }));
                     }
+                    "--scanout" => {}
                     other => {
                         eprintln!("soak: unknown argument {other}");
                         std::process::exit(2);
                     }
                 }
+            }
+            if rest.iter().any(|a| a == "--scanout") {
+                match soak::scanout::run(seconds) {
+                    Ok(text) => print!("{text}"),
+                    Err(text) => {
+                        println!("{text}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
             }
             match soak::run(seconds, &skip) {
                 Ok(text) => print!("{text}"),

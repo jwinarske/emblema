@@ -1281,6 +1281,7 @@ dependencies = [
  "emblema-hal",
  "emblema-hal-gles",
  "emblema-hal-vulkan",
+ "emblema-present",
  "emblema-present-drm",
  "emblema-testkit",
  "glow",
