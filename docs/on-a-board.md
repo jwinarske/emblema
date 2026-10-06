@@ -1900,6 +1900,59 @@ thirty-one draws. On V3D that buys eleven milliseconds of fill, so the trade is 
 on this board the device half cannot say yet, and the honest position is that culling's cost
 there is measured and its benefit is not.
 
+## The controller's own answer disagrees with the render, on one device
+
+`writeback.rs` asks a CRTC to hand back what it composited and compares it
+against an ordinary offscreen render of the same batch. It found a disagreement
+on the first run, and the disagreement is not in the picture the renderer drew.
+
+Measured on this workstation, 2026-10-06 at d7b9f31, against `card0`, which is
+vkms. Mode 1024x768; source an exported `ARGB8888` image at the linear modifier,
+stride 4096 and offset 0; destination a dumb buffer at `XRGB8888`, pitch 4096.
+
+With the Vulkan device the machine picks by itself -- RADV on the Raphael
+integrated GPU -- **512 of the 768 rows differ, 524,288 of 786,432 pixels, max
+delta 255**. The disagreement is not a shift: rows 512 to 767 of the capture
+equal rows 512 to 767 of the render exactly, including the diagonal band
+crossing them. The rows above hold regularly blocked content that is not the
+frame at all -- 159 distinct colors in a sampled grid, mostly dark -- which is
+what some other buffer read through the wrong layout looks like.
+
+Four things are ruled out.
+
+- **It is not the render.** Reading the same exported image back through Vulkan
+  gives the color the scene draws in all fifteen pixels sampled across it. The
+  GPU wrote the frame; the kernel did not read the frame.
+- **It is not the instrument.** With the software Vulkan device exporting
+  instead, the capture is bit-identical to the render: 0 of 768 rows differ, and
+  the capture holds exactly the five colors the scene draws. Same commit, same
+  card, same mode, same code path.
+- **It is not a missing flush.** Putting a transfer out of the image -- which
+  takes it through a host-read barrier -- between the render and the commit
+  changes nothing; still 512 of 768.
+- **It is not a fixed size or a fixed fraction.** At 2560x1600 the part that
+  agrees is the last 12 rows of 1600, 120 KiB of 16,000. At 1024x768 it is the
+  last 256 of 768, 1 MiB of 3,072. Neither two thirds nor two megabytes.
+
+No mechanism is written down, because this document's own rule is that one is
+written from a bare-API reproduction and that has not been done. The cheapest
+untested guess is about where the export lands:
+`VulkanContext::create_exportable_texture` asks for `DEVICE_LOCAL` and nothing
+else, and vkms composites on the CPU through a kernel map of the imported
+buffer, which is not the access a real controller's DMA makes. A real controller
+has never shown this -- the whole `emblema-present-drm` suite passes on a Pi 5
+against vc4 with a display attached -- so what is at stake is whether the export
+is fit for a CPU-reading importer, not whether the frame is right.
+
+What the test does about it is take the software device, which is the device the
+ladder names for this rung anyway and the one CI would have. That keeps the
+comparison sensitive to the thing it exists to catch, a fourcc or a stride meant
+differently by the two sides, and it does not pretend to have settled this.
+
+One more figure from the same runs: at 2560x1600 the writeback fence does not
+signal within two seconds, and does within fifteen. A timeout tuned on the small
+mode would read as a hang on a large one.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and

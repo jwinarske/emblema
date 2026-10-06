@@ -24,6 +24,13 @@ rustix = { version = "1.1.4", default-features = false, features = ["fs"] }
 
 [dev-dependencies]
 emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
+# `Image`, `compare` and the calibrated tolerances, so the writeback comparison
+# reports a difference the way every other comparison here does. Path-only and
+# with no version, like the line above, so `cargo publish` drops it.
+emblema-testkit = { path = "../emblema-testkit" }
+# `writeback.rs` waits on the fence the kernel hands back, and a sync_file is
+# told it signaled by polling it.
+rustix = { version = "1.1.4", default-features = false, features = ["event"] }
 # The `IN_FORMATS` parser reads the kernel's bytes at offsets it computes
 # itself, which is the shape a generator explores better than a table.
 proptest = { workspace = true }
