@@ -45,6 +45,12 @@
 //! this fleet scans one out: vkms takes linear alone, and so does the vc4
 //! controller a Raspberry Pi offers.
 
+// Reached from a helper rather than from a test body, so clippy's test-code
+// exemption does not see it, as in `scanout.rs`. A misspelled
+// `EMBLEMA_WRITEBACK_DEVICE` has to stop the run: falling back to the default
+// would let a board session report a pass for a comparison it never made.
+#![allow(clippy::panic)]
+
 use drm::buffer::Buffer as _;
 use drm::control::{self, Device as _};
 use drm::Device as _;
@@ -146,8 +152,22 @@ fn as_image(bytes: &[u8], extent: Extent2D, pitch: u32) -> Image {
     Image::new(extent.width, extent.height, pixels)
 }
 
+/// The render device, software unless a run asks for the machine's own.
+///
+/// Software by default for the reason the module doc gives. `EMBLEMA_WRITEBACK_DEVICE=auto`
+/// is what a board session sets: on hardware with a display controller that
+/// composites by DMA rather than with the CPU, the question the default is
+/// avoiding does not arise, and a real export is the stronger thing to check.
+fn preference() -> DevicePreference {
+    match std::env::var("EMBLEMA_WRITEBACK_DEVICE").as_deref() {
+        Ok("auto") => DevicePreference::Auto,
+        Ok("software") | Err(_) => DevicePreference::Software,
+        Ok(other) => panic!("EMBLEMA_WRITEBACK_DEVICE={other}, which is neither auto nor software"),
+    }
+}
+
 fn context() -> Option<Validated> {
-    match Validated::new(DevicePreference::Software) {
+    match Validated::new(preference()) {
         Ok(ctx) => Some(ctx),
         Err(e) => {
             eprintln!("skipping: no Vulkan device ({e})");
@@ -406,8 +426,9 @@ fn composite(wb: &mut Writeback, ctx: &mut Validated) -> std::result::Result<Ima
     )
     .map_err(|e| format!("the render device and this plane share no layout: {e}"))?;
     eprintln!(
-        "{} at {}x{}: source {:?} {:?}, writeback {:?}",
+        "{} on {}: {}x{}, source {:?} {:?}, writeback {:?}",
         wb.device.path(),
+        ctx.capabilities().device_name,
         extent.width,
         extent.height,
         agreed.fourcc,

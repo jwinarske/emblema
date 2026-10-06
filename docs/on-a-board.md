@@ -142,6 +142,16 @@ architecture instead of a different driver -- which is worth doing and cannot
 be done from a binary that looks for its baseline on the machine that compiled
 it. Recorded on x86-64, it matched byte for byte on the Pi 5.
 
+`EMBLEMA_WRITEBACK_DEVICE=auto` is what makes a board session of
+`writeback.rs` worth more than the desktop one. The test renders through the
+software device by default, because on this workstation's RADV the kernel's
+read of an exported buffer is the frame only in its last stretch -- the section
+below has the figures. That is a property of a controller compositing with the
+CPU, which is what vkms does and what a display controller does not, so on a
+board with a real one the reason for the default does not apply and a real GPU
+export is the stronger thing to check. Unset, or `software`, keeps the default.
+It is also the one-command reproduction of that finding here.
+
 `EMBLEMA_DRM_CARD` matters on a board with more than one display controller. A
 Pi 5 has two, and a test that opens the first `/dev/dri/cardN` gets `rp1-dsi`
 rather than `vc4`. A suite that passes on the controller that works says nothing
@@ -1902,6 +1912,45 @@ Ninety-eight microseconds rather than the Pi's twenty, for the same hundred and
 thirty-one draws. On V3D that buys eleven milliseconds of fill, so the trade is not close;
 on this board the device half cannot say yet, and the honest position is that culling's cost
 there is measured and its benefit is not.
+
+### A real controller composites what a real GPU exported, measured 2026-10-06
+
+The comparison below was written against vkms with a software renderer, and the
+section after it records why. On a Raspberry Pi 5 it runs against the thing
+itself: `vc4` driving a connected HDMI output at 1280x1440, V3D 7.1.7.0
+allocating and exporting the frame, source `ARGB8888` at the linear modifier,
+destination `XRGB8888`. **All three tests pass** -- the capture is not one flat
+color, a quadrant reads back as the bytes it was drawn, and the composition
+matches an ordinary offscreen render of the same batch within
+`Tolerance::ROUNDING`. `EMBLEMA_WRITEBACK_DEVICE=auto` is what asks for the
+machine's own device instead of the software default.
+
+That is the first time anything here has compared a display controller's output
+against the renderer's on hardware, and it is also evidence about the
+disagreement below: the same test, same code, with a real GPU's export and a
+controller that composites by DMA, agrees to within a byte.
+
+**vc4 has two writeback connectors**, `card0-Writeback-1` and `-2`. A note in a
+neighboring project said vc4 and vkms had none, which was `modetest` not
+setting `DRM_CLIENT_CAP_WRITEBACK_CONNECTORS` rather than the hardware: `ls
+/sys/class/drm/` lists them whatever a client asked for.
+
+**The resize storm ran on real modes.** All seven of `kms.rs`'s tests pass,
+including the storm cycling 1280x1440, 640x480 and 720x480 four times over,
+which is real modesets on a live HDMI output rather than vkms accepting
+whatever it is given. So the mode blob swap, the plane rectangles following it
+and the ring rebuild are right against a display controller and not only
+against the stand-in.
+
+Ten tests take DRM master between the two files and all ten pass. The board was
+idle at 60.4 C on the `ondemand` governor, which is fine here because none of
+this is a timing measurement.
+
+**`vc4` registers no CRC source.** `/sys/kernel/debug/dri/0` has `crtc-0`
+through `crtc-3` and nothing named `*crc*` anywhere beneath it; the same holds
+for `drm-rp1-dsi` and `v3d`. So L4's CRC gap wants different hardware rather
+than a privilege -- debugfs there is `root:sudo` and readable without a
+password, which is how this was checked.
 
 ## The controller's own answer disagrees with the render, on one device
 
