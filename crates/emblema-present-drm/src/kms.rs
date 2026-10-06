@@ -58,6 +58,9 @@ pub struct KmsOutput {
     /// The mode as a property blob, created once because a modeset needs one
     /// and creating it per commit would leak a blob per frame.
     mode_blob: control::property::Value<'static>,
+    /// Every mode the connector offers, paired with the kernel's own form of
+    /// it, because a commit needs that one and the trait speaks the other.
+    available: Vec<(Mode, control::Mode)>,
     formats: Vec<FormatModifierSet>,
     /// Framebuffers this output created, by the handle it handed out.
     ///
@@ -92,15 +95,24 @@ impl KmsOutput {
 
         // A connected connector with at least one mode. Anything else has
         // nothing to display and nothing to display it at.
-        let (connector, mode) = resources
+        //
+        // All of its modes are kept, not just the first: they are the sizes
+        // this output can be resized to, and nothing else can supply that list.
+        let (connector, modes) = resources
             .connectors()
             .iter()
             .filter_map(|handle| device.get_connector(*handle, false).ok())
             .filter(|c| c.state() == control::connector::State::Connected)
-            .find_map(|c| c.modes().first().map(|m| (c.handle(), *m)))
+            .find_map(|c| {
+                let modes = c.modes().to_vec();
+                (!modes.is_empty()).then(|| (c.handle(), modes))
+            })
             .ok_or(Error::Unsupported(
                 "no connected connector with a mode to display at",
             ))?;
+        let mode = modes[0];
+        let available: Vec<(Mode, control::Mode)> =
+            modes.into_iter().map(|m| (as_mode(&m), m)).collect();
 
         // The encoder a connector is attached to says which CRTCs can drive it.
         // Taking the first compatible one is enough for a single output; a
@@ -133,6 +145,7 @@ impl KmsOutput {
             },
             properties,
             mode_blob,
+            available,
             formats,
             framebuffers: HashMap::new(),
             in_flight: None,
@@ -299,13 +312,57 @@ impl Properties {
 
 impl ScanoutOutput for KmsOutput {
     fn mode(&self) -> Mode {
-        let (width, height) = self.pipeline.mode.size();
-        Mode {
-            extent: Extent2D::new(width as u32, height as u32),
-            // The kernel reports whole hertz; the trait wants millihertz, which
-            // is what makes a frame budget worth computing.
-            refresh_mhz: self.pipeline.mode.vrefresh() * 1000,
+        as_mode(&self.pipeline.mode)
+    }
+
+    fn modes(&self) -> Vec<Mode> {
+        self.available.iter().map(|(mode, _)| *mode).collect()
+    }
+
+    /// Switch the pipeline to another of the connector's modes.
+    ///
+    /// Three things move together and all three have to, which is why this is
+    /// one method rather than a setter. The blob is what a commit hands the
+    /// kernel for `MODE_ID`, so a new mode needs a new one -- and the old one
+    /// is destroyed here, because a blob created per resize and never freed is
+    /// a leak a storm of them would find in the kernel rather than in this
+    /// process. `pipeline.mode` is where [`Self::commit`] reads the plane
+    /// rectangles from, so leaving it stale is what makes the kernel refuse the
+    /// whole atomic request. And the pacing ledger starts over: the frame
+    /// period has changed and the driver may restart its vblank counter, so
+    /// nothing counted before this is comparable with anything after.
+    ///
+    /// The caller still has to let the next commit modeset.
+    /// [`DrmScanoutTarget::reconfigure`] does that by clearing its own flag;
+    /// this cannot, because whether a commit may modeset is the caller's to say.
+    ///
+    /// [`DrmScanoutTarget::reconfigure`]: crate::DrmScanoutTarget
+    fn set_mode(&mut self, mode: Mode) -> Result<()> {
+        if mode == self.mode() {
+            return Ok(());
         }
+        let (_, chosen) = *self
+            .available
+            .iter()
+            .find(|(offered, _)| *offered == mode)
+            .ok_or(Error::Unsupported(
+                "this connector does not offer that mode",
+            ))?;
+
+        // Created before the old one is dropped, so a failure here leaves the
+        // output driveable at the mode it was already at.
+        let blob = self
+            .device
+            .create_property_blob(&chosen)
+            .map_err(|e| err("create_property_blob", e))?;
+        if let control::property::Value::Blob(old) = self.mode_blob {
+            let _ = self.device.destroy_property_blob(old);
+        }
+
+        self.mode_blob = blob;
+        self.pipeline.mode = chosen;
+        self.pacing.restart();
+        Ok(())
     }
 
     fn supported_formats(&self) -> &[FormatModifierSet] {
@@ -661,6 +718,17 @@ impl drm::buffer::PlanarBuffer for ImportedBuffer {
 
     fn offsets(&self) -> [u32; 4] {
         self.offsets
+    }
+}
+
+/// The kernel's mode as this crate states one.
+fn as_mode(mode: &control::Mode) -> Mode {
+    let (width, height) = mode.size();
+    Mode {
+        extent: Extent2D::new(width as u32, height as u32),
+        // The kernel reports whole hertz; the trait wants millihertz, which is
+        // what makes a frame budget worth computing.
+        refresh_mhz: mode.vrefresh() * 1000,
     }
 }
 

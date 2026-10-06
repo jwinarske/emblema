@@ -1548,8 +1548,47 @@ fn the_documents_count_the_drm_tests_correctly() {
     }
 
     let crate_root = repo_root().join("crates/emblema-present-drm");
-    let master = tests_in(&crate_root.join("tests/kms.rs"));
-    let scanout = tests_in(&crate_root.join("tests/scanout.rs"));
+
+    // Named rather than counted by directory, because the split is the claim
+    // and only a reader knows which file needs a card. The assertion below is
+    // what keeps that from rotting: a test file nobody classified used to be
+    // invisible here, so `writeback.rs` arrived with three tests taking master
+    // and this guard went on reporting six.
+    const TAKES_A_CARD: [&str; 2] = ["kms.rs", "writeback.rs"];
+    const STAND_IN: [&str; 1] = ["scanout.rs"];
+    const NEEDS_NOTHING: [&str; 1] = ["in_formats.rs"];
+
+    let test_files: Vec<String> = std::fs::read_dir(crate_root.join("tests"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".rs"))
+        .collect();
+    let unclassified: Vec<&String> = test_files
+        .iter()
+        .filter(|name| {
+            !TAKES_A_CARD.contains(&name.as_str())
+                && !STAND_IN.contains(&name.as_str())
+                && !NEEDS_NOTHING.contains(&name.as_str())
+        })
+        .collect();
+    assert!(
+        unclassified.is_empty(),
+        "these test files in emblema-present-drm are in none of the three \
+         groups this counts: {unclassified:?}. Say which one it belongs to, \
+         because a file left out is counted nowhere and the documents go \
+         stale silently."
+    );
+
+    let master: usize = TAKES_A_CARD
+        .iter()
+        .map(|name| tests_in(&crate_root.join("tests").join(name)))
+        .sum();
+    let scanout: usize = STAND_IN
+        .iter()
+        .map(|name| tests_in(&crate_root.join("tests").join(name)))
+        .sum();
     let unit = {
         let mut total = 0;
         let mut stack = vec![crate_root.join("src")];
@@ -1573,8 +1612,6 @@ fn the_documents_count_the_drm_tests_correctly() {
         "counted {master} master, {scanout} scanout and {unit} unit tests, \
          so this read the wrong paths and would pass on anything"
     );
-    let total = master + scanout + unit;
-
     let flat = |name: &str| {
         doc(name)
             .split_whitespace()
@@ -1585,6 +1622,7 @@ fn the_documents_count_the_drm_tests_correctly() {
     let architecture = flat("architecture.md");
     let board = flat("on-a-board.md");
 
+    // What the crate holds now. These move with the tree.
     for (name, text, stated) in [
         (
             "docs/architecture.md",
@@ -1596,44 +1634,41 @@ fn the_documents_count_the_drm_tests_correctly() {
             &architecture,
             format!("{} tests in `emblema-present-drm`", spell(master)),
         ),
-        (
-            "docs/architecture.md",
-            &architecture,
-            format!(
-                "all {} tests pass, along with the {} scanout and unit tests",
-                spell(master),
-                spell(scanout + unit)
-            ),
-        ),
-        (
-            "docs/on-a-board.md",
-            &board,
-            format!(
-                "{} tests in `emblema-present-drm` pass on the pi 5",
-                spell(total)
-            ),
-        ),
-        (
-            "docs/on-a-board.md",
-            &board,
-            format!("{} unit,", spell(unit)),
-        ),
-        (
-            "docs/on-a-board.md",
-            &board,
-            format!("{} scanout,", spell(scanout)),
-        ),
-        (
-            "docs/on-a-board.md",
-            &board,
-            format!("the {} that take drm master", spell(master)),
-        ),
     ] {
         assert!(
             text.contains(&stated),
             "{name} does not say \"{stated}\". The crate has {master} tests \
-             taking DRM master, {scanout} scanout and {unit} unit, {total} in \
-             all. Adding one means saying so."
+             taking DRM master, {scanout} scanout and {unit} unit. Adding one \
+             means saying so."
+        );
+    }
+
+    // The Raspberry Pi 5 run of 2026-09-22, which is a measurement rather than
+    // a count of the tree. These were tied to the live counts, and that was
+    // wrong in a way nothing would have caught: adding a test to the crate made
+    // the guard demand a larger number in a sentence that says those tests
+    // *passed on a board*, so the next person to add one would have restated a
+    // board result nobody had. They move when the board is run again.
+    for (name, text, stated) in [
+        (
+            "docs/on-a-board.md",
+            &board,
+            "all thirty-four tests the crate held that day pass on the pi 5",
+        ),
+        ("docs/on-a-board.md", &board, "nineteen unit,"),
+        ("docs/on-a-board.md", &board, "nine scanout,"),
+        ("docs/on-a-board.md", &board, "the six that take drm master"),
+        (
+            "docs/architecture.md",
+            &architecture,
+            "all six it had then pass, along with the twenty-eight scanout and unit tests",
+        ),
+    ] {
+        assert!(
+            text.contains(stated),
+            "{name} does not say \"{stated}\". That sentence records what ran \
+             on a Pi 5 on 2026-09-22, so it changes when the board is run \
+             again -- not when a test is added here."
         );
     }
 }

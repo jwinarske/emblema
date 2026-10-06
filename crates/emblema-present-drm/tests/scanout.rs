@@ -27,6 +27,22 @@ use emblema_present_drm::{
 };
 use std::sync::{Arc, Mutex};
 
+/// What the stand-in display offers, first one being the one it starts at.
+const MODES: [Mode; 3] = [
+    Mode {
+        extent: Extent2D::new(64, 64),
+        refresh_mhz: 60_000,
+    },
+    Mode {
+        extent: Extent2D::new(96, 48),
+        refresh_mhz: 60_000,
+    },
+    Mode {
+        extent: Extent2D::new(32, 80),
+        refresh_mhz: 50_000,
+    },
+];
+
 /// What a commit carried, recorded for inspection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedCommit {
@@ -41,11 +57,17 @@ struct Recording {
     imported: Vec<FbHandle>,
     released: Vec<FbHandle>,
     waits: usize,
+    mode_sets: usize,
 }
 
 /// A display that records what it was asked to do and flips on demand.
 struct FakeOutput {
     mode: Mode,
+    /// The sizes this display offers, which is what a caller may resize to.
+    ///
+    /// Several, because an output with one mode cannot be resized at all and a
+    /// stand-in that offered one could not stand in for the question.
+    modes: Vec<Mode>,
     formats: Vec<FormatModifierSet>,
     next_fb: u64,
     log: Arc<Mutex<Recording>>,
@@ -60,10 +82,8 @@ impl FakeOutput {
         let log = Arc::new(Mutex::new(Recording::default()));
         (
             Self {
-                mode: Mode {
-                    extent: Extent2D::new(64, 64),
-                    refresh_mhz: 60_000,
-                },
+                mode: MODES[0],
+                modes: MODES.to_vec(),
                 formats,
                 next_fb: 1,
                 log: Arc::clone(&log),
@@ -78,6 +98,22 @@ impl FakeOutput {
 impl ScanoutOutput for FakeOutput {
     fn mode(&self) -> Mode {
         self.mode
+    }
+
+    fn modes(&self) -> Vec<Mode> {
+        self.modes.clone()
+    }
+
+    fn set_mode(&mut self, mode: Mode) -> Result<()> {
+        // A target that asked for a mode this display never offered would be a
+        // defect in the target, not an outcome worth modeling.
+        assert!(
+            self.modes.contains(&mode),
+            "set_mode to {mode:?}, which was never offered"
+        );
+        self.mode = mode;
+        self.log.lock().unwrap().mode_sets += 1;
+        Ok(())
     }
 
     fn supported_formats(&self) -> &[FormatModifierSet] {
@@ -531,5 +567,158 @@ fn a_frame_with_layers_reaches_the_scanout_buffer() {
 
     target.destroy(&mut ctx);
     assert_eq!(log.lock().unwrap().released.len(), 3, "framebuffers leaked");
+    assert_validation_clean(&ctx);
+}
+
+/// A storm of resizes, which is the shape a single reconfigure cannot answer.
+///
+/// One resize that works says nothing about the tenth. Each one releases the
+/// whole ring and builds another, so a framebuffer dropped without being
+/// released, a slot left behind or a depth that drifts would all accumulate --
+/// and each is invisible in a before-and-after of one.
+///
+/// Four things are held across every round: the ring's depth, the extent the
+/// target reports, the number of framebuffers the display is still holding, and
+/// which commits were allowed to modeset. That last one is not bookkeeping --
+/// the commit after a mode change has to set the mode, and the ones after it
+/// must not, because asking for a modeset every frame is how a loop ends up at
+/// a fraction of the refresh rate.
+#[test]
+fn a_storm_of_resizes_leaves_the_ring_where_it_started() {
+    let Some(mut ctx) = context() else { return };
+    if !exportable(&ctx) {
+        return;
+    }
+    const DEPTH: usize = 3;
+    let (output, log) = FakeOutput::new(display_formats(&ctx));
+    let mut target =
+        DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, DEPTH).expect("scanout target");
+    let batch = scene();
+
+    for round in 0..6 {
+        for mode in MODES {
+            target
+                .reconfigure(&mut ctx, mode.extent)
+                .unwrap_or_else(|e| panic!("round {round} resize to {:?}: {e}", mode.extent));
+            assert_eq!(target.extent(), mode.extent, "round {round}");
+            assert_eq!(target.ring_depth(), DEPTH, "round {round}");
+
+            // Two frames, so both halves of the modeset rule are observable:
+            // the first commit after a resize sets the mode and the second
+            // flips onto it.
+            let before = log.lock().unwrap().commits.len();
+            frame(&mut ctx, &mut target, &batch)
+                .unwrap_or_else(|e| panic!("round {round} first frame at {:?}: {e}", mode.extent));
+            frame(&mut ctx, &mut target, &batch)
+                .unwrap_or_else(|e| panic!("round {round} second frame at {:?}: {e}", mode.extent));
+
+            let recording = log.lock().unwrap();
+            let since: Vec<bool> = recording.commits[before..]
+                .iter()
+                .map(|c| c.allow_modeset)
+                .collect();
+            assert_eq!(
+                since,
+                vec![true, false],
+                "round {round} at {:?}: a resize must modeset once and then stop",
+                mode.extent
+            );
+            // The display holds exactly the ring and nothing else. Every
+            // framebuffer from every earlier size has been given back.
+            assert_eq!(
+                recording.imported.len() - recording.released.len(),
+                DEPTH,
+                "round {round} at {:?}: {} imported, {} released",
+                mode.extent,
+                recording.imported.len(),
+                recording.released.len()
+            );
+        }
+    }
+
+    // One fewer than the resizes asked for: the target opens at the display's
+    // first mode, so the first round's first resize is to the size it already
+    // is and correctly costs nothing.
+    let switches = log.lock().unwrap().mode_sets;
+    assert_eq!(
+        switches,
+        6 * MODES.len() - 1,
+        "every resize but the opening no-op should have switched the mode"
+    );
+
+    target.destroy(&mut ctx);
+    let recording = log.lock().unwrap();
+    assert_eq!(
+        recording.imported.len(),
+        recording.released.len(),
+        "framebuffers leaked across the storm"
+    );
+    assert_validation_clean(&ctx);
+}
+
+/// A resize to the size it already is costs nothing.
+///
+/// Resize events that report the size already in force arrive routinely, and
+/// rebuilding a ring for each would churn every buffer on the display for no
+/// reason.
+#[test]
+fn resizing_to_the_size_it_already_is_rebuilds_nothing() {
+    let Some(mut ctx) = context() else { return };
+    if !exportable(&ctx) {
+        return;
+    }
+    let (output, log) = FakeOutput::new(display_formats(&ctx));
+    let mut target = DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3).expect("target");
+    let settled = target.extent();
+    let imported = log.lock().unwrap().imported.len();
+
+    for _ in 0..8 {
+        target.reconfigure(&mut ctx, settled).expect("reconfigure");
+    }
+
+    let recording = log.lock().unwrap();
+    assert_eq!(recording.imported.len(), imported, "the ring was rebuilt");
+    assert_eq!(recording.mode_sets, 0, "the mode was set for no change");
+    drop(recording);
+    assert_eq!(target.extent(), settled);
+    target.destroy(&mut ctx);
+    assert_validation_clean(&ctx);
+}
+
+/// A size no mode offers is refused where it was asked for.
+///
+/// A scanout buffer is the mode's size, because the plane is told to read a
+/// rectangle that big. This used to be accepted: the ring was rebuilt at the
+/// new size, the mode was left alone, and the *next* commit failed with
+/// `ENOSPC` naming nothing. The refusal has to arrive here, and it has to leave
+/// a target that still works -- a failed resize that destroyed the ring on the
+/// way out would turn a recoverable refusal into a dead display.
+#[test]
+fn a_size_no_mode_offers_is_refused_and_the_target_survives() {
+    let Some(mut ctx) = context() else { return };
+    if !exportable(&ctx) {
+        return;
+    }
+    let (output, log) = FakeOutput::new(display_formats(&ctx));
+    let mut target = DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3).expect("target");
+    let batch = scene();
+    let settled = target.extent();
+
+    let absent = Extent2D::new(777, 333);
+    assert!(
+        MODES.iter().all(|m| m.extent != absent),
+        "the size this asks for has to be one no mode offers"
+    );
+    let refused = target.reconfigure(&mut ctx, absent);
+    assert!(refused.is_err(), "a size no mode offers was accepted");
+    assert_eq!(log.lock().unwrap().mode_sets, 0, "the mode moved anyway");
+
+    // Unchanged and still usable, which is the half a refusal is easy to get
+    // wrong: nothing was torn down on the way to saying no.
+    assert_eq!(target.extent(), settled);
+    assert_eq!(target.ring_depth(), 3);
+    frame(&mut ctx, &mut target, &batch).expect("a frame after a refused resize");
+
+    target.destroy(&mut ctx);
     assert_validation_clean(&ctx);
 }

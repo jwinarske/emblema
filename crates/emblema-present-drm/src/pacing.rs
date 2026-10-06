@@ -119,9 +119,9 @@ impl Pacing {
     /// counter, so nothing before it is comparable with anything after. Warm-up
     /// starts over because the commit that follows sets the mode again.
     ///
-    /// Nothing calls this yet. `KmsOutput` never reports a reconfigure -- hotplug is
-    /// not detected -- so the branch is written for the shape of the problem rather
-    /// than for a caller that exists.
+    /// `KmsOutput::set_mode` calls this, which is the caller it was written for.
+    /// What still has no caller is the unsolicited half: hotplug is not detected,
+    /// so a mode that changes without being asked goes unnoticed here.
     pub fn restart(&mut self) {
         *self = Self::new();
     }

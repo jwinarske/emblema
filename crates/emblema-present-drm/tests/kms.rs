@@ -562,3 +562,125 @@ fn a_frame_with_layers_reaches_a_real_display_controller() {
         eprintln!("skipping: the validation layer is unavailable, so lifetimes went unchecked");
     }
 }
+
+/// A storm of resizes against a real display controller.
+///
+/// A resize here is a modeset: the plane is told to read a rectangle the size
+/// of the mode, so changing the buffer size without changing the mode makes the
+/// kernel refuse the whole atomic request. That is what this used to do --
+/// `reconfigure` accepted any extent, rebuilt the ring at it and left the mode
+/// alone, and the next `present` came back `ENOSPC` with nothing naming why.
+///
+/// Storming it is what a single resize cannot answer. Each round releases every
+/// framebuffer the controller holds and gives it new ones, so a framebuffer
+/// destroyed without its buffer objects closed, or a descriptor left behind by
+/// the export, accumulates into something a before-and-after of one resize
+/// would not show.
+///
+/// Three numbers are held across the storm: the framebuffers the output keeps,
+/// the descriptors this process keeps, and the count of commits that had to
+/// wait on the CPU -- which should be exactly one per modeset, the frame whose
+/// commit sets the mode and therefore withholds its fence.
+#[test]
+fn a_storm_of_resizes_neither_leaks_nor_breaks_the_commit() {
+    use emblema_hal_vulkan::VulkanHal;
+    use emblema_present::PresentTarget;
+    use emblema_present_drm::DrmScanoutTarget;
+
+    let (Some((output, _card)), Some(mut ctx)) = (output(), context()) else {
+        return;
+    };
+
+    // Distinct sizes, smallest first, at most three of them. A connector often
+    // lists the same size at several refresh rates, and resizing between two of
+    // those is not a resize. Smallest first and capped because the point is the
+    // number of rebuilds, not their area: a 4096x2160 ring is a hundred
+    // megabytes to allocate, export and import, several times over.
+    //
+    // The size the target will open at goes first by construction, not by
+    // hoping it survives the sort: the opening resize is then the no-op it
+    // would be anyway, and the count of modesets below follows from the rounds
+    // rather than from which modes this particular connector happens to list.
+    let settled = output.mode().extent;
+    let mut others: Vec<emblema_hal::Extent2D> = Vec::new();
+    for mode in output.modes() {
+        if mode.extent != settled && !others.contains(&mode.extent) {
+            others.push(mode.extent);
+        }
+    }
+    others.sort_by_key(|e| (e.width as u64) * (e.height as u64));
+    others.truncate(2);
+    if others.is_empty() {
+        eprintln!("skipping: this connector offers one size, so there is nothing to resize to");
+        return;
+    }
+    let mut extents = vec![settled];
+    extents.extend(others);
+    eprintln!("storming {extents:?}");
+
+    const DEPTH: usize = 3;
+    const ROUNDS: usize = 4;
+    let mut target = match DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, DEPTH) {
+        Ok(target) => target,
+        Err(e) => panic!("building the scanout target: {e}"),
+    };
+    let descriptors = open_descriptors();
+
+    let mut modesets = 0usize;
+    for round in 0..ROUNDS {
+        for extent in &extents {
+            let changed = target.extent() != *extent;
+            target
+                .reconfigure(&mut ctx, *extent)
+                .unwrap_or_else(|e| panic!("round {round} resize to {extent:?}: {e}"));
+            if changed {
+                modesets += 1;
+            }
+            assert_eq!(target.extent(), *extent, "round {round}");
+            assert_eq!(target.ring_depth(), DEPTH, "round {round}");
+
+            // Two frames: the first sets the mode, the second flips onto it.
+            for which in 0..2 {
+                let image = target.acquire(&mut ctx).expect("acquire");
+                let mut batch = Batch::new();
+                batch
+                    .push(
+                        &FULL,
+                        &QUAD,
+                        Material::solid([0.2, 0.6, 0.9, 1.0]),
+                        BlendMode::Src,
+                    )
+                    .expect("push");
+                let fence = ctx
+                    .submit_batch_deferred(image, &batch, PassDescriptor::clear([0.0; 4]))
+                    .expect("deferred submission");
+                target.set_frame_fence(fence).expect("attach the fence");
+                target
+                    .present(&mut ctx)
+                    .unwrap_or_else(|e| panic!("round {round}, frame {which} at {extent:?}: {e}"));
+            }
+
+            assert_eq!(
+                target.output().framebuffer_count(),
+                DEPTH,
+                "round {round} at {extent:?}: the controller is holding framebuffers from an \
+                 earlier size"
+            );
+        }
+    }
+
+    assert_eq!(
+        open_descriptors(),
+        descriptors,
+        "descriptors climbed across {ROUNDS} rounds of resizes"
+    );
+    // One per modeset and no more: the opening commit and each resize's first
+    // frame. A count above this means a frame blocked on the CPU that should
+    // have handed its fence to the kernel.
+    assert_eq!(
+        target.cpu_waits(),
+        modesets as u64 + 1,
+        "expected a stall only on each modesetting frame"
+    );
+    target.destroy(&mut ctx);
+}
