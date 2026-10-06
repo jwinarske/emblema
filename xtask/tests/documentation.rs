@@ -1556,7 +1556,7 @@ fn the_documents_count_the_drm_tests_correctly() {
     // and this guard went on reporting six.
     const TAKES_A_CARD: [&str; 2] = ["kms.rs", "writeback.rs"];
     const STAND_IN: [&str; 1] = ["scanout.rs"];
-    const NEEDS_NOTHING: [&str; 1] = ["in_formats.rs"];
+    const PARSER: [&str; 1] = ["in_formats.rs"];
 
     let test_files: Vec<String> = std::fs::read_dir(crate_root.join("tests"))
         .into_iter()
@@ -1570,7 +1570,7 @@ fn the_documents_count_the_drm_tests_correctly() {
         .filter(|name| {
             !TAKES_A_CARD.contains(&name.as_str())
                 && !STAND_IN.contains(&name.as_str())
-                && !NEEDS_NOTHING.contains(&name.as_str())
+                && !PARSER.contains(&name.as_str())
         })
         .collect();
     assert!(
@@ -1586,6 +1586,10 @@ fn the_documents_count_the_drm_tests_correctly() {
         .map(|name| tests_in(&crate_root.join("tests").join(name)))
         .sum();
     let scanout: usize = STAND_IN
+        .iter()
+        .map(|name| tests_in(&crate_root.join("tests").join(name)))
+        .sum();
+    let parser: usize = PARSER
         .iter()
         .map(|name| tests_in(&crate_root.join("tests").join(name)))
         .sum();
@@ -1608,9 +1612,10 @@ fn the_documents_count_the_drm_tests_correctly() {
     // The lesson `a_skip_says_the_word_the_census_counts` records: a check that
     // read nothing would pass every assertion below.
     assert!(
-        master > 0 && scanout > 0 && unit > 0,
-        "counted {master} master, {scanout} scanout and {unit} unit tests, \
-         so this read the wrong paths and would pass on anything"
+        master > 0 && scanout > 0 && parser > 0 && unit > 0,
+        "counted {master} master, {scanout} scanout, {parser} parser and \
+         {unit} unit tests, so this read the wrong paths and would pass on \
+         anything"
     );
     let flat = |name: &str| {
         doc(name)
@@ -1634,16 +1639,33 @@ fn the_documents_count_the_drm_tests_correctly() {
             &architecture,
             format!("{} tests in `emblema-present-drm`", spell(master)),
         ),
+        // Every bucket, not just the one the vkms lane cares about. With only
+        // `master` asserted live, a test added to any other file moved no
+        // number anywhere and the split went stale unnoticed.
+        (
+            "docs/architecture.md",
+            &architecture,
+            format!(
+                "the crate holds {} tests in all: {} taking drm master, {} \
+                 against the stand-in, {} over the `in_formats` parser and {} \
+                 unit",
+                spell(master + scanout + parser + unit),
+                spell(master),
+                spell(scanout),
+                spell(parser),
+                spell(unit),
+            ),
+        ),
     ] {
         assert!(
             text.contains(&stated),
             "{name} does not say \"{stated}\". The crate has {master} tests \
-             taking DRM master, {scanout} scanout and {unit} unit. Adding one \
-             means saying so."
+             taking DRM master, {scanout} scanout, {parser} parser and \
+             {unit} unit. Adding one means saying so."
         );
     }
 
-    // The Raspberry Pi 5 run of 2026-09-22, which is a measurement rather than
+    // The Raspberry Pi 5 run of 2026-10-06, which is a measurement rather than
     // a count of the tree. These were tied to the live counts, and that was
     // wrong in a way nothing would have caught: adding a test to the crate made
     // the guard demand a larger number in a sentence that says those tests
@@ -1653,15 +1675,24 @@ fn the_documents_count_the_drm_tests_correctly() {
         (
             "docs/on-a-board.md",
             &board,
-            "all thirty-four tests the crate held that day pass on the pi 5",
+            "all forty-six tests in `emblema-present-drm` pass on the pi 5",
         ),
         ("docs/on-a-board.md", &board, "nineteen unit,"),
-        ("docs/on-a-board.md", &board, "nine scanout,"),
-        ("docs/on-a-board.md", &board, "the six that take drm master"),
+        (
+            "docs/on-a-board.md",
+            &board,
+            "five over the `in_formats` parser,",
+        ),
+        (
+            "docs/on-a-board.md",
+            &board,
+            "twelve against the scanout stand-in,",
+        ),
+        ("docs/on-a-board.md", &board, "the ten that take drm master"),
         (
             "docs/architecture.md",
             &architecture,
-            "all six it had then pass, along with the twenty-eight scanout and unit tests",
+            "all ten that take master pass, along with the thirty-six beside them",
         ),
     ] {
         assert!(

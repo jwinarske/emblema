@@ -988,11 +988,16 @@ GPU, which closes the margin the architecture had been reasoning about.
 `docs/architecture.md` carries the measurement.
 
 **The KMS lane runs on a real display controller, not only on VKMS.** All
-thirty-four tests the crate held that day pass on the Pi 5 -- nineteen unit,
-nine scanout, and the six that take DRM master and commit a frame. The crate
-has grown since, and these are the run rather than the tree: what a later
-number would mean is that a board was run again, which is why nothing here
-updates them when a test is added. The board
+forty-six tests in `emblema-present-drm` pass on the Pi 5 -- nineteen unit,
+five over the `IN_FORMATS` parser, twelve against the scanout stand-in, and the
+ten that take DRM master and commit a frame. Measured 2026-10-06 at 9dc1a2e,
+on an idle board at 64.8 C.
+
+These are the run rather than the tree, so nothing updates them when a test is
+added: a later number means the board was run again. The figure stood at
+thirty-four for a while and was wrong in the understating direction even then,
+because the count left `in_formats.rs` out entirely -- which is the direction
+that reads as a gap someone might set out to fill. The board
 has two display controllers, `vc4` driving HDMI and `drm-rp1-dsi` driving the
 panel, and a separate `v3d` render node, which is the split render/display
 topology `architecture.md` says VKMS stands in for. It is now checked against

@@ -3554,7 +3554,11 @@ commit, the render-done fence latching before scanout, several frames flipping
 in turn, a framebuffer the output never imported being refused, a frame carrying
 layers, a sixty-frame run that holds its resource counts flat, a storm of
 resizes that holds the same counts across repeated modesets, and the three in
-`writeback.rs` that read back what the controller composited. They skip
+`writeback.rs` that read back what the controller composited. The crate holds
+forty-six tests in all: ten taking DRM master, twelve against the stand-in,
+five over the `IN_FORMATS` parser and nineteen unit. That is what it has, which
+is a different claim from what a board ran -- the figures for that are dated,
+in `docs/on-a-board.md`. They skip
 where there is no card, which is what CI is -- its runners load no such module,
 so nothing below is merge-blocking today. `cargo xtask drm` reports whether a
 given machine could host it.
@@ -3580,8 +3584,8 @@ exercises the cross-device dma-buf path on every merge.
 
 That claim has since been checked against the topology rather than the stand-in.
 On a Raspberry Pi 5 -- `vc4` and `drm-rp1-dsi` for display, `v3d` as a separate
-render node -- all six it had then pass, along with the twenty-eight scanout and
-unit tests beside them, measured 2026-09-22. So the VKMS lane is standing in for something that works, which is
+render node -- all ten that take master pass, along with the thirty-six beside
+them, measured 2026-10-06. So the VKMS lane is standing in for something that works, which is
 what makes finishing it worth doing rather than a hope.
 
 ### Pacing is counted in blanks, not in seconds
