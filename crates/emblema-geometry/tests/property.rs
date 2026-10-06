@@ -415,6 +415,24 @@ mod ear_clipping_agrees {
     use glam::Vec2;
     use proptest::prelude::*;
 
+    /// The contour's own area, by the shoelace formula.
+    ///
+    /// Absolute, because a contour's winding is the generator's accident and the
+    /// thing being compared is coverage. Exact for a simple polygon, which is
+    /// what makes it a better oracle than another tessellator's output -- see the
+    /// note at the comparison.
+    fn shoelace(contour: &[Vec2]) -> f32 {
+        let n = contour.len();
+        (0..n)
+            .map(|i| {
+                let (a, b) = (contour[i], contour[(i + 1) % n]);
+                a.x * b.y - b.x * a.y
+            })
+            .sum::<f32>()
+            .abs()
+            / 2.0
+    }
+
     fn area(vertices: &[Vec2], indices: &[u32]) -> f32 {
         indices
             .chunks_exact(3)
@@ -427,6 +445,68 @@ mod ear_clipping_agrees {
                 ((b - a).perp_dot(c - a) * 0.5).abs()
             })
             .sum()
+    }
+
+    /// The contour that showed the old oracle was the wrong one.
+    ///
+    /// Pinned rather than left to a seed: it took 4096 generated cases on a CI
+    /// runner to produce, and a regression file would only replay it while the
+    /// strategy's shape stayed the same. The ear clipper fills its own area,
+    /// 3550, and the general route's triangles sum to 3750 because two of them
+    /// overlap -- which is the whole reason the comparison is against the
+    /// contour now and not against that sum.
+    #[test]
+    fn the_contour_that_retired_the_lyon_oracle() {
+        let contour: Vec<Vec2> = [
+            (70.0, 50.0),
+            (100.0, 70.0),
+            (30.0, 110.0),
+            (70.0, 70.0),
+            (0.0, 60.0),
+            (80.0, 10.0),
+            (0.0, 0.0),
+            (90.0, 0.0),
+        ]
+        .iter()
+        .map(|&(x, y)| Vec2::new(x, y))
+        .collect();
+
+        let mut builder = Path::builder().with_fill_rule(FillRule::NonZero);
+        builder.move_to(contour[0]);
+        for p in &contour[1..] {
+            builder.line_to(*p);
+        }
+        builder.close();
+        let path = builder.build();
+
+        let mut tess = Tessellator::new();
+        let filled = tess.fill(&path, 0.25).clone();
+        assert_eq!(
+            filled.vertices, contour,
+            "this contour is supposed to take a fast path"
+        );
+        let own = shoelace(&contour);
+        assert!(
+            (own - 3550.0).abs() < 0.5,
+            "the contour's area is 3550, not {own}"
+        );
+        let fast = area(&filled.vertices, &filled.indices);
+        assert!(
+            (fast - own).abs() <= 0.01 * own,
+            "the fan filled {fast} where the contour is {own}"
+        );
+
+        // And the general route's sum really is the inflated figure, which is
+        // what makes this case worth keeping: if a lyon version stops
+        // overlapping here, this assertion is what says so.
+        let mut general = Tessellator::new();
+        let lyon = general.fill_general(&path, 0.25).clone();
+        let slow = area(&lyon.vertices, &lyon.indices);
+        assert!(
+            slow > own,
+            "the general route summed {slow}, which no longer exceeds the contour's {own} -- \
+             the overlap this case records may have been fixed, and the note above wants updating"
+        );
     }
 
     proptest! {
@@ -471,12 +551,45 @@ mod ear_clipping_agrees {
                 && filled.indices.len() == (n - 2) * 3
                 && filled.vertices == contour;
             if took_fast_path {
+                // The contour's own area, not another tessellator's output.
+                //
+                // This compared against `fill_general` until 2026-10-06, when a
+                // generated contour failed it 3550 against 3750 -- and the fast
+                // path was the one that was right. Both oracles were sums of
+                // triangle areas, which is only the covered area when the
+                // triangles do not overlap, and lyon's did: for
+                // `[(70,50), (100,70), (30,110), (70,70), (0,60), (80,10), (0,0), (90,0)]`
+                // its six triangles wind consistently and sum to 3750, where
+                // their union measures 3583 and 102 units of it are covered
+                // twice -- the triangle `(80,10) (70,50) (70,70)` sits inside
+                // `(80,10) (0,60) (70,70)`. The contour is simple: sampling the
+                // winding number gives the same area under non-zero and
+                // even-odd, 3550 either way, which is the shoelace area and is
+                // what the fan produced.
+                //
+                // So the oracle is the shoelace area now. For a contour
+                // `is_simple_polygon` accepted it is exact, it needs no second
+                // tessellator to be right, and it is a stronger claim than
+                // agreeing with one.
+                let fast = area(&filled.vertices, &filled.indices);
+                let own = shoelace(&contour);
+                prop_assert!(
+                    (fast - own).abs() <= 0.01 * own.max(1.0),
+                    "ear clipping filled {fast} where the contour's own area is {own}, for {contour:?}"
+                );
+
+                // And lyon still has something to say, which overlap does not
+                // spoil: a tessellation covers the shape, so the sum of its
+                // triangles cannot come to *less* than the shape's area. That is
+                // what would catch a contour `is_simple_polygon` wrongly
+                // accepted, where the fill rule has work to do that a fan cannot
+                // express.
                 let mut general = Tessellator::new();
                 let lyon = general.fill_general(&path, 0.25).clone();
-                let (fast, slow) = (area(&filled.vertices, &filled.indices), area(&lyon.vertices, &lyon.indices));
+                let slow = area(&lyon.vertices, &lyon.indices);
                 prop_assert!(
-                    (fast - slow).abs() <= 0.01 * slow.max(1.0),
-                    "ear clipping accepted a contour it fills differently: {fast} against {slow} for {contour:?}"
+                    slow >= own - 0.01 * own.max(1.0),
+                    "the general route covered {slow}, less than the contour's own {own}, for {contour:?}"
                 );
             }
         }

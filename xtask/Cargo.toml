@@ -17,6 +17,7 @@ emblema-core = { workspace = true }
 emblema-hal = { workspace = true }
 emblema-hal-vulkan = { workspace = true }
 emblema-hal-gles = { workspace = true }
+emblema-present = { workspace = true }
 emblema-present-drm = { workspace = true }
 emblema-testkit = { workspace = true }
 glow = { workspace = true }
