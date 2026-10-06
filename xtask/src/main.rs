@@ -39,6 +39,7 @@ mod gallery;
 mod gate;
 mod release;
 mod report;
+mod soak;
 mod verify;
 
 const USAGE: &str = "\
@@ -64,6 +65,12 @@ Commands:
                     Defaults to corpus.ppm.
   release           The order to publish this workspace's crates in, and what
                     each step needs. Prints; publishes nothing.
+  soak              Cycle the corpus on every device for a while, watching the
+                    resident size and the frame time for drift a short run
+                    cannot show. Reports; fails only where resident size rose
+                    in every bucket after the warm-up.
+                    --seconds N  per device, default 120.
+                    --skip NAME  as for bench.
   gate              Lint, format, build, the feature matrix and the suite,
                     stopping at the first failure. Exits non-zero if any step
                     did not pass.
@@ -308,6 +315,38 @@ fn main() {
             }
         }
         Some("release") => print!("{}", release::report()),
+        Some("soak") => {
+            let mut seconds = 120u64;
+            let mut skip: Vec<String> = Vec::new();
+            let mut args = rest.iter();
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--seconds" => {
+                        seconds = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                            eprintln!("soak: --seconds wants a whole number");
+                            std::process::exit(2);
+                        });
+                    }
+                    "--skip" => {
+                        skip.push(args.next().cloned().unwrap_or_else(|| {
+                            eprintln!("soak: --skip wants a device name to match");
+                            std::process::exit(2);
+                        }));
+                    }
+                    other => {
+                        eprintln!("soak: unknown argument {other}");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            match soak::run(seconds, &skip) {
+                Ok(text) => print!("{text}"),
+                Err(text) => {
+                    println!("{text}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("help") | Some("--help") | Some("-h") | None => print!("{USAGE}"),
         Some(other) => {
             // Named rather than merely refused, and alongside what does exist,
