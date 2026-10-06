@@ -88,6 +88,34 @@ pub enum OutputEvent {
 pub trait ScanoutOutput {
     fn mode(&self) -> Mode;
 
+    /// Modes this output can be driven at, preferred first.
+    ///
+    /// What a caller may resize *to*. A display's geometry is the display's to
+    /// offer, so a size that is not in here is not a size this output has.
+    ///
+    /// The default is the one mode it is at, which is the truth for an output
+    /// that cannot switch.
+    fn modes(&self) -> Vec<Mode> {
+        vec![self.mode()]
+    }
+
+    /// Switch to one of [`Self::modes`].
+    ///
+    /// The commit after this has to set the mode; a flip alone would put the
+    /// new buffers on a pipeline still configured for the old size, which the
+    /// kernel refuses outright.
+    ///
+    /// The default accepts the mode it is already at and refuses every other,
+    /// which is what an output with one mode can honestly say.
+    fn set_mode(&mut self, mode: Mode) -> Result<()> {
+        if mode == self.mode() {
+            return Ok(());
+        }
+        Err(emblema_hal::Error::Unsupported(
+            "this output cannot change mode",
+        ))
+    }
+
     /// Formats and layouts the plane can scan out.
     ///
     /// One half of negotiation. A plane that advertised nothing would leave the

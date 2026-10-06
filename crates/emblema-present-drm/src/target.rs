@@ -396,10 +396,32 @@ where
         Ok(())
     }
 
+    /// Drive the output at another of its modes, and rebuild the ring for it.
+    ///
+    /// A scanout buffer's size is the mode's, not the caller's: the plane is
+    /// told to read a rectangle the size of the mode, so a framebuffer of any
+    /// other size makes the kernel refuse the whole atomic request. This used
+    /// to accept any extent, rebuild the ring at it, and leave the mode alone
+    /// -- so the call succeeded and the *next* `present` failed with `ENOSPC`,
+    /// naming nothing. An extent no mode offers is now refused here, at the
+    /// call that asked for it.
+    ///
+    /// The mode is resolved and switched before anything is released, so a
+    /// refusal leaves the target exactly as it was rather than without a ring.
     fn reconfigure(&mut self, ctx: &mut H::Context, extent: Extent2D) -> Result<()> {
         if extent == self.extent && !self.slots.is_empty() {
             return Ok(());
         }
+        let wanted = self
+            .output
+            .modes()
+            .into_iter()
+            .find(|mode| mode.extent == extent)
+            .ok_or(Error::Unsupported(
+                "no mode at that size; an output can only be resized to a mode it offers",
+            ))?;
+        self.output.set_mode(wanted)?;
+
         let depth = self.slots.len().max(2);
         let modifiers = vec![emblema_hal::Modifier::LINEAR];
         // Everything is rebuilt: a new mode means new buffer dimensions, and a
