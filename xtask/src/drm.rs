@@ -36,6 +36,17 @@ impl Node {
             .iter()
             .any(|(_, status)| status == "connected")
     }
+
+    /// Whether this node can hand back what it composited.
+    ///
+    /// A writeback connector is what `writeback.rs` compares pixels through,
+    /// and it never reports itself connected -- it has nothing plugged into it
+    /// -- so [`Self::has_connected_output`] does not see it.
+    pub fn has_writeback(&self) -> bool {
+        self.connectors
+            .iter()
+            .any(|(name, _)| name.starts_with("Writeback"))
+    }
 }
 
 /// What the machine offers the scanout lane.
@@ -221,6 +232,24 @@ pub fn text(survey: &Survey) -> String {
                 .join(", ")
         );
     }
+    let writeback: Vec<&Node> = survey.nodes.iter().filter(|n| n.has_writeback()).collect();
+    if writeback.is_empty() {
+        out.push_str(
+            "\nNo node offers a writeback connector, so the comparison that reads back\n\
+             what the controller composited is skipped here.\n",
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "\nWriteback, which the composition comparison reads back through: {}.",
+            writeback
+                .iter()
+                .map(|n| n.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
     if !survey.vkms_loaded && survey.vkms_available {
         out.push_str("\n  sudo modprobe vkms\n");
     }

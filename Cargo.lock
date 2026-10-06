@@ -294,6 +294,7 @@ dependencies = [
  "emblema-hal",
  "emblema-hal-vulkan",
  "emblema-present",
+ "emblema-testkit",
  "log",
  "proptest",
  "rustix",
