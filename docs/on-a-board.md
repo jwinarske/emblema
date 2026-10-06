@@ -1993,42 +1993,69 @@ Four things were ruled out on the way to the mechanism below.
 
 ### What it is: the heap the export lands in, measured 2026-10-06
 
-`VulkanContext::create_exportable_texture` asks `find_memory_type` for
-`DEVICE_LOCAL` and nothing else, and that function returns the *first* matching
-type. Changing which type it lands in is the whole of it. Three placements of
-the same image, everything else held, with the frame read back three ways --
-through Vulkan, through a userspace `mmap` of the exported fd, and through the
-controller's own composition:
+`crates/emblema-present-drm/examples/read-the-export.rs` is the bare-API
+reproduction, in the sense `compile-shaders` is one: plain `ash` and `drm`, no
+renderer, no shaders, no pipeline. It allocates a linear `B8G8R8A8` image with
+an explicit memory type, fills it **from a staging buffer** so the bytes are the
+program's rather than a GPU's, and reads it back three ways -- through Vulkan,
+through a userspace `mmap` of the exported descriptor, and through `vkms`
+compositing it to a writeback connector, which is the kernel reading the same
+memory with `dma_buf_vmap`. The pattern's green channel is the row index, so a
+row read from the wrong place says where it came from.
 
-| memory type | heap | `mmap` of the dma-buf | the controller's composition |
-|---|---|---|---|
-| 0, `DEVICE_LOCAL` | device | **`EPERM`** | wrong, 512 of 768 rows |
-| 3, `DEVICE_LOCAL \| HOST_VISIBLE \| HOST_COHERENT` | device | correct, 0 of 768 rows differ from the Vulkan readback | **still wrong**, 73.9% of pixels |
-| 2, `HOST_VISIBLE \| HOST_COHERENT` | host | correct | **right -- all three tests pass** |
+```
+cargo run -p emblema-present-drm --example read-the-export --release
+```
 
-The middle row is the one that settles it. **CPU-visibility of the pages is not
-the discriminator**: at type 3 a plain userspace map of the very same file
-descriptor returns the frame exactly, byte for byte against what the GPU wrote,
-and the kernel's own read of it is still wrong. What changes between the row
-that fails and the row that passes is the *heap* -- which is to say the
-placement, system memory against the device's own -- and not whether a CPU can
-reach it.
+One run, the three placements an exportable linear image accepts here:
 
-So the disagreement needs a reader that maps the import in the kernel, which is
-what `vkms` does when it composites and what no real controller does. A Pi 5
-proves the other side of that: `vc4` compositing a frame V3D exported matches to
-within a byte, recorded above.
+```
+placement device-local:   type 0, heap 1
+  through Vulkan:   matches the pattern
+  through mmap:     failed, Operation not permitted
+  through the CRTC: 512 rows wrong, first at 0, whose green says row 255
+placement both:           type 3, heap 1
+  through Vulkan:   matches the pattern
+  through mmap:     matches the pattern
+  through the CRTC: 512 rows wrong, first at 0, whose green says row 112
+placement host-visible:   type 2, heap 0
+  through Vulkan:   matches the pattern
+  through mmap:     matches the pattern
+  through the CRTC: matches the pattern
+```
 
-**What is not established** is whose it is to fix. The remaining step is a
-bare-API reproduction -- plain `ash` allocating, filling and exporting, with no
-renderer in it -- and this document's rule is that a driver is not named before
-one exists. Nothing above names one; it reports which knob moves the outcome.
+**The middle row is what rules out the obvious answer.** At type 3 a plain
+userspace map of the very same file descriptor returns the frame exactly, byte
+for byte against what the GPU wrote, and the kernel's own read of it is still
+wrong. So CPU-visibility of the pages is not the discriminator.
 
-**The fraction is stable but not invariant.** Six consecutive runs at type 0
-read 524,288 of 786,432 pixels every time. One run immediately after a rebuild
-read 581,448. The wrong region holds whatever else is resident, so its extent
-can move; a reader reproducing this should expect the shape rather than the
-number.
+What is invariant across every series run so far, both usages and both fill
+paths: **an export in the host heap is read correctly, every time.** What is
+*not* invariant is the rest of it, and an earlier version of this section said
+otherwise.
+
+- The amount wrong changes between series: 512 rows of 768, or 256, at the same
+  size and placement.
+- A series has been seen where **device-local was read correctly five runs
+  running**, so "the device heap always fails" is not true either.
+- Within a series it is rigid. Ten consecutive runs gave byte-identical
+  verdicts; the answer changed only after a rebuild, which is also when the
+  figure first moved under the test harness.
+
+So the device heap is unreliable here rather than reliably wrong, which fits a
+read of whatever else is resident at that address: stable while the allocation
+pattern is, different once something else has moved.
+
+`COLOR_ATTACHMENT` on the image was suspected, since the renderer asks for it
+and the reproduction does not. `--attachment` adds it. It changes nothing.
+
+**Whose it is to fix is still not established, and nothing here names a
+driver.** What the reproduction buys is the thing the lavapipe one bought:
+"our code is contributing" is no longer among the possibilities.
+
+The test harness says the same from its own side: six consecutive runs at
+type 0 read 524,288 of 786,432 pixels wrong, and one run immediately after a
+rebuild read 581,448.
 
 What the test does about it is take the software device by default, which is the
 device the ladder names for this rung anyway and the one CI would have. That
