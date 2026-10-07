@@ -1808,8 +1808,10 @@ Three tile architectures now agree on direction and roughly on size: 68 per cent
 services and the ninety-ninth percentiles are wide -- but the medians repeat to under a
 per cent across runs, which is enough for a two-thirds effect.
 
-**i.MX8MP, Vivante GC7000UL: the device half does not run at all, and that is not this
-change's doing.** `cargo xtask bench` segfaults in the Vulkan section -- exit 139, `sig=11`
+**i.MX8MP, Vivante GC7000UL: the device half does not run on a stock driver stack, and that
+is not this change's doing.** It *does* run behind an inlining layer; the section below has
+that, and it is the correction to the sentence this used to open with, which was "does not
+run at all". `cargo xtask bench` segfaults in the Vulkan section -- exit 139, `sig=11`
 in the kernel audit log -- and the binary built from the commit *before* occlusion culling
 segfaults in the same place. So it is a standing fault on that device rather than something
 to attribute here.
@@ -1846,6 +1848,34 @@ it always gave --
 `SOLID_SPV` holds **51 `OpCompositeConstruct` in 18 non-entry functions**
 against 2 in its two entry points, so a rule about *called functions* rather
 than about *parameters* would fit everything measured just as well.
+
+### The whole Vulkan backend runs there behind an inlining layer, 2026-10-07
+
+An implicit Vulkan layer that runs SPIRV-Tools' exhaustive inlining pass over
+every shader module before the driver sees it is available for this board. With
+it loaded, **the Vulkan backend works**:
+
+| binary | with the layer | with `VIV_SPV_INLINE_DISABLE=1` |
+|---|---|---|
+| `draw` | 10 passed | `exit=139` |
+| `batch` | 8 passed | -- |
+| `pixels` | 8 passed | -- |
+| `blend` | 10 passed | -- |
+
+Thirty-six tests on a device this document called unable to create a pipeline.
+Six modules get rewritten per run. The layer is a prebuilt binary that this
+repository does not ship or track, so nothing here depends on it and the A/B
+above is how a claim about it gets made: loaded (the loader's own
+`Insert instance layer` line), doing work (an `inlined module` line per
+module), and still crashing when disabled.
+
+**What that says about the second trigger.** Inlining removes every call, and
+it fixes this. So whatever reaches emblema is call-related, like the
+documented pattern and unlike it: taking `solid.wgsl` to zero direct
+value-parameter operands changed nothing, and removing the calls entirely
+fixes everything. The shape is narrower than "any call" and wider than "a
+value parameter in a composite construct", and bisecting `solid.wgsl` is still
+what would name it.
 
 ### Which it is: the rule is narrow, and it is not ours
 
