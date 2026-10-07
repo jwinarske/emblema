@@ -23,3 +23,4 @@ emblema-shaders = { workspace = true }
 # pkg-config at link time, which breaks clean cross-builds and is banned by
 # deny.toml.
 khronos-egl = { workspace = true }
+libloading = { workspace = true }

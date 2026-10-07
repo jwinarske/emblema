@@ -344,15 +344,14 @@ fn the_frame_loop_actually_renders() {
 /// backend code, the same scene, the same call sequence. So whatever this is,
 /// the sequence this renderer issues is not sufficient to produce it.
 ///
-/// No other driver on this bench can weigh in, and the reason is this
-/// renderer's rather than the boards'. V3D on a Raspberry Pi 5 genuinely has no
-/// `advanced_blend`. The other two have it -- the i.MX8MP's Vivante and the
-/// SA8155P's Adreno both advertise `GL_KHR_blend_equation_advanced` -- and
-/// neither can be reached, because `DisplayTarget` has one variant and it
-/// demands `EGL_MESA_platform_surfaceless`, which no vendor stack carries. The
-/// Vivante stack has `EGL_KHR_surfaceless_context` and `EGL_KHR_platform_gbm`,
-/// so a GBM display target would reach it. `docs/on-a-board.md` has the
-/// reading. Two drivers is the whole sample until that exists.
+/// Four drivers now, three of them vendor stacks on real hardware, and
+/// `radeonsi` is the only one: zero levels on `llvmpipe`, on the i.MX8MP's
+/// Vivante GC7000UL and on the SA8155P's Adreno 640. The two boards were
+/// unreachable until `DisplayTarget::Gbm` existed -- neither has the Mesa
+/// surfaceless *platform* the backend used to demand, though both have the
+/// surfaceless *context* extension and `libgbm`. V3D on a Raspberry Pi 5 is
+/// the one real absence: no `advanced_blend` at all. `docs/on-a-board.md` has
+/// the table.
 ///
 /// No mechanism is written down here. The shape points at something reading
 /// texels nothing wrote this frame, and the dependence on the previous frame's

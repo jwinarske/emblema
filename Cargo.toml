@@ -68,6 +68,10 @@ glow = "0.14"
 # NEVER enable the "static" feature: it requires libEGL plus pkg-config at link
 # time, which breaks clean cross-builds. "dynamic" dlopens libEGL at runtime.
 khronos-egl = { version = "6", features = ["dynamic"] }
+# `DisplayTarget::Gbm` dlopens libgbm for two symbols, for the same reason
+# khronos-egl is "dynamic": linking it would need libgbm and pkg-config at
+# link time and break clean cross-builds.
+libloading = "0.8"
 
 # --- presentation ---
 raw-window-handle = "0.6"

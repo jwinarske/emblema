@@ -2085,43 +2085,40 @@ mode would read as a hang on a large one.
 *Vulkan*. Comparing against software *GLES* is what nobody had done, and it is
 one command:
 
-| driver | reduced instability |
-|---|---|
-| `radeonsi` (raphael_mendocino) | **3 levels** |
-| `llvmpipe` (LLVM 22.1.8) | **0 -- stable** |
+| driver | device | reduced instability |
+|---|---|---|
+| `radeonsi` (raphael_mendocino) | workstation | **3 levels** |
+| `llvmpipe` (LLVM 22.1.8) | workstation | 0 -- stable |
+| Vivante GC7000UL, `V6.4.11.p2.745085` | i.MX8MP | 0 -- stable |
+| Adreno 640, OpenGL ES 3.2 | SA8155P | 0 -- stable |
 
-Same backend code, same scene, same call sequence. So the sequence this
-renderer issues is not sufficient to produce it, and the bare-GLES
-reproduction that is still owed now has both a target and a control: it has to
-come out unstable on `radeonsi` and clean on `llvmpipe`, and one that fails on
-both is reproducing something else.
+Same backend code, same scene, same call sequence, four drivers, three of them
+vendor stacks on real hardware. **`radeonsi` is the only one.** So the sequence
+this renderer issues is not sufficient to produce it, and the bare-GLES
+reproduction that is still owed has a target and three controls: unstable on
+`radeonsi` and clean on the rest, or it is reproducing something else.
 
 **Two drivers is the whole sample, and the reason is worth recording** because
 it looks like a gap someone could close and is not:
 
 - **V3D on a Raspberry Pi 5** has no `advanced_blend`, so the test skips. The
   combination needs it twice over.
-- **Adreno 640 on the SA8155P** and **Vivante GC7000UL on the i.MX8MP** both
-  have the capability, and neither can be reached. That is a limit of this
-  renderer rather than of those boards, and the first draft of this section
-  said otherwise.
+- **V3D on a Raspberry Pi 5** genuinely has no `advanced_blend`; the test
+  skips there and that is the hardware.
+- **Vivante GC7000UL and Adreno 640 were unreachable, and that was this
+  renderer's doing.** Both run now.
 
-`DisplayTarget` has exactly one variant and it demands
+`DisplayTarget` had one variant and it demanded
 **`EGL_MESA_platform_surfaceless`**, a Mesa client extension no vendor stack
-carries. What the i.MX8MP offers instead, read off `libEGL.so.1.5.0`:
-`EGL_KHR_surfaceless_context`, `EGL_KHR_platform_gbm`, `EGL_EXT_device_drm`
-and `EGL_EXT_device_query`. So the *context* this backend wants is available
-there and only the way it asks for the *display* is not. And
-`libGLESv2.so.2.0.0` advertises `GL_KHR_blend_equation_advanced`, which is
-exactly what V3D lacks. The Adreno's `libGLESv2` advertises it too, with
-`_coherent` beside it; its EGL platforms could not be read out of the binary
-and want a runtime query.
-
-So a **GBM display target** would reach two more GLES drivers that have what
-this test needs. It is a smaller change than it sounds: with
-`EGL_KHR_surfaceless_context` present, no surface is needed, only another way
-to get a display, and everything downstream is the code that already runs. It
-would also give the bench the Adreno and Vivante GLES rows it has never had.
+carries, so the backend refused before asking either board anything. Neither
+needs a surface -- both have `EGL_KHR_surfaceless_context`, which is the
+*context* extension -- and both ship `libgbm` and advertise
+`EGL_KHR_platform_gbm`, which is another way to get a display. A
+[`DisplayTarget::Gbm`] variant was added for that, and a request for
+surfaceless on a stack without the Mesa platform now falls back to it rather
+than failing. Two consequences beyond this investigation: the bench can have
+Adreno and Vivante GLES rows for the first time, and `a_context_reports_...`
+and the other ten GLES context tests pass on both boards.
 
 **A claim above is wrong and is corrected here.** "There is no GLES device on
 that board" was written of the i.MX8MP. There is one, with the right
