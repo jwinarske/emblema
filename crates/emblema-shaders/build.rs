@@ -43,6 +43,24 @@ fn main() {
         generated.push_str(&compile(path));
     }
 
+    // Every module in one table, built by the same walk, so a check that has
+    // to hold for all of them does not depend on a list somebody remembers to
+    // extend when a shader is added.
+    generated.push_str(
+        "\n/// Every SPIR-V module this crate emits, by the name of its source.\npub static MODULES: &[(&str, &[u32])] = &[\n",
+    );
+    for path in &entries {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("shader file name");
+        generated.push_str(&format!(
+            "    (\"{stem}.wgsl\", {}_SPV),\n",
+            stem.to_uppercase().replace('-', "_")
+        ));
+    }
+    generated.push_str("];\n");
+
     std::fs::write(out_dir.join("shaders.rs"), generated).expect("writing generated shaders");
 
     // The sources themselves, for the tests that ask questions about them --

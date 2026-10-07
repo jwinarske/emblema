@@ -1908,11 +1908,44 @@ Bisection cost eight board runs and the board answers in seconds. The two
 guesses before it cost more than that and were both wrong, which is the whole
 argument for having gone to it earlier.
 
-**An in-source fix now looks possible and is not done here.** Routing each of
-the seven operands through a `var` would make it a load, which the table above
-says is safe -- seven edits, each needing care that it does not change what the
-shader computes, and revalidation across the four drivers the bench has. That
-is its own piece of work. What is settled is the rule.
+### The in-source fix, done: Vulkan runs there on a stock stack
+
+Each of the seven operands now goes through a `var`, which makes it a load --
+`called-extract-var` in the probe is that shape and passes. Six of the edits
+are a local `var`; the seventh needed a function, `rounded_rect_space`, because
+`shade`'s `case 7` arm is an expression with nowhere to put one.
+
+**Measured on the i.MX8MP with `VIV_SPV_INLINE_DISABLE=1`, so no layer is in
+play:**
+
+| binary | before | after |
+|---|---|---|
+| `draw` | `exit=139` | 9 passed |
+| `batch` | `exit=139` | 8 passed |
+| `pixels` | `exit=139` | 8 passed |
+| `blend` | `exit=139` | 10 passed |
+
+Thirty-five tests, on a stock driver stack, where the first pipeline used to
+segfault. The layer is no longer needed for this renderer; it stays the answer
+for anything else that hits the same decoder.
+
+**It changes no pixels.** The gate's seventy-four corpus scenes still match
+their stored images, and every cross-backend and cross-device comparison is
+unchanged -- which is the thing to check, since seven edits to a shader for a
+driver's sake is exactly where a quiet rendering change would hide.
+
+**What it costs**: `solid.wgsl`'s SPIR-V goes from 9,974 words to 10,234, two
+and a half per cent, and the GLSL gains the same stores and loads. Whether
+that moves a frame is unmeasured. `shader-cost-is-a-step-function` says shader
+changes can move cost in steps and that the two backends want opposite shapes,
+so `cargo xtask bench --check` on a board is what would say, and it has not
+been run.
+
+`the_shader_builds_no_vector_from_a_parameter` in `emblema-shaders` is what
+keeps the seven from being tidied away by someone who does not know why they
+are there. It reads the built SPIR-V rather than the WGSL, covers every module
+through a table `build.rs` emits, and names the file and the count when it
+fails.
 
 **What that says about the second trigger.** Inlining removes every call, and
 it fixes this. So whatever reaches emblema is call-related, like the

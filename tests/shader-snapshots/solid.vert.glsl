@@ -56,14 +56,14 @@ float cubic_weight(float x) {
     return 0.0;
 }
 
-vec2 tile_uv(vec2 uv_1, float tile_1) {
+vec2 tile_uv(vec2 uv_3, float tile_1) {
     if (((tile_1 > 0.5) && (tile_1 < 1.5))) {
-        return fract(uv_1);
+        return fract(uv_3);
     }
     if ((tile_1 > 2.5)) {
-        return (vec2(1.0) - abs((vec2(1.0) - (uv_1 - (2.0 * floor((uv_1 * 0.5)))))));
+        return (vec2(1.0) - abs((vec2(1.0) - (uv_3 - (2.0 * floor((uv_3 * 0.5)))))));
     }
-    return clamp(uv_1, vec2(0.0), vec2(1.0));
+    return clamp(uv_3, vec2(0.0), vec2(1.0));
 }
 
 float coverage_of(float distance_, float per_pixel, float width) {
@@ -77,7 +77,10 @@ float coverage_of(float distance_, float per_pixel, float width) {
 }
 
 float rounded_rect_distance(vec2 point, vec2 half_size, float radius) {
-    vec2 q = ((abs(point) - half_size) + vec2(radius));
+    float r = 0.0;
+    r = radius;
+    float _e6 = r;
+    vec2 q = ((abs(point) - half_size) + vec2(_e6));
     return ((min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0)))) - radius);
 }
 
@@ -246,9 +249,11 @@ float separable_b(int mode_1, float cb_2, float cs_2) {
 }
 
 vec4 blend_tint(int mode_2, vec4 src, vec4 dst) {
+    float sa = 0.0;
+    float da = 0.0;
     vec3 mixed = vec3(0.0);
-    float sa = src.w;
-    float da = dst.w;
+    sa = src.w;
+    da = dst.w;
     switch(mode_2) {
         case 0: {
             return vec4(0.0);
@@ -260,31 +265,43 @@ vec4 blend_tint(int mode_2, vec4 src, vec4 dst) {
             return dst;
         }
         case 3: {
-            return (src + (dst * (1.0 - sa)));
+            float _e9 = sa;
+            return (src + (dst * (1.0 - _e9)));
         }
         case 4: {
-            return (dst + (src * (1.0 - da)));
+            float _e14 = da;
+            return (dst + (src * (1.0 - _e14)));
         }
         case 5: {
-            return (src * da);
+            float _e19 = da;
+            return (src * _e19);
         }
         case 6: {
-            return (dst * sa);
+            float _e21 = sa;
+            return (dst * _e21);
         }
         case 7: {
-            return (src * (1.0 - da));
+            float _e23 = da;
+            return (src * (1.0 - _e23));
         }
         case 8: {
-            return (dst * (1.0 - sa));
+            float _e27 = sa;
+            return (dst * (1.0 - _e27));
         }
         case 9: {
-            return ((src * da) + (dst * (1.0 - sa)));
+            float _e31 = da;
+            float _e33 = sa;
+            return ((src * _e31) + (dst * (1.0 - _e33)));
         }
         case 10: {
-            return ((dst * sa) + (src * (1.0 - da)));
+            float _e38 = sa;
+            float _e40 = da;
+            return ((dst * _e38) + (src * (1.0 - _e40)));
         }
         case 11: {
-            return ((src * (1.0 - da)) + (dst * (1.0 - sa)));
+            float _e45 = da;
+            float _e49 = sa;
+            return ((src * (1.0 - _e45)) + (dst * (1.0 - _e49)));
         }
         case 12: {
             return min((src + dst), vec4(1.0));
@@ -296,20 +313,33 @@ vec4 blend_tint(int mode_2, vec4 src, vec4 dst) {
             break;
         }
     }
-    vec3 cs_3 = clamp(((sa <= 0.0) ? vec3(0.0) : (src.xyz / vec3(sa))), vec3(0.0), vec3(1.0));
-    vec3 cb_3 = clamp(((da <= 0.0) ? vec3(0.0) : (dst.xyz / vec3(da))), vec3(0.0), vec3(1.0));
+    float _e60 = sa;
+    float _e65 = sa;
+    vec3 cs_3 = clamp(((_e65 <= 0.0) ? vec3(0.0) : (src.xyz / vec3(_e60))), vec3(0.0), vec3(1.0));
+    float _e75 = da;
+    float _e80 = da;
+    vec3 cb_3 = clamp(((_e80 <= 0.0) ? vec3(0.0) : (dst.xyz / vec3(_e75))), vec3(0.0), vec3(1.0));
     if ((mode_2 >= 25)) {
-        vec3 _e74 = nonseparable_b(mode_2, cb_3, cs_3);
-        mixed = _e74;
+        vec3 _e92 = nonseparable_b(mode_2, cb_3, cs_3);
+        mixed = _e92;
     } else {
-        float _e77 = separable_b(mode_2, cb_3.x, cs_3.x);
-        float _e80 = separable_b(mode_2, cb_3.y, cs_3.y);
-        float _e83 = separable_b(mode_2, cb_3.z, cs_3.z);
-        mixed = vec3(_e77, _e80, _e83);
+        float _e95 = separable_b(mode_2, cb_3.x, cs_3.x);
+        float _e98 = separable_b(mode_2, cb_3.y, cs_3.y);
+        float _e101 = separable_b(mode_2, cb_3.z, cs_3.z);
+        mixed = vec3(_e95, _e98, _e101);
     }
-    vec3 _e90 = mixed;
-    vec3 rgb = ((((sa * (1.0 - da)) * cs_3) + ((sa * da) * _e90)) + (((1.0 - sa) * da) * cb_3));
-    return vec4(rgb, (sa + (da * (1.0 - sa))));
+    float _e103 = sa;
+    float _e104 = da;
+    float _e109 = sa;
+    float _e110 = da;
+    vec3 _e112 = mixed;
+    float _e115 = sa;
+    float _e118 = da;
+    vec3 rgb = ((((_e103 * (1.0 - _e104)) * cs_3) + ((_e109 * _e110) * _e112)) + (((1.0 - _e115) * _e118) * cb_3));
+    float _e122 = sa;
+    float _e123 = da;
+    float _e124 = sa;
+    return vec4(rgb, (_e122 + (_e123 * (1.0 - _e124))));
 }
 
 float ordered_dither(vec2 frag) {
