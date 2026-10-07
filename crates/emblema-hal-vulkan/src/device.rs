@@ -29,7 +29,29 @@ pub enum DevicePreference {
     /// the oracle other backends are diffed against.
     Software,
     /// A specific index into the enumeration order.
+    ///
+    /// Not stable across processes: the order depends on the loader, on which ICDs are installed and
+    /// on their own order. Useful for a test that has just enumerated, and not for a host that wants
+    /// a particular GPU -- which is what the two below are for.
     Index(usize),
+    /// The device whose `VkPhysicalDeviceIDProperties::deviceUUID` matches.
+    ///
+    /// The stable name for a GPU: the same sixteen bytes across processes, loaders and ICD order, and
+    /// the same ones a compositor or another API reports for the same device. This is what a host
+    /// that must share frames should ask for -- a dma-buf import across two physical devices costs a
+    /// copy or fails outright, and two devices' DRM modifier sets need not intersect at all.
+    Uuid([u8; 16]),
+    /// The device whose DRM render node matches, by device number.
+    ///
+    /// For a host that starts from a DRM fd rather than a UUID -- a compositor usually does. Read
+    /// through `VK_EXT_physical_device_drm`, so a driver without that extension can never match, and
+    /// a device that reports no render node is skipped rather than guessed at.
+    RenderNode {
+        /// Major device number of the render node, as `stat` reports it.
+        major: i64,
+        /// Minor device number.
+        minor: i64,
+    },
 }
 
 /// How to create a context.
@@ -572,6 +594,30 @@ impl VulkanContext {
 
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// This device's UUID, the stable sixteen bytes that name the GPU.
+    ///
+    /// What a host passes to [`DevicePreference::Uuid`] to come back to the same device, and what it
+    /// compares against the UUID a compositor or another API reports -- the same bytes name the same
+    /// GPU across processes, loaders and ICD order, which an enumeration index does not.
+    ///
+    /// Also how a host *confirms* it landed where it meant to, which matters because landing on the
+    /// wrong GPU does not fail here: it fails later, at a dma-buf import, somewhere that cannot say
+    /// why.
+    #[must_use]
+    pub fn device_uuid(&self) -> [u8; 16] {
+        device_uuid(&self.instance, self.physical_device)
+    }
+
+    /// This device's DRM render node as `(major, minor)`, or `None` when it reports none.
+    ///
+    /// `None` for a driver without `VK_EXT_physical_device_drm`, and for one that has it and says it
+    /// has no render node. A caller matching on a node cannot use either, so they are not
+    /// distinguished -- see [`DevicePreference::RenderNode`].
+    #[must_use]
+    pub fn render_node(&self) -> Option<(i64, i64)> {
+        device_render_node(&self.instance, self.physical_device)
     }
 
     /// The descriptor set layout every pipeline is built against.
@@ -1118,7 +1164,93 @@ fn select_physical_device(
             })
             .copied()
             .ok_or(Error::Unsupported("no software rasterizer present")),
+        // No match is an error rather than a fallback to `Auto`, for both of these. A host asking for
+        // a particular GPU is asking because the wrong one does not work -- it shares frames with a
+        // compositor on that device -- so quietly handing it another is worse than refusing: the
+        // import fails later, somewhere that cannot say why.
+        DevicePreference::Uuid(wanted) => devices
+            .iter()
+            .find(|pd| device_uuid(instance, **pd) == wanted)
+            .copied()
+            .ok_or_else(|| Error::Backend {
+                backend: "vulkan",
+                detail: format!(
+                    "no device with uuid {}; {} present: {}",
+                    hyphenated(&wanted),
+                    devices.len(),
+                    devices
+                        .iter()
+                        .map(|pd| hyphenated(&device_uuid(instance, *pd)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
+        DevicePreference::RenderNode { major, minor } => devices
+            .iter()
+            .find(|pd| device_render_node(instance, **pd) == Some((major, minor)))
+            .copied()
+            .ok_or_else(|| Error::Backend {
+                backend: "vulkan",
+                detail: format!(
+                    "no device with render node {major}:{minor}; {} present: {}",
+                    devices.len(),
+                    devices
+                        .iter()
+                        .map(|pd| match device_render_node(instance, *pd) {
+                            Some((major, minor)) => format!("{major}:{minor}"),
+                            None => "none".to_owned(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
     }
+}
+
+/// A device's UUID, the stable sixteen bytes that name it.
+///
+/// Core in Vulkan 1.1, which is what the instance asks for, so this needs no extension and cannot
+/// fail: a driver that reported nothing would leave the zeroes the struct defaults to, which no real
+/// device matches.
+fn device_uuid(instance: &ash::Instance, pd: vk::PhysicalDevice) -> [u8; 16] {
+    let mut id = vk::PhysicalDeviceIDProperties::default();
+    let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut id);
+    unsafe { instance.get_physical_device_properties2(pd, &mut properties2) };
+    id.device_uuid
+}
+
+/// A device's DRM render node as `(major, minor)`, or `None` when it has none to report.
+///
+/// `None` covers two different things on purpose, because a caller matching on a node cannot use
+/// either: a driver without `VK_EXT_physical_device_drm`, and one that has it and says `has_render`
+/// is false -- a device with only a primary node, which is not something to import across.
+///
+/// The extension is checked by name first. Chaining a struct the driver does not recognize leaves it
+/// at its default, and a default of zero would read as render node `0:0` -- a match for a caller
+/// unlucky enough to ask for it.
+fn device_render_node(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Option<(i64, i64)> {
+    let available = device_extensions(instance, pd).ok()?;
+    if !available.contains(ext::PHYSICAL_DEVICE_DRM) {
+        return None;
+    }
+    let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+    let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+    unsafe { instance.get_physical_device_properties2(pd, &mut properties2) };
+    (drm.has_render == vk::TRUE).then_some((drm.render_major, drm.render_minor))
+}
+
+/// A UUID in the usual 8-4-4-4-12 form, for a message a human has to compare against `vulkaninfo`.
+fn hyphenated(uuid: &[u8; 16]) -> String {
+    let hex: Vec<String> = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
+    let group = |range: core::ops::Range<usize>| hex[range].concat();
+    format!(
+        "{}-{}-{}-{}-{}",
+        group(0..4),
+        group(4..6),
+        group(6..8),
+        group(8..10),
+        group(10..16)
+    )
 }
 
 fn select_queue_family(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Result<u32> {

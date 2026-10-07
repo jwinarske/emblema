@@ -272,3 +272,189 @@ fn enabled_extensions_carry_their_dependencies() {
         );
     }
 }
+
+/// A device asked for by UUID is the device that comes back.
+///
+/// The round trip is the test: learn a UUID from a context, ask for that UUID, and the second context
+/// must report the same one. A selector that ignored the preference and fell through to `Auto` would
+/// pass on a single-device machine and fail on any other, so the device count is reported and the
+/// multi-device case is where this has teeth -- `vkEnumeratePhysicalDevices` on this desktop answers
+/// two.
+#[test]
+fn a_device_asked_for_by_uuid_is_the_one_returned() {
+    let Some(first) = context(DevicePreference::Auto) else {
+        return;
+    };
+    let wanted = first.device_uuid();
+    assert_ne!(
+        wanted, [0u8; 16],
+        "a real device reported no uuid, so the properties2 chain did not reach it"
+    );
+    eprintln!("auto picked {wanted:02x?}");
+
+    let Some(again) = context(DevicePreference::Uuid(wanted)) else {
+        panic!("the uuid just reported was refused");
+    };
+    assert_eq!(
+        again.device_uuid(),
+        wanted,
+        "asking for a uuid returned a different device"
+    );
+    assert_eq!(
+        again.capabilities().device_name,
+        first.capabilities().device_name,
+        "the same uuid named two different devices"
+    );
+}
+
+/// Every device enumerated has a distinct UUID, and each can be asked for by name.
+///
+/// The part that makes the test above mean something on a machine with more than one device: if two
+/// devices shared a UUID, or if asking by UUID always answered the same one, this notices. Walks the
+/// enumeration by index -- which is exactly the unstable thing `Uuid` exists to replace, and is the
+/// right tool for *discovering* what is present.
+#[test]
+fn each_device_can_be_named_by_its_own_uuid() {
+    let mut seen: Vec<[u8; 16]> = Vec::new();
+    for index in 0..8 {
+        let Ok(ctx) = emblema_hal_vulkan::Validated::new(DevicePreference::Index(index)) else {
+            break;
+        };
+        let uuid = ctx.device_uuid();
+        let name = ctx.capabilities().device_name.clone();
+        drop(ctx);
+
+        // Asked for by its own uuid, it must come back -- and be the same device.
+        let Ok(again) = emblema_hal_vulkan::Validated::new(DevicePreference::Uuid(uuid)) else {
+            panic!("device {index} ({name}) would not answer to its own uuid {uuid:02x?}");
+        };
+        assert_eq!(again.device_uuid(), uuid, "device {index} ({name})");
+        seen.push(uuid);
+    }
+    if seen.is_empty() {
+        eprintln!("skipping: no usable Vulkan device");
+        return;
+    }
+    eprintln!("{} device(s): {seen:02x?}", seen.len());
+
+    let mut sorted = seen.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        seen.len(),
+        "two devices reported the same uuid, so a uuid does not name one"
+    );
+}
+
+/// A UUID no device has is an error, not a fallback.
+///
+/// The whole point of asking for a particular GPU is that the wrong one does not work. Handing back
+/// another would fail later at a dma-buf import, somewhere with nothing to say about why -- so the
+/// refusal belongs here, and it names what is present so the caller can see what it should have asked
+/// for.
+#[test]
+fn an_unknown_uuid_is_refused_rather_than_substituted() {
+    if context(DevicePreference::Auto).is_none() {
+        return;
+    }
+    // Not any real device's: a UUID is 16 bytes and this is all ones.
+    let absent = [0xffu8; 16];
+    match emblema_hal_vulkan::Validated::new(DevicePreference::Uuid(absent)) {
+        Ok(ctx) => panic!(
+            "an absent uuid was substituted with {}",
+            ctx.capabilities().device_name
+        ),
+        Err(why) => {
+            let said = format!("{why}");
+            assert!(
+                said.contains("uuid"),
+                "the refusal does not mention the uuid: {said}"
+            );
+            // The message lists what is present, which is what a caller needs to correct the call.
+            assert!(
+                said.contains("present"),
+                "the refusal does not say what was available: {said}"
+            );
+            eprintln!("refused as expected: {said}");
+        }
+    }
+}
+
+/// A render node asked for by device number is the device that comes back, where one is reported.
+///
+/// Skips where the driver has no `VK_EXT_physical_device_drm` -- lavapipe does not -- because then
+/// there is no node to ask for and nothing to assert. That is the honest shape: the extension is how
+/// this is read, so a driver without it can never match, and the refusal below covers the case where
+/// a caller asks anyway.
+#[test]
+fn a_device_asked_for_by_render_node_is_the_one_returned() {
+    let Some(first) = context(DevicePreference::Auto) else {
+        return;
+    };
+    let Some((major, minor)) = first.render_node() else {
+        eprintln!("skipping: this device reports no DRM render node");
+        return;
+    };
+    eprintln!("auto picked render node {major}:{minor}");
+
+    let Some(again) = context(DevicePreference::RenderNode { major, minor }) else {
+        panic!("the render node just reported was refused");
+    };
+    assert_eq!(again.render_node(), Some((major, minor)));
+    assert_eq!(
+        again.device_uuid(),
+        first.device_uuid(),
+        "the same render node named two different devices"
+    );
+}
+
+/// A render node no device has is an error, not a fallback.
+#[test]
+fn an_unknown_render_node_is_refused() {
+    if context(DevicePreference::Auto).is_none() {
+        return;
+    }
+    // No DRM device is numbered this: minors run from 0 and majors are allocated low.
+    match emblema_hal_vulkan::Validated::new(DevicePreference::RenderNode {
+        major: 9999,
+        minor: 9999,
+    }) {
+        Ok(ctx) => panic!(
+            "an absent render node was substituted with {}",
+            ctx.capabilities().device_name
+        ),
+        Err(why) => {
+            let said = format!("{why}");
+            assert!(
+                said.contains("render node"),
+                "the refusal does not mention the render node: {said}"
+            );
+            eprintln!("refused as expected: {said}");
+        }
+    }
+}
+
+/// Render node `0:0` matches nothing, which is the trap in reading a chained struct.
+///
+/// `VkPhysicalDeviceDrmPropertiesEXT` is only filled by a driver that supports
+/// `VK_EXT_physical_device_drm`. Chaining it onto a driver that does not leaves it at its default, and
+/// a default of zero reads as render node `0:0` -- so a caller asking for `0:0` would be handed
+/// whichever device ignored the struct. The extension is checked by name first, and this is what says
+/// so.
+///
+/// `0:0` is not a real DRM node either: minors are allocated from 0 within a major, and major 0 is not
+/// DRM's.
+#[test]
+fn render_node_zero_matches_nothing() {
+    if context(DevicePreference::Auto).is_none() {
+        return;
+    }
+    match emblema_hal_vulkan::Validated::new(DevicePreference::RenderNode { major: 0, minor: 0 }) {
+        Ok(ctx) => panic!(
+            "render node 0:0 matched {}, so a driver without the extension was read as zero",
+            ctx.capabilities().device_name
+        ),
+        Err(why) => eprintln!("refused as expected: {why}"),
+    }
+}
