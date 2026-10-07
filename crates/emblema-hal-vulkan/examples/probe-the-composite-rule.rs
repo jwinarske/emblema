@@ -20,12 +20,23 @@
 //! | `called-no-construct` | yes | none | -- |
 //! | `called-no-params` | yes, takes nothing | in the callee | a loaded global |
 //! | `called-loaded-param` | yes, takes a pointer | in the callee | a load *of* the parameter |
+//! | `entry-call-operand` | yes | in the entry point | another call's result |
+//! | `called-call-operand` | yes, two deep | in the callee | another call's result |
+//! | `called-extract-param` | yes, takes a struct | in the callee | a component *extracted from* the parameter |
 //! | `called-param-operand` | yes, takes a value | in the callee | the parameter |
 //!
-//! So: `entry-only` and `called-no-construct` passing with
-//! `called-param-operand` failing says the rule is about parameters.
-//! `called-no-params` failing too says it is about called functions, and no
-//! shader-source fix short of inlining everything exists.
+//! Measured on an i.MX8MP, driver `6.4.11.p2.745085`, the layer disabled: the
+//! last two crash and the rest do not. So the rule is **an
+//! `OpCompositeConstruct`, in a non-entry-point function, one of whose
+//! operands is a value parameter or a component extracted from one**. A
+//! construct in a called function is fine on its own; a call result as an
+//! operand is fine; a load *through a pointer* parameter is fine. What is not
+//! fine is using the parameter's own SSA value, directly or through an
+//! extract.
+//!
+//! The extract is what makes it reach a renderer. `solid.wgsl` has seven of
+//! these and none of them is the direct form, which is why removing the
+//! direct ones changed nothing and why the first scan for this reported zero.
 //!
 //! A crash takes the process with it, so one variant runs per invocation and
 //! the exit status is the result. With no argument it lists them.
@@ -108,6 +119,66 @@ fn main() {
     var x = out[1];
     let v = built(&x);
     out[0] = v.x + v.y;
+}
+"#,
+    ),
+    (
+        "entry-call-operand",
+        r#"
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+
+fn doubled(x: f32) -> f32 {
+    return x * 2.0;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let v = vec2<f32>(doubled(out[1]), 0.5);
+    out[0] = v.x + v.y;
+}
+"#,
+    ),
+    (
+        "called-call-operand",
+        r#"
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+
+fn doubled(x: f32) -> f32 {
+    return x * 2.0;
+}
+
+fn built() -> vec2<f32> {
+    return vec2<f32>(doubled(out[1]), 0.5);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let v = built();
+    out[0] = v.x + v.y;
+}
+"#,
+    ),
+    (
+        "called-extract-param",
+        r#"
+struct In {
+    uv: vec2<f32>,
+    k: f32,
+}
+
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+
+fn built(i: In) -> vec3<f32> {
+    return vec3<f32>(i.uv, 1.0);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var i: In;
+    i.uv = vec2<f32>(out[1], out[2]);
+    i.k = out[3];
+    let v = built(i);
+    out[0] = v.x + v.y + v.z;
 }
 "#,
     ),
