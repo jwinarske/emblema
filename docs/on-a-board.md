@@ -1908,7 +1908,7 @@ Bisection cost eight board runs and the board answers in seconds. The two
 guesses before it cost more than that and were both wrong, which is the whole
 argument for having gone to it earlier.
 
-### The in-source fix, done: Vulkan runs there on a stock stack
+### The in-source fix, done: the pipeline compiler stops crashing
 
 Each of the seven operands now goes through a `var`, which makes it a load --
 `called-extract-var` in the probe is that shape and passes. Six of the edits
@@ -1926,8 +1926,9 @@ play:**
 | `blend` | `exit=139` | 10 passed |
 
 Thirty-five tests, on a stock driver stack, where the first pipeline used to
-segfault. The layer is no longer needed for this renderer; it stays the answer
-for anything else that hits the same decoder.
+segfault. **That is a claim about pipeline creation and not about the board**,
+and the section below is why the distinction matters: `cargo xtask bench`
+reaches a *second* defect that this does not touch.
 
 **It changes no pixels.** The gate's seventy-four corpus scenes still match
 their stored images, and every cross-backend and cross-device comparison is
@@ -1954,6 +1955,45 @@ value-parameter operands changed nothing, and removing the calls entirely
 fixes everything. The shape is narrower than "any call" and wider than "a
 value parameter in a composite construct", and bisecting `solid.wgsl` is still
 what would name it.
+
+
+### The first bench rows from that board, and a second defect under them
+
+`cargo xtask bench` had never produced a row there. It does now, which is the
+pipeline fix working, and then it segfaults -- so "Vulkan runs on a stock
+stack" is true of the four test binaries and not of the renderer at large.
+
+Eight of fourteen Vulkan rows, 1920x1080, governor pinned to `performance`,
+clock already at its 1.6 GHz maximum:
+
+```
+vulkan:0 VeriSilicon
+  distance field, 1 sample 355.6 ms      stroked path, 1 sample    13.2 ms
+  tessellated, 4 samples    74.9 ms      frame, gradient ground   324.0 ms
+  tessellated, 1 sample     61.3 ms      frame, plus cards        352.9 ms
+  stroked field, 1 sample  389.7 ms      frame, plus shadows      379.2 ms
+```
+
+A GC7000UL at three frames a second on content a Pi 5 runs in under a
+millisecond. The rows repeat to a tenth across runs, so they are measurements
+rather than noise, and they are the first numbers anyone has from this part.
+
+**Then it dies, and not of the decoder.** The crash is in
+`libvulkan_VSI.so.1` under `emblema_hal_vulkan::render::record_draw` -- command
+recording, not pipeline creation, and nothing from `libVSC.so` or
+`libSPIRV_viv.so` in the backtrace. **The inlining layer does not change it**:
+same exit, same row. So it is a second defect, unrelated to the composite
+construct, and the shader fix neither caused nor cures it. What it blocks is a
+full bench row set from this board.
+
+**One more thing that fell out of the A/B.** With the layer loaded the frame
+rows are far faster -- `frame, plus cards` 231.9 ms against 352.9, `plus
+shadows` 248.2 against 379.2, about a third off -- on the same emblema build,
+the only difference being that every shader function has been inlined before
+the driver saw it. The no-layer rows repeat to a tenth across three runs, so
+the gap is not noise. This driver's own compiler does badly with calls, which
+is a different complaint from crashing on them and is worth knowing before
+anyone reads these numbers as what the part can do.
 
 ### Which it is: the rule is narrow, and it is not ours
 
