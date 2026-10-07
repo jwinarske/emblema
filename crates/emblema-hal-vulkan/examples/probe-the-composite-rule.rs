@@ -23,6 +23,7 @@
 //! | `entry-call-operand` | yes | in the entry point | another call's result |
 //! | `called-call-operand` | yes, two deep | in the callee | another call's result |
 //! | `called-extract-param` | yes, takes a struct | in the callee | a component *extracted from* the parameter |
+//! | `called-extract-var` | the same, with the extract put in a `var` first | in the callee | a load of that `var` |
 //! | `called-param-operand` | yes, takes a value | in the callee | the parameter |
 //!
 //! Measured on an i.MX8MP, driver `6.4.11.p2.745085`, the layer disabled: the
@@ -170,6 +171,31 @@ struct In {
 
 fn built(i: In) -> vec3<f32> {
     return vec3<f32>(i.uv, 1.0);
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    var i: In;
+    i.uv = vec2<f32>(out[1], out[2]);
+    i.k = out[3];
+    let v = built(i);
+    out[0] = v.x + v.y + v.z;
+}
+"#,
+    ),
+    (
+        "called-extract-var",
+        r#"
+struct In {
+    uv: vec2<f32>,
+    k: f32,
+}
+
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+
+fn built(i: In) -> vec3<f32> {
+    var uv = i.uv;
+    return vec3<f32>(uv, 1.0);
 }
 
 @compute @workgroup_size(1)

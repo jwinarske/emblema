@@ -73,4 +73,61 @@ mod tests {
         // Header is five words; anything at or below that is an empty module.
         assert!(super::SOLID_SPV.len() > 5, "module is header-only");
     }
+
+    /// No module builds a vector out of a shader function's parameter.
+    ///
+    /// A driver workaround with teeth. Vivante's SPIR-V decoder segfaults
+    /// inside `vkCreate*Pipelines` on an `OpCompositeConstruct`, in a
+    /// non-entry-point function, one of whose operands is a value parameter or
+    /// a component extracted from one. `docs/on-a-board.md` has the rule and
+    /// the probe that established it; `solid.wgsl` carries a `var` at each of
+    /// the seven places it used to happen.
+    ///
+    /// Those `var`s look like noise and will be tidied away by someone who
+    /// does not know, which is what this is for. It reads the built SPIR-V
+    /// rather than the WGSL, because what matters is what naga emitted.
+    #[test]
+    fn the_shader_builds_no_vector_from_a_parameter() {
+        for (name, words) in super::MODULES {
+            let mut entries = Vec::new();
+            let mut derived = Vec::new();
+            let mut current = 0u32;
+            let mut found = Vec::new();
+            let mut i = 5;
+            while i < words.len() {
+                let (count, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
+                if count == 0 {
+                    break;
+                }
+                match op {
+                    // OpEntryPoint, OpFunction, OpFunctionParameter
+                    15 => entries.push(words[i + 2]),
+                    54 => current = words[i + 2],
+                    55 => derived.push(words[i + 2]),
+                    // Anything that carries a parameter's value forward:
+                    // extract, shuffle, access chain.
+                    81 | 79 | 65 | 66 if count >= 4 => {
+                        if words[i + 3..i + count].iter().any(|o| derived.contains(o)) {
+                            derived.push(words[i + 2]);
+                        }
+                    }
+                    // OpCompositeConstruct, outside an entry point
+                    80 if count >= 4 && !entries.contains(&current) => {
+                        if words[i + 3..i + count].iter().any(|o| derived.contains(o)) {
+                            found.push(words[i + 2]);
+                        }
+                    }
+                    _ => {}
+                }
+                i += count;
+            }
+            assert!(
+                found.is_empty(),
+                "{name} builds {} vector(s) from a function parameter, which \
+                 segfaults one driver's pipeline compiler. Put the operand in \
+                 a `var` first, as the rest of {name} does.",
+                found.len()
+            );
+        }
+    }
 }

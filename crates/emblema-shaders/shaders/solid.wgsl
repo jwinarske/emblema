@@ -193,7 +193,9 @@ fn gradient_color(t: f32, count: i32) -> vec4<f32> {
         // returns, so what follows does not need to know which path produced
         // it -- and now they agree about components the sRGB primaries cannot
         // hold as well, which an eight-bit encoded table could not carry.
-        return textureSampleLevel(image_texture, image_sampler, vec2<f32>(t, 0.5), 0.0);
+        // See the note in `gradient_space`: a load, not the parameter.
+        var at = t;
+        return textureSampleLevel(image_texture, image_sampler, vec2<f32>(at, 0.5), 0.0);
     }
     return sample_stops(t, count);
 }
@@ -228,8 +230,25 @@ fn gradient_color(t: f32, count: i32) -> vec4<f32> {
 /// so a solid fill runs it no times rather than one. Both of those were wrong
 /// in the first version of this, and together they cost three per cent of a
 /// frame on a Raspberry Pi 5.
+/// Where a rounded rectangle reads its clip-to-local mapping from.
+///
+/// Split out of `shade`'s arm so the `var` below has somewhere to live. See
+/// the note in `gradient_space` for why it is a `var`.
+fn rounded_rect_space(in: VertexOutput) -> vec3<f32> {
+    var uv = in.uv;
+    return select(in.clip, vec3<f32>(uv, 1.0), paint.geometry.x > 0.5);
+}
+
 fn gradient_space(in: VertexOutput) -> vec2<f32> {
-    let source = select(in.clip, vec3<f32>(in.uv, 1.0), paint.geometry.x > 0.5);
+    // Through a `var` so the operand is a load rather than the parameter's own
+    // value. Vivante's SPIR-V decoder segfaults in
+    // `vkCreate*Pipelines` on an `OpCompositeConstruct` in a called function
+    // whose operand is a value parameter or a component extracted from one;
+    // a load is not. `docs/on-a-board.md` has the rule and the probe that
+    // established it, and `the_shader_builds_no_vector_from_a_parameter`
+    // fails if one comes back.
+    var uv = in.uv;
+    let source = select(in.clip, vec3<f32>(uv, 1.0), paint.geometry.x > 0.5);
     return to_gradient_space(source);
 }
 
@@ -565,7 +584,9 @@ fn coverage_of(distance: f32, per_pixel: f32, width: f32) -> f32 {
 /// along each axis and `min(max(q.x, q.y), 0)` the distance inside along the
 /// nearer one, so the two cases share an expression rather than a branch.
 fn rounded_rect_distance(point: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
-    let q = abs(point) - half_size + vec2<f32>(radius);
+    // See the note in `gradient_space`: a load, not the parameter.
+    var r = radius;
+    let q = abs(point) - half_size + vec2<f32>(r);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - radius;
 }
 
@@ -1142,8 +1163,10 @@ fn nonseparable_b(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
 /// caller attaches to a vertex or a sprite and what the paint produced are
 /// both here, so combining them is arithmetic and every mode is available.
 fn blend_tint(mode: i32, src: vec4<f32>, dst: vec4<f32>) -> vec4<f32> {
-    let sa = src.a;
-    let da = dst.a;
+    // See the note in `gradient_space`. These two feed the splats in
+    // `src.rgb / sa` and `dst.rgb / da`, which are the constructs.
+    var sa = src.a;
+    var da = dst.a;
     switch mode {
         case 0: { return vec4<f32>(0.0); }
         case 1: { return src; }
@@ -1283,7 +1306,9 @@ fn dithered(color: vec4<f32>, frag: vec2<f32>) -> vec4<f32> {
         return color;
     }
     let offset = ordered_dither(frag) * amplitude;
-    return vec4<f32>(color.rgb + vec3<f32>(offset), color.a);
+    // See the note in `gradient_space`: a load, not an extract of a parameter.
+    var alpha = color.a;
+    return vec4<f32>(color.rgb + vec3<f32>(offset), alpha);
 }
 
 @fragment
@@ -1454,7 +1479,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         // cost a draw each; the mapping rides on `uv` instead when
         // `geometry.x` says so, and then they merge. The select is on this arm
         // rather than hoisted, so every other material still runs it no times.
-        case 7: { return rounded_rect_coverage(select(in.clip, vec3<f32>(in.uv, 1.0), paint.geometry.x > 0.5)); }
+        case 7: { return rounded_rect_coverage(rounded_rect_space(in)); }
         case 8: { return ellipse_coverage(in.clip); }
         case 12: { return rrect_blur_coverage(in.clip); }
         case 13: { return point_field_coverage(in.uv); }
