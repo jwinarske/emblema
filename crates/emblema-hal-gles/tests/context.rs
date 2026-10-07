@@ -303,3 +303,101 @@ fn a_restricted_context_reports_flags_that_match_its_extensions() {
     );
     assert!(!caps.sync.import_sync_file);
 }
+
+/// The GBM display target reaches the same driver as the surfaceless one.
+///
+/// The point of the variant is vendor stacks -- a Vivante or an Adreno ships
+/// `libgbm` and advertises `EGL_KHR_platform_gbm` while having no surfaceless
+/// *platform*, so this is the difference between their GLES being testable and
+/// being reported absent. Neither of those is here, which is exactly why this
+/// test exists: Mesa has both platforms, so it is where the two can be asked
+/// the same question and required to give the same answer.
+///
+/// What is asserted is the part a board cannot check for us. That the context
+/// comes up at all, that it is the same device, and that it reports the same
+/// capabilities -- a display target decides how a handle is obtained and
+/// nothing else, so anything differing here is this code and not the driver.
+#[test]
+fn a_gbm_display_reaches_the_same_device_as_a_surfaceless_one() {
+    let Some(surfaceless) = context() else { return };
+    let gbm = match GlesValidated::new(DisplayTarget::Gbm) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("skipping: no GBM display here ({e})");
+            return;
+        }
+    };
+
+    let (a, b) = (surfaceless.capabilities(), gbm.capabilities());
+    eprintln!(
+        "surfaceless: {} ({}); gbm: {} ({})",
+        a.device_name, a.driver_name, b.device_name, b.driver_name
+    );
+    assert_eq!(
+        a.device_name, b.device_name,
+        "the two display targets found different devices"
+    );
+    assert_eq!(
+        a.advanced_blend, b.advanced_blend,
+        "advanced blending differs by display target, which it cannot"
+    );
+    assert_eq!(
+        a.max_texture_size, b.max_texture_size,
+        "the texture limit differs by display target, which it cannot"
+    );
+    assert_eq!(
+        a.sample_counts, b.sample_counts,
+        "the sample counts differ by display target, which they cannot"
+    );
+}
+
+/// A GBM context renders, and renders the same thing.
+///
+/// Capabilities agreeing is cheap; the display target could still have left
+/// the context unable to draw. The same scene through both must come back
+/// byte-identical, since the only difference between them is where the display
+/// handle came from.
+#[test]
+fn a_gbm_context_renders_what_a_surfaceless_one_does() {
+    use emblema_hal::{Batch, BlendMode, Material, PassDescriptor, PixelFormat};
+    use emblema_hal::{Extent2D, TextureDescriptor};
+
+    let Some(mut surfaceless) = context() else {
+        return;
+    };
+    let Ok(mut gbm) = GlesValidated::new(DisplayTarget::Gbm) else {
+        eprintln!("skipping: no GBM display here");
+        return;
+    };
+
+    const SIZE: Extent2D = Extent2D {
+        width: 32,
+        height: 32,
+    };
+    let mut batch = Batch::new();
+    batch
+        .push(
+            &[[-0.8, -0.8], [0.6, -0.8], [0.6, 0.4], [-0.8, 0.4]],
+            &[0, 1, 2, 0, 2, 3],
+            Material::solid([0.2, 0.7, 0.3, 1.0]),
+            BlendMode::SrcOver,
+        )
+        .expect("push");
+
+    let render = |ctx: &mut GlesValidated| {
+        let mut target = ctx
+            .create_texture(&TextureDescriptor::offscreen(SIZE, PixelFormat::Rgba8Unorm))
+            .expect("offscreen target");
+        ctx.submit_batch(&mut target, &batch, PassDescriptor::clear([0.0; 4]))
+            .expect("submit");
+        let pixels = ctx.read_texture(&mut target).expect("read back");
+        ctx.destroy_texture(target);
+        pixels
+    };
+
+    assert_eq!(
+        render(&mut surfaceless),
+        render(&mut gbm),
+        "the same scene differs between display targets"
+    );
+}

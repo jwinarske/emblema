@@ -19,6 +19,12 @@ pub type Egl = khronos_egl::DynamicInstance<khronos_egl::EGL1_5>;
 /// `EGL_PLATFORM_SURFACELESS_MESA`, for a context with no drawable at all.
 const PLATFORM_SURFACELESS: khronos_egl::Enum = 0x31DD;
 
+/// `EGL_PLATFORM_GBM_KHR`, for a display obtained from a DRM render node.
+///
+/// The same value as `EGL_PLATFORM_GBM_MESA`; the two names were reconciled
+/// and the enum never changed.
+const PLATFORM_GBM: khronos_egl::Enum = 0x31D7;
+
 /// Extensions that decide which DRM presentation path is available.
 mod ext {
     /// Import a dma-buf as an EGLImage, then bind it as a texture.
@@ -69,12 +75,33 @@ fn withheld_extensions(capability: emblema_hal::Capability) -> &'static [&'stati
 }
 
 /// How the context gets its display.
+///
+/// Both of these render into framebuffer objects and bind no surface; they
+/// differ only in how the display handle is obtained, and that difference is
+/// what decides whether a vendor driver can be used at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DisplayTarget {
     /// No drawable. Rendering goes to framebuffer objects, which is all the
     /// offscreen executor and the golden corpus need.
+    ///
+    /// Needs `EGL_MESA_platform_surfaceless`, which is a Mesa extension. No
+    /// vendor stack has it, so this reaches Mesa drivers and nothing else.
     #[default]
     Surfaceless,
+    /// A display from a DRM render node, through GBM.
+    ///
+    /// The same rendering, reached a way vendor drivers support. A Vivante
+    /// GC7000UL and a Qualcomm Adreno both ship `libgbm` and advertise
+    /// `EGL_KHR_platform_gbm` while having no surfaceless *platform*, so this
+    /// is the difference between their GLES being testable and being reported
+    /// absent. Neither needs a surface: `EGL_KHR_surfaceless_context` is
+    /// present on both, and it is the context extension rather than the
+    /// platform one.
+    ///
+    /// The node is `EMBLEMA_GBM_NODE` when set, and otherwise the first
+    /// `/dev/dri/renderD*` that GBM accepts.
+    Gbm,
 }
 
 /// A GLES context and what it can do.
@@ -99,6 +126,14 @@ pub struct GlesContext {
     /// draws itself. Resolved once here rather than per draw, since a proc
     /// address does not change under a context.
     blend_barrier: Option<BlendBarrier>,
+    /// Which way the display was obtained, after any fallback.
+    display_target: DisplayTarget,
+    /// The GBM device the display was derived from, where it came from one.
+    ///
+    /// A field rather than a local so it outlives the display. Fields drop
+    /// after the `Drop` body, which is where the display is released, so the
+    /// order is right without saying so.
+    _gbm: Option<GbmDevice>,
     program: Option<crate::render::SolidProgram>,
     /// Fragment programs a caller registered, by the index they were given.
     ///
@@ -176,6 +211,26 @@ impl GlesContext {
             .map(|s| split_extensions(&s.to_string_lossy()))
             .unwrap_or_default();
 
+        // Held for as long as the display is, because the display is derived
+        // from it: destroying the GBM device first leaves EGL holding a
+        // dangling native handle.
+        let mut gbm = None;
+        // Surfaceless is a preference, not a demand. Asking for it on a stack
+        // that has no Mesa platform used to be a hard refusal, and that is how
+        // two boards with perfectly good GLES came to be recorded as having
+        // none: the backend never got as far as asking them anything. Where
+        // the Mesa platform is absent and GBM is there, take GBM -- the
+        // resulting context is the same context, since neither binds a
+        // surface. Which one was used is [`GlesContext::display_target`], so a
+        // report says it rather than leaving it to be inferred.
+        let target = match target {
+            DisplayTarget::Surfaceless
+                if !client_extensions.contains("EGL_MESA_platform_surfaceless") =>
+            {
+                DisplayTarget::Gbm
+            }
+            other => other,
+        };
         let display = match target {
             DisplayTarget::Surfaceless => {
                 if !client_extensions.contains("EGL_MESA_platform_surfaceless") {
@@ -192,6 +247,25 @@ impl GlesContext {
                     )
                 }
                 .map_err(|e| backend_err("get_platform_display", e))?
+            }
+            DisplayTarget::Gbm => {
+                // Either spelling: the extension was promoted from MESA to KHR
+                // and drivers advertise one, the other, or both.
+                if !client_extensions.contains("EGL_KHR_platform_gbm")
+                    && !client_extensions.contains("EGL_MESA_platform_gbm")
+                {
+                    return Err(Error::Unsupported("EGL_KHR_platform_gbm"));
+                }
+                let device = GbmDevice::open()?;
+                let native = device.as_ptr();
+                gbm = Some(device);
+                // SAFETY: `native` is a live `gbm_device` owned by `gbm`,
+                // which outlives the display, and the attribute list is
+                // terminated.
+                unsafe {
+                    egl.get_platform_display(PLATFORM_GBM, native, &[khronos_egl::ATTRIB_NONE])
+                }
+                .map_err(|e| backend_err("get_platform_display (gbm)", e))?
             }
         };
 
@@ -212,9 +286,20 @@ impl GlesContext {
         egl.bind_api(khronos_egl::OPENGL_ES_API)
             .map_err(|e| backend_err("bind_api", e))?;
 
+        // No surface is ever created on either target, but a config still has
+        // to name a surface type it *could* serve, and the two platforms offer
+        // different ones: the surfaceless platform's configs are pbuffer-
+        // capable, GBM's are window-capable because its drawable is a
+        // `gbm_surface`. Asking for a pbuffer on GBM matches no config at all,
+        // which reads as "this driver has no ES3 RGBA8" and is nothing of the
+        // kind.
+        let surface_type = match target {
+            DisplayTarget::Surfaceless => khronos_egl::PBUFFER_BIT,
+            DisplayTarget::Gbm => khronos_egl::WINDOW_BIT,
+        };
         let config_attrs = [
             khronos_egl::SURFACE_TYPE,
-            khronos_egl::PBUFFER_BIT,
+            surface_type,
             khronos_egl::RENDERABLE_TYPE,
             khronos_egl::OPENGL_ES3_BIT,
             khronos_egl::RED_SIZE,
@@ -329,6 +414,8 @@ impl GlesContext {
 
         Ok(Self {
             gl,
+            display_target: target,
+            _gbm: gbm,
             egl: std::sync::Arc::new(egl),
             display,
             context,
@@ -343,6 +430,16 @@ impl GlesContext {
             placeholder: None,
             debug,
         })
+    }
+
+    /// How this context's display was actually obtained.
+    ///
+    /// Not always what was asked for: a request for
+    /// [`DisplayTarget::Surfaceless`] on a stack without the Mesa platform
+    /// falls back to [`DisplayTarget::Gbm`], which is what makes a vendor
+    /// driver reachable at all.
+    pub fn display_target(&self) -> DisplayTarget {
+        self.display_target
     }
 
     pub fn capabilities(&self) -> &Capabilities {
@@ -581,6 +678,122 @@ impl Drop for GlesContext {
         // the display had no extensions at all.
         release_display(&self.egl, self.display);
     }
+}
+
+/// A `gbm_device`, and the library it came from.
+///
+/// `libgbm` is opened at runtime rather than linked, for the reason the
+/// manifest gives for `libEGL`: linking it would need the library and
+/// `pkg-config` on the build host and break cross-building to a board, which
+/// is the only place this variant is useful.
+///
+/// Two symbols are all a display needs. Surfaces and buffer objects belong to
+/// a presentation path; this one renders into framebuffer objects.
+struct GbmDevice {
+    /// Dropped last, after the device it provided the destructor for.
+    _library: libloading::Library,
+    device: *mut std::ffi::c_void,
+    destroy: unsafe extern "C" fn(*mut std::ffi::c_void),
+    /// The node stays open for the device's lifetime; GBM does not dup it.
+    _node: std::fs::File,
+}
+
+impl GbmDevice {
+    fn open() -> Result<Self> {
+        // SAFETY: both names are a plain shared library, and the symbols below
+        // are looked up before any is called.
+        let library = unsafe { libloading::Library::new("libgbm.so.1") }
+            .or_else(|_| unsafe { libloading::Library::new("libgbm.so") })
+            .map_err(|e| Error::Backend {
+                backend: "gles",
+                detail: format!("dlopen libgbm: {e}"),
+            })?;
+        // SAFETY: these are `gbm_create_device` and `gbm_device_destroy` with
+        // the signatures libgbm has had since it existed.
+        let (create, destroy) = unsafe {
+            let create: libloading::Symbol<
+                unsafe extern "C" fn(std::ffi::c_int) -> *mut std::ffi::c_void,
+            > = library
+                .get(b"gbm_create_device\0")
+                .map_err(|e| Error::Backend {
+                    backend: "gles",
+                    detail: format!("gbm_create_device: {e}"),
+                })?;
+            let destroy: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void)> = library
+                .get(b"gbm_device_destroy\0")
+                .map_err(|e| Error::Backend {
+                    backend: "gles",
+                    detail: format!("gbm_device_destroy: {e}"),
+                })?;
+            (*create, *destroy)
+        };
+
+        let mut refused = Vec::new();
+        for path in gbm_nodes() {
+            let node = match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+            {
+                Ok(node) => node,
+                Err(e) => {
+                    refused.push(format!("{path}: {e}"));
+                    continue;
+                }
+            };
+            use std::os::fd::AsRawFd as _;
+            // SAFETY: the descriptor is open and stays open in `node` below.
+            let device = unsafe { create(node.as_raw_fd()) };
+            if device.is_null() {
+                refused.push(format!("{path}: gbm_create_device returned null"));
+                continue;
+            }
+            return Ok(Self {
+                _library: library,
+                device,
+                destroy,
+                _node: node,
+            });
+        }
+        Err(Error::Backend {
+            backend: "gles",
+            detail: format!("no DRM node GBM would take ({})", refused.join("; ")),
+        })
+    }
+
+    fn as_ptr(&self) -> *mut std::ffi::c_void {
+        self.device
+    }
+}
+
+impl Drop for GbmDevice {
+    fn drop(&mut self) {
+        // SAFETY: the device came from `gbm_create_device` and is destroyed
+        // once, after the display built on it has been released.
+        unsafe { (self.destroy)(self.device) };
+    }
+}
+
+/// Render nodes to offer GBM, in the order they are tried.
+///
+/// A render node rather than a card: GBM wants the rendering device, and on a
+/// split render/display part the card node is the display controller, which
+/// cannot allocate for the GPU. `EMBLEMA_GBM_NODE` names one outright, for a
+/// board with more than one GPU or to force the choice.
+fn gbm_nodes() -> Vec<String> {
+    if let Ok(named) = std::env::var("EMBLEMA_GBM_NODE") {
+        return vec![named];
+    }
+    let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("renderD"))
+        .map(|name| format!("/dev/dri/{name}"))
+        .collect();
+    nodes.sort();
+    nodes
 }
 
 /// How many live contexts each process-global display has.
