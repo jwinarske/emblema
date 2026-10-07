@@ -107,6 +107,33 @@ impl VulkanTexture {
         self.layout.set(layout);
     }
 
+    /// Assert the layout this image is *actually* in, after work outside emblema put it there.
+    ///
+    /// No barrier is recorded and nothing is submitted. This corrects what emblema believes, so that
+    /// its next transition starts from the truth.
+    ///
+    /// # Why a caller needs this
+    ///
+    /// A texture written outside emblema's own submissions -- a raw `ash` pass on
+    /// [`VulkanContext::raw_device`], or a producer on another queue -- keeps whatever layout emblema
+    /// last recorded: the one passed to [`Self::wrap_image`], or its own last transition. The next
+    /// transition then names that stale layout as `oldLayout`, and from `UNDEFINED` a driver is
+    /// permitted to throw the contents away. A tiler does, because the barrier is where it decides
+    /// whether to load the tile from memory at all; an immediate-mode desktop driver usually has
+    /// nothing to discard and hides the bug completely.
+    ///
+    /// # Contract
+    ///
+    /// Call it after the outside work has been **submitted**, with the layout that work left the
+    /// image in. It is an assertion, not a request: naming a layout the image is not in is undefined
+    /// behavior of the ordinary Vulkan kind, and emblema cannot check it -- which is why this is a
+    /// separate call rather than a parameter on something that looks like it does work.
+    ///
+    /// [`VulkanContext::raw_device`]: crate::VulkanContext::raw_device
+    pub fn assume_layout(&self, layout: vk::ImageLayout) {
+        self.layout.set(layout);
+    }
+
     /// Bytes a tightly packed readback of this texture occupies.
     pub fn byte_size(&self) -> u64 {
         self.extent.area() * self.format.bytes_per_pixel() as u64
