@@ -344,11 +344,15 @@ fn the_frame_loop_actually_renders() {
 /// backend code, the same scene, the same call sequence. So whatever this is,
 /// the sequence this renderer issues is not sufficient to produce it.
 ///
-/// No other driver on this bench can weigh in, which is itself worth knowing.
-/// V3D on a Raspberry Pi 5 has no `advanced_blend` at all. The SA8155P's Adreno
-/// has `libEGL` and `libGLESv2` but not the surfaceless platform, and
-/// `DisplayTarget` offers nothing else, so the backend gets no context there.
-/// The i.MX8MP has no GLES device. Two drivers is the whole sample.
+/// No other driver on this bench can weigh in, and the reason is this
+/// renderer's rather than the boards'. V3D on a Raspberry Pi 5 genuinely has no
+/// `advanced_blend`. The other two have it -- the i.MX8MP's Vivante and the
+/// SA8155P's Adreno both advertise `GL_KHR_blend_equation_advanced` -- and
+/// neither can be reached, because `DisplayTarget` has one variant and it
+/// demands `EGL_MESA_platform_surfaceless`, which no vendor stack carries. The
+/// Vivante stack has `EGL_KHR_surfaceless_context` and `EGL_KHR_platform_gbm`,
+/// so a GBM display target would reach it. `docs/on-a-board.md` has the
+/// reading. Two drivers is the whole sample until that exists.
 ///
 /// No mechanism is written down here. The shape points at something reading
 /// texels nothing wrote this frame, and the dependence on the previous frame's
