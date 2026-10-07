@@ -1823,11 +1823,12 @@ one way `DisplayTarget` knows how to ask. The GLES section below has the reading
 
 ### The in-source workaround does not work here, measured 2026-10-07
 
-A note kept beside the reproducers characterizes the crash as
-`OpCompositeConstruct` taking an `OpFunctionParameter` result as an operand in
-a non-entry-point function, and offers an in-source alternative to the Vulkan
-layer: make that operand any other instruction's result. It was tried. **It
-does not fix emblema, and the crash does not move.**
+One candidate rule for this crash is narrow enough to dodge in the shader
+source: that it needs an `OpCompositeConstruct` taking an
+`OpFunctionParameter` result as an operand, in a non-entry-point function. If
+that were the whole rule, making the operand any other instruction's result
+would avoid it, and no driver-side workaround would be needed at all. **It was
+tried. The crash does not move.**
 
 Our SPIR-V did carry the pattern, twice, both in `solid.wgsl`:
 `gradient_color` building `vec2<f32>(t, 0.5)` from its `t` parameter, and
@@ -1841,20 +1842,18 @@ it always gave --
 `VIR_Shader_CompositeConstruct` in `libVSC.so`, under `gcSPV_Decode`, under
 `vkCreateGraphicsPipelines`. Not a different crash; the same one.
 
-**So the trigger is broader than that pattern, or there is a second one.** What
-the shader has that the small reproducers do not is quantity:
+**So the trigger is broader than that pattern, or there is a second one.**
 `SOLID_SPV` holds **51 `OpCompositeConstruct` in 18 non-entry functions**
-against 2 in its two entry points. That the layer's fix is *exhaustive
-inlining* -- which removes every non-entry function rather than every parameter
--- fits a rule about called functions rather than about parameters, though
-nothing here establishes that.
+against 2 in its two entry points, so a rule about *called functions* rather
+than about *parameters* would fit everything measured just as well -- and
+nothing here establishes which.
 
 No workaround is in the tree. A `var` whose comment claims to dodge a crash it
 does not dodge is worse than no `var`, so the change was reverted after being
-measured. **What would settle the rule** is the existing C reproducer fed a
-module with a called function that constructs a composite and takes no
-parameters at all: if that crashes, the rule is about called functions and no
-in-source fix short of inlining the whole shader exists.
+measured. **What would settle the rule** is a module with one called function
+that constructs a composite and takes no parameters at all: if that crashes,
+the rule is about called functions, and no in-source fix short of inlining the
+whole shader exists.
 
 **Where it dies, from `gdb` on the board rather than from reasoning:**
 
