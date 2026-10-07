@@ -270,6 +270,7 @@ dependencies = [
  "emblema-present",
  "emblema-shaders",
  "gpu-allocator",
+ "naga",
  "rustix",
 ]
 

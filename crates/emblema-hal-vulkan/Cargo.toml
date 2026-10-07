@@ -21,5 +21,8 @@ emblema-hal = { workspace = true }
 emblema-shaders = { workspace = true }
 
 [dev-dependencies]
+# `probe-the-composite-rule` builds its own variants rather than carrying
+# pre-translated blobs, so what each one contains is readable in the file.
+naga = { workspace = true, features = ["wgsl-in", "spv-out"] }
 emblema-present = { path = "../emblema-present" }
 rustix = { version = "1.1.4", default-features = false, features = ["event", "std"] }
