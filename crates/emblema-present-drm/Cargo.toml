@@ -30,7 +30,10 @@ emblema-hal-vulkan = { path = "../emblema-hal-vulkan" }
 emblema-testkit = { path = "../emblema-testkit" }
 # `writeback.rs` waits on the fence the kernel hands back, and a sync_file is
 # told it signaled by polling it.
-rustix = { version = "1.1.4", default-features = false, features = ["event"] }
+rustix = { version = "1.1.4", default-features = false, features = ["event", "mm"] }
+# `read-the-export`, which allocates and fills with no renderer in it so that
+# "our code is contributing" is not one of the possibilities.
+ash = { workspace = true }
 # The `IN_FORMATS` parser reads the kernel's bytes at offsets it computes
 # itself, which is the shape a generator explores better than a table.
 proptest = { workspace = true }
