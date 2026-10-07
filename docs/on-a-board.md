@@ -1869,6 +1869,51 @@ above is how a claim about it gets made: loaded (the loader's own
 `Insert instance layer` line), doing work (an `inlined module` line per
 module), and still crashing when disabled.
 
+### The second trigger, named: an extract from a value parameter
+
+Found by bisection rather than by another guess, since guessing had produced
+two wrong shapes already. Stubbing each of `solid.wgsl`'s thirty-nine callable
+functions to a constant return and halving put it in `shade` alone; cutting
+`shade`'s body at function-body depth put it between its lines 126 and 154 --
+the `switch` on the material kind. The line is
+
+```wgsl
+case 7: { return rounded_rect_coverage(select(in.clip, vec3<f32>(in.uv, 1.0), ...)); }
+```
+
+`in` is `shade`'s value parameter, `in.uv` an extract from it, and
+`vec3<f32>(in.uv, 1.0)` a composite construct taking that extract. A probe
+variant of exactly that shape crashes; so **the rule is an
+`OpCompositeConstruct`, in a non-entry-point function, one of whose operands is
+a value parameter *or a component extracted from one*.**
+
+| shape | Vivante |
+|---|---|
+| construct in an entry point | 0 |
+| construct in a called function, operand a loaded global | 0 |
+| operand a load *through a pointer* parameter | 0 |
+| operand another call's result | 0 |
+| **operand extracted from a value parameter** | **139** |
+| **operand the value parameter itself** | **139** |
+
+The extract is what makes it reach a renderer, and it is why every earlier
+attempt missed: `solid.wgsl` holds **seven** of these, in `gradient_color`,
+`gradient_space`, `rounded_rect_distance`, `blend_tint` (two), `dithered` and
+`shade` -- and the two in the direct form were the only ones a scan for
+"operand is a parameter" could see. Removing those two changed nothing because
+five remained. The other four modules have none, which is why only `solid.wgsl`
+crashes.
+
+Bisection cost eight board runs and the board answers in seconds. The two
+guesses before it cost more than that and were both wrong, which is the whole
+argument for having gone to it earlier.
+
+**An in-source fix now looks possible and is not done here.** Routing each of
+the seven operands through a `var` would make it a load, which the table above
+says is safe -- seven edits, each needing care that it does not change what the
+shader computes, and revalidation across the four drivers the bench has. That
+is its own piece of work. What is settled is the rule.
+
 **What that says about the second trigger.** Inlining removes every call, and
 it fixes this. So whatever reaches emblema is call-related, like the
 documented pattern and unlike it: taking `solid.wgsl` to zero direct
