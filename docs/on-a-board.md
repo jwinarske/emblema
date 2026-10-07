@@ -2075,6 +2075,37 @@ One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
 mode would read as a hang on a large one.
 
+## Which driver the GLES instability is, measured 2026-10-07
+
+`a_blurred_advanced_blend_layer_is_unstable_on_gles` has carried the sentence
+"it is the GLES path" since it was reduced. That was concluded against software
+*Vulkan*. Comparing against software *GLES* is what nobody had done, and it is
+one command:
+
+| driver | reduced instability |
+|---|---|
+| `radeonsi` (raphael_mendocino) | **3 levels** |
+| `llvmpipe` (LLVM 22.1.8) | **0 -- stable** |
+
+Same backend code, same scene, same call sequence. So the sequence this
+renderer issues is not sufficient to produce it, and the bare-GLES
+reproduction that is still owed now has both a target and a control: it has to
+come out unstable on `radeonsi` and clean on `llvmpipe`, and one that fails on
+both is reproducing something else.
+
+**Two drivers is the whole sample, and the reason is worth recording** because
+it looks like a gap someone could close and is not:
+
+- **V3D on a Raspberry Pi 5** has no `advanced_blend`, so the test skips. The
+  combination needs it twice over.
+- **Adreno 640 on the SA8155P** has `/usr/lib/libEGL.so.1`, `libEGL_adreno.so`
+  and `libGLESv2.so.2`, but no surfaceless EGL platform, and `DisplayTarget`
+  has exactly one variant, `Surfaceless`. The backend gets no context there at
+  all. Reaching that GPU's GLES would mean a second display target, GBM or
+  EGL_EXT_platform_device, which is its own piece of work and would also give
+  the Adreno GLES rows the bench has never had.
+- **i.MX8MP** has no GLES device, recorded above.
+
 ## What no machine here checks
 
 `cargo xtask gate` prints what the suite says it covered, under the totals, and
