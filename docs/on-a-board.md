@@ -1821,6 +1821,41 @@ is what this said first. It has `libGLESv2` and that advertises
 `GL_KHR_blend_equation_advanced`; what it has not got is `EGL_MESA_platform_surfaceless`, the
 one way `DisplayTarget` knows how to ask. The GLES section below has the reading.
 
+### The in-source workaround does not work here, measured 2026-10-07
+
+A note kept beside the reproducers characterizes the crash as
+`OpCompositeConstruct` taking an `OpFunctionParameter` result as an operand in
+a non-entry-point function, and offers an in-source alternative to the Vulkan
+layer: make that operand any other instruction's result. It was tried. **It
+does not fix emblema, and the crash does not move.**
+
+Our SPIR-V did carry the pattern, twice, both in `solid.wgsl`:
+`gradient_color` building `vec2<f32>(t, 0.5)` from its `t` parameter, and
+`rounded_rect_distance` splatting its `radius`. Routing both through a `var`
+makes the operand an `OpLoad` and takes the module to **zero** instances, which
+a scan of the built SPIR-V confirms on the aarch64 artifact actually shipped.
+
+The board then crashes exactly as before: `exit=139`, `sig=11` in the audit
+log, on the first test that creates a pipeline, and `gdb` gives the same frame
+it always gave --
+`VIR_Shader_CompositeConstruct` in `libVSC.so`, under `gcSPV_Decode`, under
+`vkCreateGraphicsPipelines`. Not a different crash; the same one.
+
+**So the trigger is broader than that pattern, or there is a second one.** What
+the shader has that the small reproducers do not is quantity:
+`SOLID_SPV` holds **51 `OpCompositeConstruct` in 18 non-entry functions**
+against 2 in its two entry points. That the layer's fix is *exhaustive
+inlining* -- which removes every non-entry function rather than every parameter
+-- fits a rule about called functions rather than about parameters, though
+nothing here establishes that.
+
+No workaround is in the tree. A `var` whose comment claims to dodge a crash it
+does not dodge is worse than no `var`, so the change was reverted after being
+measured. **What would settle the rule** is the existing C reproducer fed a
+module with a called function that constructs a composite and takes no
+parameters at all: if that crashes, the rule is about called functions and no
+in-source fix short of inlining the whole shader exists.
+
 **Where it dies, from `gdb` on the board rather than from reasoning:**
 
 ```
