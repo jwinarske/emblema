@@ -334,10 +334,25 @@ fn the_frame_loop_actually_renders() {
 /// 26x22 pass that the frame then samples, and the differing pixels lie exactly
 /// in that region.
 ///
-/// **It is the GLES path.** The software Vulkan device reports the same
-/// `advanced_blend` capability, renders the same scene, and is stable. Both GLES
-/// renders sit within `Scene::tolerance()` of the Vulkan one, which is why no
-/// cross-backend comparison has ever shown this.
+/// **It is one GLES driver, not the GLES path.** That sentence used to say the
+/// path, and it was concluded by comparing against software *Vulkan*: that
+/// device reports the same `advanced_blend` capability, renders the same scene
+/// and is stable, and both GLES renders sit within `Scene::tolerance()` of the
+/// Vulkan one, which is why no cross-backend comparison has ever shown this.
+/// Comparing against software *GLES* is the thing nobody had done. Measured
+/// 2026-10-07: three levels on `radeonsi`, **zero on `llvmpipe`** -- the same
+/// backend code, the same scene, the same call sequence. So whatever this is,
+/// the sequence this renderer issues is not sufficient to produce it.
+///
+/// No other driver on this bench can weigh in, and the reason is this
+/// renderer's rather than the boards'. V3D on a Raspberry Pi 5 genuinely has no
+/// `advanced_blend`. The other two have it -- the i.MX8MP's Vivante and the
+/// SA8155P's Adreno both advertise `GL_KHR_blend_equation_advanced` -- and
+/// neither can be reached, because `DisplayTarget` has one variant and it
+/// demands `EGL_MESA_platform_surfaceless`, which no vendor stack carries. The
+/// Vivante stack has `EGL_KHR_surfaceless_context` and `EGL_KHR_platform_gbm`,
+/// so a GBM display target would reach it. `docs/on-a-board.md` has the
+/// reading. Two drivers is the whole sample until that exists.
 ///
 /// No mechanism is written down here. The shape points at something reading
 /// texels nothing wrote this frame, and the dependence on the previous frame's
@@ -359,7 +374,10 @@ fn the_frame_loop_actually_renders() {
 /// What would settle it is a reproduction in bare GLES with no renderer in it --
 /// a multisample framebuffer, a draw under `GL_KHR_blend_equation_advanced`, a
 /// resolve, and a sample of the result -- which is what this tree's own rule
-/// asks for before a driver is named. That has not been written.
+/// asks for before a driver is named. That has not been written. It now has a
+/// target to aim at and a control to check against, which it did not before:
+/// whatever it does has to come out unstable on `radeonsi` and clean on
+/// `llvmpipe`, and a version that fails on both is reproducing something else.
 ///
 /// Asserted as a bound rather than as the defect, so a fix makes this pass
 /// rather than fail: zero is within three.
@@ -425,7 +443,12 @@ fn a_blurred_advanced_blend_layer_is_unstable_on_gles() {
         "the instability grew to {worst} levels, far past the three this case cost \
          when it was reduced -- that is a different defect, not this one"
     );
-    eprintln!("the reduced instability is {worst} levels on this driver");
+    // The driver by name, because which one it is turned out to be the whole
+    // question: the same backend code is stable on one and not on another.
+    eprintln!(
+        "the reduced instability is {worst} levels on {}",
+        gles.capabilities().device_name
+    );
 
     // And the frame's own pass is where it is not: a scene with no layer, no
     // blur and no advanced blend is stable, which is what makes the bound above

@@ -1815,8 +1815,11 @@ segfaults in the same place. So it is a standing fault on that device rather tha
 to attribute here.
 
 `xtask report` succeeds, so the device opens and its capabilities read back: Vulkan 1.3.0,
-max texture 8192, sample counts 1 and 4. There is no GLES device on that board, so Vulkan is
-the only path there and no second one to compare against.
+max texture 8192, sample counts 1 and 4. Vulkan is the only path this renderer can take there,
+so there is no second one to compare against -- but **not because the board has no GLES**, which
+is what this said first. It has `libGLESv2` and that advertises
+`GL_KHR_blend_equation_advanced`; what it has not got is `EGL_MESA_platform_surfaceless`, the
+one way `DisplayTarget` knows how to ask. The GLES section below has the reading.
 
 **Where it dies, from `gdb` on the board rather than from reasoning:**
 
@@ -2074,6 +2077,57 @@ against.
 One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
 mode would read as a hang on a large one.
+
+## Which driver the GLES instability is, measured 2026-10-07
+
+`a_blurred_advanced_blend_layer_is_unstable_on_gles` has carried the sentence
+"it is the GLES path" since it was reduced. That was concluded against software
+*Vulkan*. Comparing against software *GLES* is what nobody had done, and it is
+one command:
+
+| driver | reduced instability |
+|---|---|
+| `radeonsi` (raphael_mendocino) | **3 levels** |
+| `llvmpipe` (LLVM 22.1.8) | **0 -- stable** |
+
+Same backend code, same scene, same call sequence. So the sequence this
+renderer issues is not sufficient to produce it, and the bare-GLES
+reproduction that is still owed now has both a target and a control: it has to
+come out unstable on `radeonsi` and clean on `llvmpipe`, and one that fails on
+both is reproducing something else.
+
+**Two drivers is the whole sample, and the reason is worth recording** because
+it looks like a gap someone could close and is not:
+
+- **V3D on a Raspberry Pi 5** has no `advanced_blend`, so the test skips. The
+  combination needs it twice over.
+- **Adreno 640 on the SA8155P** and **Vivante GC7000UL on the i.MX8MP** both
+  have the capability, and neither can be reached. That is a limit of this
+  renderer rather than of those boards, and the first draft of this section
+  said otherwise.
+
+`DisplayTarget` has exactly one variant and it demands
+**`EGL_MESA_platform_surfaceless`**, a Mesa client extension no vendor stack
+carries. What the i.MX8MP offers instead, read off `libEGL.so.1.5.0`:
+`EGL_KHR_surfaceless_context`, `EGL_KHR_platform_gbm`, `EGL_EXT_device_drm`
+and `EGL_EXT_device_query`. So the *context* this backend wants is available
+there and only the way it asks for the *display* is not. And
+`libGLESv2.so.2.0.0` advertises `GL_KHR_blend_equation_advanced`, which is
+exactly what V3D lacks. The Adreno's `libGLESv2` advertises it too, with
+`_coherent` beside it; its EGL platforms could not be read out of the binary
+and want a runtime query.
+
+So a **GBM display target** would reach two more GLES drivers that have what
+this test needs. It is a smaller change than it sounds: with
+`EGL_KHR_surfaceless_context` present, no surface is needed, only another way
+to get a display, and everything downstream is the code that already runs. It
+would also give the bench the Adreno and Vivante GLES rows it has never had.
+
+**A claim above is wrong and is corrected here.** "There is no GLES device on
+that board" was written of the i.MX8MP. There is one, with the right
+extension; what is missing is a display target this renderer knows how to ask
+for. The shape is the one the writeback connectors had -- a capability
+declared absent because of how it was asked for.
 
 ## What no machine here checks
 
