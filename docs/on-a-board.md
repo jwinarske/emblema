@@ -2561,8 +2561,8 @@ suite. It was seen once, in a gate whose census carried `no card offers
 writeback` while nothing failed.
 
 Within a binary a mutex settled this and always had. Across binaries nothing
-did. A file lock in `tests/common/mod.rs` does, and both take it before
-reaching for the card.
+did. A file lock in `crates/emblema-present-drm/tests/common/mod.rs` does, and
+both take it before reaching for the card.
 
 **It does not reproduce on demand**, which is worth saying rather than
 claiming a fix for something demonstrated. Ten concurrent pairs here never
