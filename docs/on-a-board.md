@@ -2009,10 +2009,49 @@ rather than noise, and they are the first numbers anyone has from this part.
 **Then it dies, and not of the decoder.** The crash is in
 `libvulkan_VSI.so.1` under `emblema_hal_vulkan::render::record_draw` -- command
 recording, not pipeline creation, and nothing from `libVSC.so` or
-`libSPIRV_viv.so` in the backtrace. **The inlining layer does not change it**:
-same exit, same row. So it is a second defect, unrelated to the composite
-construct, and the shader fix neither caused nor cures it. What it blocks is a
-full bench row set from this board.
+`libSPIRV_viv.so` in the backtrace. The inlining layer does not change it. So
+it is a second defect, unrelated to the composite construct, and the shader fix
+neither caused nor cures it.
+
+### What the second defect is: sampling a texture, 2026-10-07
+
+Localized by running every suite the crate has, one process each, rather than
+by reading the bench. Ten pass -- `batch`, `blend`, `device`, `draw`, `msaa`,
+`paint`, `pixels`, `stencil`, `validation`, `assume_layout` -- and two
+segfault: **`sampling` and `runtime_effect`**.
+
+Inside `sampling`, three of four tests crash and the fourth is
+`a_batch_that_samples_nothing_still_binds_a_valid_descriptor`, which passes.
+So the trigger is stated by the suite's own names:
+
+```
+a_batch_that_samples_nothing_still_binds_a_valid_descriptor   exit=0
+sampling_a_rendered_target_is_valid                           exit=139
+sampling_an_uploaded_texture_is_valid                         exit=139
+sampling_several_textures_in_one_batch_is_valid               exit=139
+```
+
+**A draw that samples a texture segfaults in `vkCmdDrawIndexed`.** The
+Khronos validation layer is loaded through all of this and says nothing, which
+is why `sampling_an_uploaded_texture_is_valid` -- upload a texture, draw
+sampling it -- is the whole reproduction. One draw.
+
+That explains everything above it. A layer composites by sampling its target,
+a blur samples twice, a backdrop samples what is behind, an image samples an
+image: those are the nineteen catalog plates that crash and the one bench
+stage that does. `an_empty_layer_composites_nothing_at_all` crashes for the
+same reason an image does.
+
+**Still owed before the driver is named**, by this document's own rule: a
+bare-API reproduction. A silent validation layer and a one-draw case are
+strong and are not that.
+
+**Two more things, neither a crash, both first run there.** `export` fails two
+of six -- the device advertises layouts it then cannot render into, and an
+exported image cannot be rendered into. `sync` fails eight of nine, every one
+about fences and `sync_file` export. Those are capability and behavior
+differences rather than segfaults, they are nothing to do with sampling, and
+nobody has looked at them.
 
 **One more thing that fell out of the A/B.** With the layer loaded the frame
 rows are far faster -- `frame, plus cards` 231.9 ms against 352.9, `plus
