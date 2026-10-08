@@ -875,7 +875,9 @@ impl VulkanContext {
         // submission, so its payload represents exactly the same completion,
         // and resetting it on export costs nothing because nothing else waits
         // on it.
-        let can_export = self.has_extension(ext::EXTERNAL_SEMAPHORE_FD);
+        // The capability, not the extension: a device may offer the entry
+        // points and export nothing. See `exports_sync_file`.
+        let can_export = self.capabilities().sync.export_sync_file;
         let semaphore = if can_export {
             let mut export_info = vk::ExportSemaphoreCreateInfo::default()
                 .handle_types(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
@@ -1253,6 +1255,45 @@ fn hyphenated(uuid: &[u8; 16]) -> String {
     )
 }
 
+/// Whether this device can actually export a semaphore as a `sync_file`.
+///
+/// `VK_KHR_external_semaphore_fd` says the entry points exist. It does not say
+/// any handle type is exportable, and on at least one driver none is.
+fn exports_sync_file(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    let info = vk::PhysicalDeviceExternalSemaphoreInfo::default()
+        .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+    let mut properties = vk::ExternalSemaphoreProperties::default();
+    // SAFETY: both structures are owned here and outlive the call.
+    unsafe {
+        instance.get_physical_device_external_semaphore_properties(pd, &info, &mut properties)
+    };
+    // Both halves. `EXPORTABLE` alone is what this asked first and it is not
+    // enough: a device may set it and then list only `OPAQUE_FD` as
+    // compatible, which is what the VUID is actually about and what this one
+    // does.
+    properties
+        .external_semaphore_features
+        .contains(vk::ExternalSemaphoreFeatureFlags::EXPORTABLE)
+        && properties
+            .compatible_handle_types
+            .contains(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
+}
+
+/// Whether this device can take a `sync_file` into a fence and wait on it.
+fn imports_sync_file(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    let info = vk::PhysicalDeviceExternalFenceInfo::default()
+        .handle_type(vk::ExternalFenceHandleTypeFlags::SYNC_FD);
+    let mut properties = vk::ExternalFenceProperties::default();
+    // SAFETY: both structures are owned here and outlive the call.
+    unsafe { instance.get_physical_device_external_fence_properties(pd, &info, &mut properties) };
+    properties
+        .external_fence_features
+        .contains(vk::ExternalFenceFeatureFlags::IMPORTABLE)
+        && properties
+            .compatible_handle_types
+            .contains(vk::ExternalFenceHandleTypeFlags::SYNC_FD)
+}
+
 fn select_queue_family(instance: &ash::Instance, pd: vk::PhysicalDevice) -> Result<u32> {
     let families = unsafe { instance.get_physical_device_queue_family_properties(pd) };
     families
@@ -1316,11 +1357,23 @@ fn detect_capabilities(
         sync: SyncSupport {
             // Export comes from a semaphore, not a fence: exporting a SYNC_FD
             // resets what it came from, and a reset fence can never be waited
-            // on for retirement. So this reports the extension actually used.
-            export_sync_file: enabled.contains(ext::EXTERNAL_SEMAPHORE_FD),
+            // on for retirement. So this reports the semaphore extension.
+            //
+            // The extension being enabled is not the question, and asking only
+            // that was wrong. A Vivante GC7000UL offers
+            // `VK_KHR_external_semaphore_fd` and then reports no exportable
+            // handle types at all, so every deferred submission built a
+            // semaphore the device could not export and every test that made
+            // one came back with `VUID-VkExportSemaphoreCreateInfo-handleTypes-01124`
+            // -- eight of nine in `sync.rs`, including ones that never export.
+            // The device is asked instead.
+            export_sync_file: enabled.contains(ext::EXTERNAL_SEMAPHORE_FD)
+                && exports_sync_file(instance, pd),
             // Import is the other direction — taking an out-fence from a
-            // display commit and waiting on it — which is a fence operation.
-            import_sync_file: enabled.contains(ext::EXTERNAL_FENCE_FD),
+            // display commit and waiting on it — which is a fence operation,
+            // and asked of the device for the same reason.
+            import_sync_file: enabled.contains(ext::EXTERNAL_FENCE_FD)
+                && imports_sync_file(instance, pd),
         },
         render_formats: if modifiers_known {
             crate::external::render_formats(instance, pd)
