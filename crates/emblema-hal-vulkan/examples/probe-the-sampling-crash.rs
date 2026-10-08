@@ -287,6 +287,46 @@ fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
 "#,
         true,
     ),
+    // Carving `shade` down to its preamble plus the glyph arm -- twenty-eight
+    // lines -- still crashes, so it was never an interaction. What that arm
+    // has and every variant above lacks is that the sample sits inside a
+    // conditional, on a value the caller passed in.
+    (
+        "draw-sampled-in-branch",
+        r#"
+struct VsOut { @builtin(position) pos: vec4<f32> }
+struct In { uv: vec2<f32>, k: f32 }
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32(i32(i) - 1);
+    let y = f32(i32(i & 1u) * 2 - 1);
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    return out;
+}
+
+fn shade(i: In) -> vec4<f32> {
+    if (i.k > 4.5 && i.k < 5.5) {
+        let coverage = textureSampleLevel(tex, samp, i.uv, 0.0).r;
+        return vec4<f32>(coverage, coverage, coverage, coverage);
+    }
+    return vec4<f32>(0.25, 0.5, 0.75, 1.0);
+}
+
+@fragment
+fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
+    var i: In;
+    i.uv = v.pos.xy * 0.001;
+    i.k = 5.0;
+    return shade(i);
+}
+"#,
+        true,
+    ),
 ];
 
 fn spirv(source: &str) -> Vec<u32> {
