@@ -327,7 +327,122 @@ fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
 "#,
         true,
     ),
+    // The renderer's shape, and the one structural thing every variant above
+    // lacks: `solid.wgsl` puts its texture and sampler in set zero and its
+    // paint uniform in **set one**, so a draw binds two descriptor sets. This
+    // does the same.
+    (
+        "draw-two-sets",
+        r#"
+struct VsOut { @builtin(position) pos: vec4<f32> }
+struct Paint { stops: array<vec4<f32>, 4>, params: vec4<f32> }
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(1) @binding(0) var<uniform> paint: Paint;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32(i32(i) - 1);
+    let y = f32(i32(i & 1u) * 2 - 1);
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    return out;
+}
+
+fn shade(uv: vec2<f32>) -> vec4<f32> {
+    let kind = paint.params.y;
+    if (kind > 4.5 && kind < 5.5) {
+        let coverage = textureSampleLevel(tex, samp, uv, 0.0).r;
+        let tint = paint.stops[0];
+        let alpha = tint.a * coverage;
+        return vec4<f32>(tint.rgb * alpha, alpha);
+    }
+    return paint.stops[0];
+}
+
+@fragment
+fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
+    return shade(v.pos.xy * 0.001);
+}
+"#,
+        true,
+    ),
 ];
+
+/// The two-set shader, fed from a real vertex buffer.
+///
+/// Every variant above builds its position from `vertex_index` and declares no
+/// vertex input at all. `solid.wgsl` takes three attributes -- a `vec3`
+/// position, a `vec2` uv and a `vec4` tint -- out of a bound buffer, and the
+/// uv it samples at is the interpolated one. Measured on an i.MX8MP, the
+/// renderer's sampling draw appends 132 records to a 128-entry driver table
+/// where its solid draw appends one; the variants above append none, so this
+/// is the difference left to account for the path being entered at all.
+const WITH_ATTRIBUTES: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) tint: vec4<f32>,
+}
+struct Paint { stops: array<vec4<f32>, 4>, params: vec4<f32> }
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@group(1) @binding(0) var<uniform> paint: Paint;
+
+@vertex
+fn vs_main(
+    @location(0) position: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) tint: vec4<f32>,
+) -> VsOut {
+    var out: VsOut;
+    out.pos = vec4<f32>(position.xy, 0.0, position.z);
+    out.uv = uv;
+    out.tint = tint;
+    return out;
+}
+
+fn shade(in: VsOut) -> vec4<f32> {
+    let kind = paint.params.y;
+    if (kind > 4.5 && kind < 5.5) {
+        let coverage = textureSampleLevel(tex, samp, in.uv, 0.0).r;
+        let tint = paint.stops[0];
+        let alpha = tint.a * coverage;
+        return vec4<f32>(tint.rgb * alpha, alpha);
+    }
+    return paint.stops[0];
+}
+
+@fragment
+fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
+    return v.tint * shade(v);
+}
+"#;
+
+/// The two-set shader with forty functions nobody calls bolted on.
+///
+/// Carving `shade` to twenty-eight lines left a module of **2,495 words and
+/// forty-two functions** -- naga keeps a function that nothing calls, so the
+/// thirty-nine stubs stayed. Every variant in the tables above is two or
+/// three functions and a few hundred words, which is the one difference left
+/// between a probe that passes and a renderer that does not.
+fn many_functions() -> String {
+    let mut source = String::from(
+        GRAPHICS
+            .iter()
+            .find(|(n, _, _)| *n == "draw-two-sets")
+            .expect("the two-set variant")
+            .1,
+    );
+    for i in 0..40 {
+        source.push_str(&format!(
+            "\nfn unused_{i}(x: vec4<f32>) -> vec4<f32> {{ return x * {i}.0; }}\n"
+        ));
+    }
+    source
+}
 
 fn spirv(source: &str) -> Vec<u32> {
     let module = naga::front::wgsl::parse_str(source)
@@ -379,10 +494,46 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
     let queues = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(family)
         .queue_priorities(&priorities)];
+    // `VulkanContext` asks for every extension in this list that the device
+    // offers, and a bare device asks for none. Set `EMBLEMA_EXTENSIONS` to ask
+    // for them here too.
+    //
+    // Measured on an i.MX8MP: six of the eight are offered, and enabling all
+    // six leaves the append count at zero for every variant. So the extension
+    // set is not what opens the driver's append path -- which the renderer
+    // enters even for a solid draw and nothing here enters at all.
+    let wanted = [
+        c"VK_EXT_external_memory_dma_buf",
+        c"VK_KHR_external_memory_fd",
+        c"VK_EXT_image_drm_format_modifier",
+        c"VK_KHR_external_fence_fd",
+        c"VK_KHR_external_semaphore_fd",
+        c"VK_EXT_physical_device_drm",
+        c"VK_EXT_blend_operation_advanced",
+        c"VK_KHR_swapchain",
+    ];
+    let available: Vec<std::ffi::CString> = instance
+        .enumerate_device_extension_properties(physical)
+        .expect("enumerate_device_extension_properties")
+        .iter()
+        .map(|p| std::ffi::CStr::from_ptr(p.extension_name.as_ptr()).to_owned())
+        .collect();
+    let enabled: Vec<*const std::ffi::c_char> = if std::env::var("EMBLEMA_EXTENSIONS").is_ok() {
+        let names: Vec<_> = wanted
+            .iter()
+            .filter(|w| available.iter().any(|a| a.as_c_str() == **w))
+            .collect();
+        println!("enabling {} of the renderer's extensions", names.len());
+        names.into_iter().map(|w| w.as_ptr()).collect()
+    } else {
+        Vec::new()
+    };
     let device = instance
         .create_device(
             physical,
-            &vk::DeviceCreateInfo::default().queue_create_infos(&queues),
+            &vk::DeviceCreateInfo::default()
+                .queue_create_infos(&queues)
+                .enabled_extension_names(&enabled),
             None,
         )
         .expect("create_device");
@@ -508,6 +659,22 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
         "draw-full-set" => (4, 4),
         _ => (1, 1),
     };
+    // Whether the paint uniform gets a descriptor set of its own, as
+    // `solid.wgsl` gives it.
+    let two_sets = name == "draw-two-sets"
+        || name == "draw-dynamic-offset"
+        || name == "draw-vertex-attributes";
+    // `record_draw` binds the material set as `UNIFORM_BUFFER_DYNAMIC` at
+    // `firstSet` one with a dynamic offset per draw, which is the line
+    // immediately above the `cmd_draw_indexed` the driver dies inside.
+    let dynamic = name == "draw-dynamic-offset" || name == "draw-vertex-attributes";
+    // Three attributes out of a bound buffer, as `vs_main` declares them.
+    let attributes = name == "draw-vertex-attributes";
+    let paint_type = if dynamic {
+        vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
+    } else {
+        vk::DescriptorType::UNIFORM_BUFFER
+    };
     let mut bindings = Vec::new();
     if with_image {
         for extra in 1..declared {
@@ -546,7 +713,26 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
             None,
         )
         .expect("create_descriptor_set_layout");
-    let set_layouts = [set_layout];
+    let uniform_binding = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(paint_type)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let paint_layout = if two_sets {
+        device
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&uniform_binding),
+                None,
+            )
+            .expect("create_descriptor_set_layout (paint)")
+    } else {
+        vk::DescriptorSetLayout::null()
+    };
+    let set_layouts: Vec<vk::DescriptorSetLayout> = if two_sets {
+        vec![set_layout, paint_layout]
+    } else {
+        vec![set_layout]
+    };
     let layout = device
         .create_pipeline_layout(
             &vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts),
@@ -565,19 +751,32 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
                 .ty(vk::DescriptorType::SAMPLER)
                 .descriptor_count(1),
         ];
+        let sizes: Vec<vk::DescriptorPoolSize> = if two_sets {
+            sizes
+                .into_iter()
+                .chain([vk::DescriptorPoolSize::default()
+                    .ty(paint_type)
+                    .descriptor_count(1)])
+                .collect()
+        } else {
+            sizes.to_vec()
+        };
         pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(1)
+                    .max_sets(if two_sets { 2 } else { 1 })
                     .pool_sizes(&sizes),
                 None,
             )
             .expect("create_descriptor_pool");
+        // The image set alone; the paint set is allocated below from its own
+        // layout, because they are different sets and not one array.
+        let image_layouts = [set_layout];
         set = device
             .allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(pool)
-                    .set_layouts(&set_layouts),
+                    .set_layouts(&image_layouts),
             )
             .expect("allocate_descriptor_sets")[0];
         let image_info = [vk::DescriptorImageInfo::default()
@@ -612,6 +811,84 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
         device.update_descriptor_sets(&writes, &[]);
     }
 
+    // The paint uniform, in a set of its own.
+    let mut paint_set = vk::DescriptorSet::null();
+    let mut paint_offset = 0u32;
+    let mut paint_buffer = vk::Buffer::null();
+    let mut paint_memory = vk::DeviceMemory::null();
+    if two_sets {
+        // Five vec4s: four stops and the params, which is what the shader
+        // declares. A dynamic binding gets two of them, padded to the device's
+        // minimum offset alignment, so that the offset bound below is not zero
+        // -- `materials.rs` pads the same way and for the same reason.
+        let material = 5 * 16u64;
+        let align = instance
+            .get_physical_device_properties(physical)
+            .limits
+            .min_uniform_buffer_offset_alignment;
+        let stride = material.next_multiple_of(align);
+        let size = if dynamic { 2 * stride } else { material };
+        paint_buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::UNIFORM_BUFFER),
+                None,
+            )
+            .expect("create_buffer (paint)");
+        let need = device.get_buffer_memory_requirements(paint_buffer);
+        paint_memory = device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(need.size)
+                    .memory_type_index(pick(
+                        need.memory_type_bits,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )),
+                None,
+            )
+            .expect("allocate paint memory");
+        device
+            .bind_buffer_memory(paint_buffer, paint_memory, 0)
+            .expect("bind_buffer_memory (paint)");
+        // `params.y` is the material kind, and five is the one whose arm
+        // samples. Writing it means the sampling branch is the live one.
+        let mapped = device
+            .map_memory(paint_memory, 0, need.size, vk::MemoryMapFlags::empty())
+            .expect("map_memory (paint)") as *mut f32;
+        std::ptr::write_bytes(mapped, 0, (need.size / 4) as usize);
+        // `params.y` sits sixty-eight bytes into a material, and the live one
+        // is the second when a dynamic offset selects it.
+        let base = if dynamic { stride } else { 0 };
+        paint_offset = u32::try_from(base).expect("the offset fits");
+        mapped.byte_add((base + 68) as usize).write(5.0);
+        device.unmap_memory(paint_memory);
+
+        let paint_layouts = [paint_layout];
+        paint_set = device
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(pool)
+                    .set_layouts(&paint_layouts),
+            )
+            .expect("allocate_descriptor_sets (paint)")[0];
+        // The range is one material and not the whole buffer, which is what
+        // `materials.rs` names: the dynamic offset is added to it.
+        let buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(paint_buffer)
+            .range(material)];
+        device.update_descriptor_sets(
+            &[vk::WriteDescriptorSet::default()
+                .dst_set(paint_set)
+                .dst_binding(0)
+                .descriptor_type(paint_type)
+                .buffer_info(&buffer_info)],
+            &[],
+        );
+        println!("paint uniform in a second descriptor set");
+    }
+
     let module = device
         .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)
         .expect("create_shader_module");
@@ -627,7 +904,36 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
             .module(module)
             .name(&fs),
     ];
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+    // Nine floats a vertex: the position, the uv and the tint, in the order
+    // `vs_main` declares them and at the offsets the renderer packs them to.
+    let vertex_bindings = [vk::VertexInputBindingDescription::default()
+        .binding(0)
+        .stride(36)
+        .input_rate(vk::VertexInputRate::VERTEX)];
+    let vertex_attributes = [
+        vk::VertexInputAttributeDescription::default()
+            .location(0)
+            .binding(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(0),
+        vk::VertexInputAttributeDescription::default()
+            .location(1)
+            .binding(0)
+            .format(vk::Format::R32G32_SFLOAT)
+            .offset(12),
+        vk::VertexInputAttributeDescription::default()
+            .location(2)
+            .binding(0)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .offset(20),
+    ];
+    let vertex_input = if attributes {
+        vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&vertex_bindings)
+            .vertex_attribute_descriptions(&vertex_attributes)
+    } else {
+        vk::PipelineVertexInputStateCreateInfo::default()
+    };
     let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     let viewports = [vk::Viewport::default()
@@ -670,12 +976,18 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
         .expect("create_graphics_pipelines");
     println!("pipeline created");
 
-    // Three indices, so the draw below is the indexed one the backtrace names.
-    let indices: [u32; 3] = [0, 1, 2];
+    // Three indices, so the draw below is the indexed one the backtrace names;
+    // a quad's six where there is a vertex buffer to read them out of, which is
+    // what the renderer's batch pushes.
+    let indices: &[u32] = if attributes {
+        &[0, 1, 2, 0, 2, 3]
+    } else {
+        &[0, 1, 2]
+    };
     let index_buffer = device
         .create_buffer(
             &vk::BufferCreateInfo::default()
-                .size(std::mem::size_of_val(&indices) as u64)
+                .size(std::mem::size_of_val(indices) as u64)
                 .usage(vk::BufferUsageFlags::INDEX_BUFFER),
             None,
         )
@@ -700,6 +1012,48 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
         .expect("map_memory") as *mut u32;
     std::ptr::copy_nonoverlapping(indices.as_ptr(), mapped, indices.len());
     device.unmap_memory(index_memory);
+
+    // The four corners of the target, each with a uv and an opaque white tint.
+    let mut vertex_buffer = vk::Buffer::null();
+    let mut vertex_memory = vk::DeviceMemory::null();
+    if attributes {
+        #[rustfmt::skip]
+        let vertices: [f32; 36] = [
+            -1.0, -1.0, 1.0,  0.0, 0.0,  1.0, 1.0, 1.0, 1.0,
+             1.0, -1.0, 1.0,  1.0, 0.0,  1.0, 1.0, 1.0, 1.0,
+             1.0,  1.0, 1.0,  1.0, 1.0,  1.0, 1.0, 1.0, 1.0,
+            -1.0,  1.0, 1.0,  0.0, 1.0,  1.0, 1.0, 1.0, 1.0,
+        ];
+        vertex_buffer = device
+            .create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(std::mem::size_of_val(&vertices) as u64)
+                    .usage(vk::BufferUsageFlags::VERTEX_BUFFER),
+                None,
+            )
+            .expect("create_buffer (vertices)");
+        let need = device.get_buffer_memory_requirements(vertex_buffer);
+        vertex_memory = device
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(need.size)
+                    .memory_type_index(pick(
+                        need.memory_type_bits,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )),
+                None,
+            )
+            .expect("allocate vertex memory");
+        device
+            .bind_buffer_memory(vertex_buffer, vertex_memory, 0)
+            .expect("bind_buffer_memory (vertices)");
+        let mapped = device
+            .map_memory(vertex_memory, 0, need.size, vk::MemoryMapFlags::empty())
+            .expect("map_memory (vertices)") as *mut f32;
+        std::ptr::copy_nonoverlapping(vertices.as_ptr(), mapped, vertices.len());
+        device.unmap_memory(vertex_memory);
+    }
 
     let command_pool = device
         .create_command_pool(
@@ -760,18 +1114,38 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
     );
     device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipelines[0]);
     if with_image {
+        let sets: Vec<vk::DescriptorSet> = if two_sets && !dynamic {
+            vec![set, paint_set]
+        } else {
+            vec![set]
+        };
         device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::GRAPHICS,
             layout,
             0,
-            &[set],
+            &sets,
             &[],
         );
+        if dynamic {
+            // Set one on its own, with the offset traveling in the binding
+            // call -- the shape `record_draw` uses per draw.
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                1,
+                &[paint_set],
+                &[paint_offset],
+            );
+        }
+    }
+    if attributes {
+        device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]);
     }
     device.cmd_bind_index_buffer(cmd, index_buffer, 0, vk::IndexType::UINT32);
     println!("recording the draw");
-    device.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
+    device.cmd_draw_indexed(cmd, indices.len() as u32, 1, 0, 0, 0);
     println!("draw recorded");
     device.cmd_end_render_pass(cmd);
     device.end_command_buffer(cmd).expect("end");
@@ -792,6 +1166,10 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
     device.destroy_command_pool(command_pool, None);
     device.destroy_buffer(index_buffer, None);
     device.free_memory(index_memory, None);
+    if attributes {
+        device.destroy_buffer(vertex_buffer, None);
+        device.free_memory(vertex_memory, None);
+    }
     device.destroy_pipeline(pipelines[0], None);
     device.destroy_shader_module(module, None);
     if with_image {
@@ -800,6 +1178,11 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
         device.destroy_image_view(sampled.2, None);
         device.destroy_image(sampled.0, None);
         device.free_memory(sampled.1, None);
+    }
+    if two_sets {
+        device.destroy_buffer(paint_buffer, None);
+        device.free_memory(paint_memory, None);
+        device.destroy_descriptor_set_layout(paint_layout, None);
     }
     device.destroy_pipeline_layout(layout, None);
     device.destroy_descriptor_set_layout(set_layout, None);
@@ -816,6 +1199,18 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
 fn main() -> std::process::ExitCode {
     let Some(wanted) = std::env::args().nth(1) else {
         println!("variants:");
+        println!(
+            "  {:26} the two-set shader, bound the way `record_draw` binds it",
+            "draw-dynamic-offset"
+        );
+        println!(
+            "  {:26} that, fed from a real vertex buffer",
+            "draw-vertex-attributes"
+        );
+        println!(
+            "  {:26} the two-set shader plus forty uncalled functions",
+            "draw-many-functions"
+        );
         for (name, _, samples) in VARIANTS.iter().chain(GRAPHICS) {
             println!(
                 "  {name:26} {}",
@@ -828,6 +1223,30 @@ fn main() -> std::process::ExitCode {
         }
         return std::process::ExitCode::SUCCESS;
     };
+    if wanted == "draw-vertex-attributes" {
+        let words = spirv(WITH_ATTRIBUTES);
+        println!("draw-vertex-attributes: {} words, graphics", words.len());
+        // SAFETY: as below.
+        return unsafe { run_graphics("draw-vertex-attributes", &words, true) };
+    }
+    if wanted == "draw-dynamic-offset" {
+        let source = GRAPHICS
+            .iter()
+            .find(|(n, _, _)| *n == "draw-two-sets")
+            .expect("the two-set variant")
+            .1;
+        let words = spirv(source);
+        println!("draw-dynamic-offset: {} words, graphics", words.len());
+        // SAFETY: as below.
+        return unsafe { run_graphics("draw-dynamic-offset", &words, true) };
+    }
+    if wanted == "draw-many-functions" {
+        let source = many_functions();
+        let words = spirv(&source);
+        println!("draw-many-functions: {} words, graphics", words.len());
+        // SAFETY: as below.
+        return unsafe { run_graphics("draw-two-sets", &words, true) };
+    }
     if let Some((name, source, with_image)) = GRAPHICS.iter().find(|(n, _, _)| *n == wanted) {
         let words = spirv(source);
         println!(
