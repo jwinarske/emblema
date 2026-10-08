@@ -69,7 +69,7 @@ const VARIANTS: &[(&str, &str)] = &[
 @group(0) @binding(0) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     let v = vec2<f32>(out[1], 0.5);
     out[0] = v.x + v.y;
 }
@@ -85,7 +85,7 @@ fn scaled(x: f32) -> f32 {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     out[0] = scaled(out[1]);
 }
 "#,
@@ -100,7 +100,7 @@ fn built() -> vec2<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     let v = built();
     out[0] = v.x + v.y;
 }
@@ -116,7 +116,7 @@ fn built(p: ptr<function, f32>) -> vec2<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     var x = out[1];
     let v = built(&x);
     out[0] = v.x + v.y;
@@ -133,7 +133,7 @@ fn doubled(x: f32) -> f32 {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     let v = vec2<f32>(doubled(out[1]), 0.5);
     out[0] = v.x + v.y;
 }
@@ -153,7 +153,7 @@ fn built() -> vec2<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     let v = built();
     out[0] = v.x + v.y;
 }
@@ -174,7 +174,7 @@ fn built(i: In) -> vec3<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     var i: In;
     i.uv = vec2<f32>(out[1], out[2]);
     i.k = out[3];
@@ -199,7 +199,7 @@ fn built(i: In) -> vec3<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     var i: In;
     i.uv = vec2<f32>(out[1], out[2]);
     i.k = out[3];
@@ -218,7 +218,7 @@ fn built(x: f32) -> vec2<f32> {
 }
 
 @compute @workgroup_size(1)
-fn main() {
+fn cs_main() {
     let v = built(out[1]);
     out[0] = v.x + v.y;
 }
@@ -293,6 +293,33 @@ fn spirv(source: &str) -> Vec<u32> {
 }
 
 fn main() -> std::process::ExitCode {
+    // `--dump <dir>` writes each variant's module out, for feeding to somebody
+    // else's reproducer. A bug report lands better when the module can be run
+    // through the reporter's own harness rather than only through this one.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--dump") {
+        let Some(dir) = args.get(1) else {
+            eprintln!("--dump needs a directory");
+            return std::process::ExitCode::FAILURE;
+        };
+        for (name, source) in VARIANTS {
+            let words = spirv(source);
+            let mut bytes = Vec::with_capacity(words.len() * 4);
+            for word in &words {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            let path = std::path::Path::new(dir).join(format!("{name}.spv"));
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => println!("{} words -> {}", words.len(), path.display()),
+                Err(e) => {
+                    eprintln!("writing {}: {e}", path.display());
+                    return std::process::ExitCode::FAILURE;
+                }
+            }
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+
     let Some(wanted) = std::env::args().nth(1) else {
         println!("variants:");
         for (name, source) in VARIANTS {
@@ -374,7 +401,12 @@ fn main() -> std::process::ExitCode {
             )
             .expect("create_pipeline_layout");
 
-        let name = std::ffi::CString::new("main").unwrap();
+        // `cs_main`, not `main`, so a dumped module drops straight into the
+        // reproducer the vendor report already ships, which hardcodes that
+        // name. A module whose entry point the pipeline cannot find is
+        // undefined behavior, and on this driver it segfaults -- which reads
+        // exactly like the bug being looked for.
+        let name = std::ffi::CString::new("cs_main").unwrap();
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
