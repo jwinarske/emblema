@@ -1935,6 +1935,13 @@ their stored images, and every cross-backend and cross-device comparison is
 unchanged -- which is the thing to check, since seven edits to a shader for a
 driver's sake is exactly where a quiet rendering change would hide.
 
+Checked on a fourth driver family rather than assumed: on a Raspberry Pi 5,
+`cross_backend` passes eight of eight and `catalog` thirty-three of
+thirty-three, which compares the plates across V3D's Vulkan and its GLES. So
+the four the bench can reach all agree -- RADV and radeonsi through the gate,
+lavapipe and llvmpipe beside them, Vivante through its own suites, and V3D
+here.
+
 **What it costs**: `solid.wgsl`'s SPIR-V goes from 9,974 words to 10,234, two
 and a half per cent, and the GLSL gains the same stores and loads. Whether
 that moves a frame is unmeasured. `shader-cost-is-a-step-function` says shader
