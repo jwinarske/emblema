@@ -102,10 +102,7 @@ const EXPECTED: [[u8; 4]; 4] = [
     [192, 0, 160, 255],
 ];
 
-/// Serializes the tests here against each other and against `kms.rs`'s, for the
-/// reason that file gives: master is exclusive per device, and a test that is
-/// refused it reports itself skipped and passes.
-static CARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+mod common;
 
 fn scene() -> Batch {
     let mut batch = Batch::new();
@@ -238,8 +235,8 @@ struct Writeback {
 }
 
 impl Writeback {
-    fn find() -> Option<(Self, std::sync::MutexGuard<'static, ()>)> {
-        let guard = CARD.lock().unwrap_or_else(|e| e.into_inner());
+    fn find() -> Option<(Self, common::CardGuard)> {
+        let guard = common::take_the_card();
         let mut refused = Vec::new();
 
         let named = std::env::var("EMBLEMA_DRM_CARD").ok();
