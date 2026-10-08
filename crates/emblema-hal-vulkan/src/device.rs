@@ -1324,6 +1324,13 @@ fn detect_capabilities(
     // dma-buf export needs both the fd machinery and the dma-buf handle type;
     // either alone is useless. Negotiating a scanout-capable layout
     // additionally needs explicit modifiers.
+    // Asked before the struct is built, because whether anything can be
+    // exported is part of the answer and not a field beside it.
+    let exportable_formats = if modifiers_known {
+        crate::external::render_formats(instance, pd)
+    } else {
+        Vec::new()
+    };
     let fd = enabled.contains(ext::EXTERNAL_MEMORY_FD);
     let dma_buf = enabled.contains(ext::EXTERNAL_MEMORY_DMA_BUF);
     let modifiers = enabled.contains(ext::IMAGE_DRM_FORMAT_MODIFIER);
@@ -1351,7 +1358,13 @@ fn detect_capabilities(
         sample_counts: SampleCounts::from_mask(sample_mask.as_raw()),
         dma_buf: DmaBufSupport {
             import: fd && dma_buf,
-            export: fd && dma_buf,
+            // And something to export. The extensions say the entry points
+            // exist; `exportable_formats` is what the device answered when
+            // asked per format and modifier, and a Vivante GC7000UL answers
+            // none while advertising all three -- so this used to say yes and
+            // the allocation then built an image the device would not hand
+            // over. See `external::query_format_modifiers`.
+            export: fd && dma_buf && !exportable_formats.is_empty(),
             modifiers,
         },
         sync: SyncSupport {
@@ -1375,11 +1388,7 @@ fn detect_capabilities(
             import_sync_file: enabled.contains(ext::EXTERNAL_FENCE_FD)
                 && imports_sync_file(instance, pd),
         },
-        render_formats: if modifiers_known {
-            crate::external::render_formats(instance, pd)
-        } else {
-            Vec::new()
-        },
+        render_formats: exportable_formats,
         device_name: device_name(&props),
         driver_name: format!("vulkan {}", api_version_string(props.api_version)),
         software: props.device_type == vk::PhysicalDeviceType::CPU,

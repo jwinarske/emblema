@@ -25,6 +25,71 @@ use emblema_hal::{
 /// This is the render side's half of format negotiation. Without it the only
 /// safe assumption is linear, which works everywhere and wastes bandwidth
 /// everywhere.
+/// Whether this format, at this modifier, can be exported as a dma-buf.
+///
+/// Both halves of the answer, because four devices between them need both and
+/// a check of either one alone is wrong on two of them. Measured 2026-10-08,
+/// at the usage [`create_exportable_texture`] asks for:
+///
+/// | device | features | compatible handle types | |
+/// |---|---|---|---|
+/// | RADV | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+/// | V3D | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+/// | llvmpipe, Mesa 26 | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+/// | llvmpipe, Mesa 19 | **`IMPORTABLE`** | `DMA_BUF` | drop |
+/// | Vivante GC7000UL | `EXPORTABLE \| IMPORTABLE` | **`OPAQUE_FD`** | drop |
+///
+/// The last two are why. An older llvmpipe lists dma-buf as compatible and
+/// cannot export at all; a Vivante says it can export and lists a different
+/// handle type. `exportFromImportedHandleTypes` is a third field and answers a
+/// third question -- it is `DMA_BUF` on the Vivante -- so it is not the one to
+/// read.
+///
+/// The usage matters and is the one the allocation uses: a device may export a
+/// layout it can sample and refuse the same layout as a color attachment.
+///
+/// [`create_exportable_texture`]: crate::VulkanContext::create_exportable_texture
+fn exports_as_dma_buf(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    format: PixelFormat,
+    modifier: u64,
+) -> bool {
+    let mut modifier_info = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+        .drm_format_modifier(modifier)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
+        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let info = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(vk_format(format))
+        .ty(vk::ImageType::TYPE_2D)
+        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+        .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+        .push_next(&mut external)
+        .push_next(&mut modifier_info);
+
+    let mut external_properties = vk::ExternalImageFormatProperties::default();
+    let mut properties = vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+    // SAFETY: every chained structure outlives the call.
+    let answered = unsafe {
+        instance.get_physical_device_image_format_properties2(
+            physical_device,
+            &info,
+            &mut properties,
+        )
+    }
+    .is_ok();
+
+    let external = external_properties.external_memory_properties;
+    answered
+        && external
+            .external_memory_features
+            .contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+        && external
+            .compatible_handle_types
+            .contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+}
+
 pub fn query_format_modifiers(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -70,6 +135,11 @@ pub fn query_format_modifiers(
             e.drm_format_modifier_tiling_features
                 .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
         })
+        // And only ones the device will hand out as a dma-buf. Rendering into
+        // a layout and exporting it are separate questions; this asked only
+        // the first, so a device that advertised a modifier and then refused
+        // the handle type got an image built anyway.
+        .filter(|e| exports_as_dma_buf(instance, physical_device, format, e.drm_format_modifier))
         .map(|e| Modifier(e.drm_format_modifier))
         .collect();
 
