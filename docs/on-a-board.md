@@ -2209,15 +2209,40 @@ image and the device reports only `OPAQUE_FD` as compatible, which cascades
 into four validation errors ending in a copy out of an image with no format
 features at all.
 
-The matching fix is to filter advertised modifiers by
-`vkGetPhysicalDeviceImageFormatProperties2` with a
-`VkPhysicalDeviceExternalImageFormatInfo` chained on. **It was written and
-reverted**, because it is wrong: it takes that board from three render formats
-to zero, and `XR30` at the linear modifier demonstrably *does* export there --
-the test that negotiates it passed before and after. So a naive compatibility
-query over-rejects a format that works, and shipping it would have disabled
-dma-buf export on a device that has it. What the right query is has not been
-established, and guessing again would cost more than it buys.
+### What the device answers, measured on five, 2026-10-08
+
+The filter for that was written, reverted once as an over-rejection, and is
+now shipped -- because printing what the device actually answers showed the
+revert was reasoning from a passing test that had no right to pass.
+`probe-the-export-query` asks `vkGetPhysicalDeviceImageFormatProperties2` per
+format and modifier, at the usage the allocation uses, and prints the reply:
+
+| device | features | compatible handle types | |
+|---|---|---|---|
+| RADV | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+| V3D, Pi 5 | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+| llvmpipe, Mesa 26 | `EXPORTABLE \| IMPORTABLE` | `OPAQUE_FD \| DMA_BUF` | keep |
+| llvmpipe, Mesa 19, on the Pi | **`IMPORTABLE`** | `DMA_BUF` | drop |
+| Vivante GC7000UL | `EXPORTABLE \| IMPORTABLE` | **`OPAQUE_FD`** | drop |
+
+**Both halves, for the same reason the semaphore needed both.** An older
+llvmpipe lists dma-buf as compatible and cannot export at all; the Vivante
+says it can export and lists a different handle type. Checking either field
+alone is wrong on one of them. `exportFromImportedHandleTypes` is a third
+field answering a third question -- `DMA_BUF` on the Vivante -- and is not the
+one to read.
+
+**The revert's reasoning was wrong.** It rested on `XR30` at the linear
+modifier "demonstrably exporting" on that board, because the test negotiating
+it passed. The device reports `compatibleHandleTypes` as `OPAQUE_FD` for that
+format, so creating a dma-buf-exportable image of it is invalid usage, and the
+test was passing on undefined behavior that happened to work. A passing test
+is not a capability.
+
+`DmaBufSupport::export` now also requires that something is exportable, so the
+capability means what it says and the five export tests skip on that board
+instead of failing. Nothing is dropped where it should not be: the Pi 5 keeps
+six of six and the gate is unchanged.
 
 **One more thing that fell out of the A/B.** With the layer loaded the frame
 rows are far faster -- `frame, plus cards` 231.9 ms against 352.9, `plus
