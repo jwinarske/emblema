@@ -2113,15 +2113,44 @@ which rhymes with the composite rule next door. **It is not that on its own.**
 a struct and sampling at a component of it, and it passes. So does
 `draw-sampled-in-callee`.
 
-So the arm is *necessary within* `solid.wgsl` and not *sufficient* outside it:
-the crash needs the arm **and** something in the hundred and fifty-four lines
-before it. That is an interaction, which is why five single-ingredient
-hypotheses have now missed.
+**That it is an interaction was the wrong conclusion, and carving says so.**
+Truncation can only ever ask "the first N lines", so it never tried the glyph
+arm *without* the gradient chain and the switch. A tool that keeps named
+ranges does, and the answer is that the arm needs neither:
 
-**What would narrow it further** is cutting inside `shade` while keeping the
-glyph arm -- non-contiguous cuts, where the tooling so far only truncates. The
-region to carve is the gradient chain and the material switch, and the arm
-goes back on the end of each attempt.
+| `shade` kept as | result |
+|---|---|
+| preamble + gradient chain + switch + glyph arm | 139 |
+| **preamble + glyph arm, twenty-eight lines** | **139** |
+
+So the minimal `shade` is small and exact:
+
+```wgsl
+fn shade(in: VertexOutput) -> vec4<f32> {
+    var color: vec4<f32> = paint.stops[0];
+    let kind = paint.params.y;
+    if (kind < 0.5) { return vec4<f32>(color.rgb * color.a, color.a); }
+    if (kind > 4.5 && kind < 5.5) {
+        let coverage = textureSampleLevel(image_texture, image_sampler, in.uv, 0.0).r;
+        let tint = paint.stops[0];
+        let alpha = tint.a * coverage;
+        return vec4<f32>(tint.rgb * alpha, alpha);
+    }
+    return vec4<f32>(color.rgb * color.a, color.a);
+}
+```
+
+**The branch was the next guess and it is also wrong.**
+`draw-sampled-in-branch` puts the sample inside a conditional on a value the
+caller passed, which is the one thing that arm had and every earlier variant
+lacked. It passes.
+
+**Where that leaves it.** Twenty-eight lines is the floor for `shade`'s *body*,
+and the module around it is still the renderer's whole module: the `paint`
+block, the four-image descriptor layout, `VertexOutput`, a real `vs_main`. The
+probe has none of those and does not crash. So the remaining ingredient is in
+the module's own declarations or the pipeline built around them rather than in
+`shade`'s statements, and the next carve is of those -- not of more lines.
 
 **The wording this corrects** is from the census: "a draw that samples a
 texture segfaults". That is an accurate description of *which renderer tests*
