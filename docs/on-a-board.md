@@ -2083,8 +2083,45 @@ the best hypothesis and it is wrong.
 
 What the renderer still has that this does not: push constants, the paint
 storage buffer, a fifteen-hundred-line shader rather than a twenty-line one,
-and a pipeline built from `solid.wgsl`'s own state. The shader is the next
-thing to try, being the largest difference by far.
+and a pipeline built from `solid.wgsl`'s own state.
+
+### The shader was bisected too, and it is an interaction
+
+Same method as the composite rule: stub each of the thirty-nine callable
+functions to a constant return, halve, then cut `shade`'s body at
+function-body depth. The oracle is
+`sampling_an_uploaded_texture_is_valid` on the board, 139 against 0.
+
+It lands on `shade` alone again, and inside `shade`:
+
+| `shade` cut to | result |
+|---|---|
+| 10 lines, the solid arm | 0 |
+| 125 lines, through the gradient chain | 0 |
+| 154 lines, through the material switch | 0 |
+| 172 lines, adding the glyph arm | **139** |
+
+The glyph arm is the only place `shade` samples directly:
+
+```wgsl
+let coverage = textureSampleLevel(image_texture, image_sampler, in.uv, 0.0).r;
+```
+
+-- a sample whose coordinate is extracted from `shade`'s own value parameter,
+which rhymes with the composite rule next door. **It is not that on its own.**
+`draw-sampled-param-coord` in the probe is exactly that shape, a callee taking
+a struct and sampling at a component of it, and it passes. So does
+`draw-sampled-in-callee`.
+
+So the arm is *necessary within* `solid.wgsl` and not *sufficient* outside it:
+the crash needs the arm **and** something in the hundred and fifty-four lines
+before it. That is an interaction, which is why five single-ingredient
+hypotheses have now missed.
+
+**What would narrow it further** is cutting inside `shade` while keeping the
+glyph arm -- non-contiguous cuts, where the tooling so far only truncates. The
+region to carve is the gradient chain and the material switch, and the arm
+goes back on the end of each attempt.
 
 **The wording this corrects** is from the census: "a draw that samples a
 texture segfaults". That is an accurate description of *which renderer tests*

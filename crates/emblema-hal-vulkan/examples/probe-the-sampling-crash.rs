@@ -217,6 +217,76 @@ fn fs_main() -> @location(0) vec4<f32> {
 "#,
         true,
     ),
+    // `solid.wgsl` never samples in its entry point: `fs_main` calls `shade`,
+    // which calls `sample_image` and the rest, and those do the sampling. The
+    // probe above samples in `fs_main` directly, which is the one structural
+    // difference between a twenty-line shader that passes and a
+    // fifteen-hundred-line one that does not -- and a called function was the
+    // whole of the other defect on this driver.
+    (
+        "draw-sampled-in-callee",
+        r#"
+struct VsOut { @builtin(position) pos: vec4<f32> }
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32(i32(i) - 1);
+    let y = f32(i32(i & 1u) * 2 - 1);
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    return out;
+}
+
+fn sampled() -> vec4<f32> {
+    return textureSampleLevel(tex, samp, vec2<f32>(0.5, 0.5), 0.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return sampled();
+}
+"#,
+        true,
+    ),
+    // Bisecting `solid.wgsl` put the crash in `shade`'s glyph arm, whose only
+    // sample is `textureSampleLevel(tex, samp, in.uv, 0.0)` -- a coordinate
+    // extracted from `shade`'s own value parameter. Every variant above
+    // samples at a constant. This is that one difference.
+    (
+        "draw-sampled-param-coord",
+        r#"
+struct VsOut { @builtin(position) pos: vec4<f32> }
+struct In { uv: vec2<f32>, k: f32 }
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32(i32(i) - 1);
+    let y = f32(i32(i & 1u) * 2 - 1);
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    return out;
+}
+
+fn shade(i: In) -> vec4<f32> {
+    return textureSampleLevel(tex, samp, i.uv, 0.0);
+}
+
+@fragment
+fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
+    var i: In;
+    i.uv = v.pos.xy * 0.001;
+    i.k = 1.0;
+    return shade(i);
+}
+"#,
+        true,
+    ),
 ];
 
 fn spirv(source: &str) -> Vec<u32> {
