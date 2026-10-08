@@ -2056,8 +2056,51 @@ driver**, in a way indistinguishable from the bug. Every one of the nine
 control that caught it was a module with no called function at all, which
 cannot be the shape and crashed anyway.
 
+### The sampling crash is narrower than "a draw that samples", 2026-10-08
+
+`probe-the-sampling-crash` is the bare-API attempt, and it **does not
+reproduce**. Five variants, each a step up from the last, all of them passing
+on the board in the same session in which the renderer's own
+`sampling_an_uploaded_texture_is_valid` exits 139:
+
+| variant | what it adds | Vivante | RADV |
+|---|---|---|---|
+| `dispatch-plain` | a compute dispatch, storage buffer only | 0 | 0 |
+| `dispatch-sampled-unused` | a sampled image bound, never read | 0 | 0 |
+| `dispatch-sampled` | the shader samples it | 0 | 0 |
+| `draw-plain` | a graphics `vkCmdDrawIndexed`, no descriptors | 0 | 0 |
+| `draw-sampled-unused` | a sampled image bound, never read | 0 | 0 |
+| `draw-sampled` | the fragment shader samples it | 0 | 0 |
+| `draw-sparse-set` | four image bindings declared, one written | 0 | 0 |
+| `draw-full-set` | the same four, all written | 0 | 0 |
+
+So three guesses are eliminated. It is not sampling as such, in compute or in
+graphics. It is not an indexed draw. And it is **not** the renderer's sparse
+descriptor set -- the layout declares four sampled-image bindings whatever the
+shader uses, the path that binds a real texture writes only the ones the
+caller supplied, and a probe that copies that exactly still passes. That was
+the best hypothesis and it is wrong.
+
+What the renderer still has that this does not: push constants, the paint
+storage buffer, a fifteen-hundred-line shader rather than a twenty-line one,
+and a pipeline built from `solid.wgsl`'s own state. The shader is the next
+thing to try, being the largest difference by far.
+
+**The wording this corrects** is from the census: "a draw that samples a
+texture segfaults". That is an accurate description of *which renderer tests*
+crash and it is not a sufficient condition, which the table above settles.
+
+**A warning this board keeps earning.** Invalid usage does not produce a
+validation message here, it produces a crash that looks exactly like a find.
+Twice in one afternoon: a module whose entry point the pipeline could not
+locate, and a descriptor layout whose binding numbers had drifted out of step
+with the shader. The first read as "every SPIR-V shape crashes", the second as
+"binding any image crashes", and both were mine. The control that catches it
+is the variant that cannot exhibit the effect -- when that crashes too, the
+harness is broken and nothing it says counts.
+
 **Still owed before the driver is named** for the *sampling* crash, by this
-document's own rule: a bare-API reproduction. A silent validation layer and a one-draw case are
+document's own rule: a reproduction that actually reproduces. A silent validation layer and a one-draw case are
 strong and are not that.
 
 **Two more things, neither a crash, both first run there.** `export` fails two
