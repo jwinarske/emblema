@@ -1942,12 +1942,33 @@ the four the bench can reach all agree -- RADV and radeonsi through the gate,
 lavapipe and llvmpipe beside them, Vivante through its own suites, and V3D
 here.
 
-**What it costs**: `solid.wgsl`'s SPIR-V goes from 9,974 words to 10,234, two
-and a half per cent, and the GLSL gains the same stores and loads. Whether
-that moves a frame is unmeasured. `shader-cost-is-a-step-function` says shader
-changes can move cost in steps and that the two backends want opposite shapes,
-so `cargo xtask bench --check` on a board is what would say, and it has not
-been run.
+**What it costs, measured on a Pi 5, 2026-10-07.** `solid.wgsl`'s SPIR-V goes
+from 9,974 words to 10,234, two and a half per cent, and the GLSL gains the
+same stores and loads. Three bench runs a side, alternating, governor pinned
+to `performance` at 2.4 GHz throughout, 56 to 66 degrees, `get_throttled`
+clean.
+
+**Vulkan does not pay.** No V3D Vulkan row moves more than two tenths of a per
+cent, every cluster overlaps, and the two largest moves point in opposite
+directions -- `concave, 12 points` +0.60 and `concave, 72 points` -0.49, which
+is what noise looks like. The recording rows are flat to three decimals, as
+they must be: nothing there touches a shader.
+
+**GLES pays a little, and it is real.** All fourteen V3D GLES rows moved *up*
+and eight have clusters that do not overlap, which no amount of noise does in
+one direction. The frame rows cost between five and seven hundredths of a per
+cent; the dear ones are `concave, 72 points` at +1.00, `stroked path` at +0.48
+and `concave, 12 points` at +0.35.
+
+So the GLES compiler does not fully eliminate the stores and loads and the
+SPIR-V path does. A per cent on the heaviest tessellation row, nothing
+measurable on a frame, in exchange for a part that could not create a pipeline
+at all. `shader-cost-is-a-step-function` is why this was measured rather than
+assumed, and the asymmetry between the backends is the half it predicts.
+
+`tests/bench-baselines` is not updated here. It was recorded several commits
+back and what to do about that is its own decision, which
+`baseline-line-names-a-quiet-commit` is about.
 
 `the_shader_builds_no_vector_from_a_parameter` in `emblema-shaders` is what
 keeps the seven from being tidied away by someone who does not know why they
