@@ -2552,6 +2552,38 @@ One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
 mode would read as a hang on a large one.
 
+## Two test binaries, one card, 2026-10-08
+
+`kms.rs` and `writeback.rs` both take modesetting master on the same device,
+and `cargo test` runs test targets at the same time. The loser reports itself
+skipped and passes, which is the worse failure: a short count behind a green
+suite. It was seen once, in a gate whose census carried `no card offers
+writeback` while nothing failed.
+
+Within a binary a mutex settled this and always had. Across binaries nothing
+did. A file lock in `crates/emblema-present-drm/tests/common/mod.rs` does, and
+both take it before reaching for the card.
+
+**It does not reproduce on demand**, which is worth saying rather than
+claiming a fix for something demonstrated. Ten concurrent pairs here never
+collided; the gate run that did had a dozen other binaries competing for the
+machine. So the fix is shown by what it changes rather than by a failure it
+removes: the two overlap without it and do not with it.
+
+| | wall clock |
+|---|---|
+| `kms.rs` alone | 2.20 s |
+| `writeback.rs` alone | 1.08 s |
+| both at once, before | **2.16 s** -- the maximum, so they overlapped |
+| both at once, after | **2.97 s** -- the sum, so they did not |
+
+The lock serializes our own binaries and nothing else. Something *else*
+holding master -- a compositor -- is still reported as a skip, which is
+correct: waiting for a compositor to exit is not a test's business.
+
+Checked on a Pi 5 as well, where the two run concurrently and come back seven
+of seven and three of three.
+
 ## Which driver the GLES instability is, measured 2026-10-07
 
 `a_blurred_advanced_blend_layer_is_unstable_on_gles` has carried the sentence

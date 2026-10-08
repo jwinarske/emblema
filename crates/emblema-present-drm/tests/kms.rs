@@ -19,25 +19,11 @@ use emblema_present_drm::KmsOutput;
 const FULL: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
 const QUAD: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
-/// A card this process can drive, or nothing.
-/// Serializes the tests here that drive a card.
-///
-/// Modesetting master is exclusive per device, and the harness runs one file's
-/// tests on several threads at once. Without this the first test to reach the
-/// card takes the lock and the rest are refused it, report themselves skipped,
-/// and pass -- so the file went green while the only tests that touch real
-/// hardware had not run. That is worse than a failure, because a run under
-/// `--test-threads=1` looks the same and nothing says which happened.
-///
-/// A mutex rather than a crate for it: these tests share one process, so the
-/// contention is between threads and this is exactly the tool. A poisoned lock
-/// is taken anyway, since a panicking test says nothing about whether the card
-/// is usable.
-static CARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+mod common;
 
 /// A card this process can drive, held for as long as the guard lives.
-fn output() -> Option<(KmsOutput, std::sync::MutexGuard<'static, ()>)> {
-    let guard = CARD.lock().unwrap_or_else(|e| e.into_inner());
+fn output() -> Option<(KmsOutput, common::CardGuard)> {
+    let guard = common::take_the_card();
     let mut refused = Vec::new();
 
     // A named card, for a machine with more than one. Both Raspberry Pi 4 and
