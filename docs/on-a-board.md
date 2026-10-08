@@ -2042,8 +2042,22 @@ image: those are the nineteen catalog plates that crash and the one bench
 stage that does. `an_empty_layer_composites_nothing_at_all` crashes for the
 same reason an image does.
 
-**Still owed before the driver is named**, by this document's own rule: a
-bare-API reproduction. A silent validation layer and a one-draw case are
+**The pipeline-creation rule is confirmed in the vendor reproducer**, which
+is a stronger place for it than ours. `probe-the-composite-rule --dump <dir>`
+writes each variant out as a `.spv`, and all nine run in that reproducer
+unchanged: only the two that take a value parameter or an extract of one
+crash, and the vendor's own pair behaves as it documents. Its entry point is
+`cs_main` for exactly this reason.
+
+A trap worth naming, because it produced a completely wrong reading first
+time: **a module whose entry point the pipeline cannot find segfaults on this
+driver**, in a way indistinguishable from the bug. Every one of the nine
+"crashed" until the name matched what the reproducer passes in `pName`. The
+control that caught it was a module with no called function at all, which
+cannot be the shape and crashed anyway.
+
+**Still owed before the driver is named** for the *sampling* crash, by this
+document's own rule: a bare-API reproduction. A silent validation layer and a one-draw case are
 strong and are not that.
 
 **Two more things, neither a crash, both first run there.** `export` fails two
