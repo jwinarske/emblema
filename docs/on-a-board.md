@@ -2140,12 +2140,55 @@ harness is broken and nothing it says counts.
 document's own rule: a reproduction that actually reproduces. A silent validation layer and a one-draw case are
 strong and are not that.
 
-**Two more things, neither a crash, both first run there.** `export` fails two
-of six -- the device advertises layouts it then cannot render into, and an
-exported image cannot be rendered into. `sync` fails eight of nine, every one
-about fences and `sync_file` export. Those are capability and behavior
-differences rather than segfaults, they are nothing to do with sampling, and
-nobody has looked at them.
+### The sync failures were ours, and are fixed
+
+Eight of nine in `sync.rs` failed there, every one on the validation layer
+rather than on a wrong pixel, and every one reporting
+`VUID-VkExportSemaphoreCreateInfo-handleTypes-01124`. Including tests that
+never export anything: the deferred submission path builds an exportable
+semaphore for every submission.
+
+**The capability was read off the extension list.** `export_sync_file` was
+`enabled.contains(VK_KHR_external_semaphore_fd)`, and that extension says the
+entry points exist, not that any handle type is exportable. This device offers
+it and exports nothing.
+
+Asking the device is the fix, and it takes **both** halves of the question.
+`vkGetPhysicalDeviceExternalSemaphoreProperties` reports an `EXPORTABLE`
+feature bit *and* a set of compatible handle types, and this driver sets the
+bit while listing something other than `SYNC_FD` -- so the first attempt, which
+checked only the feature bit, changed nothing. The same pair is now asked of
+`vkGetPhysicalDeviceExternalFenceProperties` for the import direction.
+
+| device | before | after |
+|---|---|---|
+| Vivante GC7000UL | `sync_file export yes, import yes`; **1 of 9** | `export no, import no`; **9 of 9** |
+| V3D, Pi 5 | 9 of 9 | 9 of 9 |
+| RADV, workstation | 9 of 9 | 9 of 9 |
+
+The capability now says no on that board, which is true, and the suite passes
+because nothing asks for what the device cannot do.
+
+### The export failures are the same shape and are *not* fixed here
+
+`export` fails two of six on that board. One is a device fact: it advertises
+only linear modifiers, and
+`the_device_advertises_layouts_it_can_render_into` asserts a quality bar this
+part does not meet. The other is ours in the same way the semaphore was --
+`an_exported_image_can_still_be_rendered_into` builds a dma-buf-exportable
+image and the device reports only `OPAQUE_FD` as compatible, which cascades
+into four validation errors ending in a copy out of an image with no format
+features at all.
+
+The matching fix is to filter advertised modifiers by
+`vkGetPhysicalDeviceImageFormatProperties2` with a
+`VkPhysicalDeviceExternalImageFormatInfo` chained on. **It was written and
+reverted**, because it is wrong: it takes that board from three render formats
+to zero, and `XR30` at the linear modifier demonstrably *does* export there --
+the test that negotiates it passed before and after. So a naive compatibility
+query over-rejects a format that works, and shipping it would have disabled
+dma-buf export on a device that has it. What the right query is has not been
+established, and guessing again would cost more than it buys.
 
 **One more thing that fell out of the A/B.** With the layer loaded the frame
 rows are far faster -- `frame, plus cards` 231.9 ms against 352.9, `plus
