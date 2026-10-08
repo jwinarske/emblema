@@ -2167,7 +2167,135 @@ harness is broken and nothing it says counts.
 
 **Still owed before the driver is named** for the *sampling* crash, by this
 document's own rule: a reproduction that actually reproduces. A silent validation layer and a one-draw case are
-strong and are not that.
+strong and are not that. The section below pays it a different way.
+
+### The sampling crash is a bounds check the driver does not do, 2026-10-08
+
+Named from inside the driver with gdb rather than by elimination. The fault is
+one instruction, and the six instructions above it say what it is:
+
+```
+ldr  w1, [x26, #12056]      ; count
+mov  x6, #0x48              ; 72 bytes an entry
+mov  w0, w1
+add  w1, w1, #1             ; count + 1
+str  w1, [x26, #12056]      ; written back unconditionally
+mul  x0, x0, x6
+add  x1, x26, x0
+str  w4, [x1, #2840]        ; entries[count], and this is the faulting store
+```
+
+A table of 72-byte entries at `+2840`, its count at `+12056`, and no compare
+between the two. `(12056 - 2840) / 72` is **128 exactly**, so the entry at
+index 128 begins precisely on the count field. Watching the count across the
+boundary shows the whole failure in three lines:
+
+```
+append 130: count field = 127 (0x7f)       entry would land at +11984
+append 131: count field = 128 (0x80)       entry would land at +12056
+append 132: count field = 538976288        entry would land at +38806295576
+```
+
+Append 131 writes its record over the count. The record's first word is
+`0x20202020` -- uninitialized stack, copied in from `[sp]` -- so the count
+reads back as 538976288, and append 132 multiplies that by 72 and segfaults.
+The overflow is the defect; the segfault is two appends later and in a
+different place, which is why every backtrace points at `vkCmdDrawIndexed`
+and none of them at the cause.
+
+**What crosses 128.** The count is observable, so this is measured rather
+than reasoned:
+
+| draw | appends |
+|---|---|
+| renderer, solid fill | 1 |
+| renderer, anything that samples | **132** |
+| `probe-the-sampling-crash`, every variant | 0 |
+
+One `textureSampleLevel` takes the renderer from one record to 132 against a
+table that holds 128. Four records of headroom, and the renderer needs four
+more than it has.
+
+**132 is a constant.** It does not move for any of these, each varied on its
+own with the count read off the board:
+
+| varied | from | to | appends |
+|---|---|---|---|
+| functions in the module | 42 | 3 | 132 |
+| `Paint`, in `vec4`s | 16 | 5 | 132 |
+| bound uniform range, bytes | 256 | 80 | 132 |
+| draws in the batch | 1 | 2 | 132 |
+| sampler filter | linear | nearest | 132 |
+| tile mode | clamp | repeat | 132 |
+| target side | 16 | 64 | 132 |
+| advanced blend | enabled | withheld | 132 |
+
+So it is neither per-draw nor per-anything the shader or the sampler says. It
+is emitted once, and a draw that samples emits 131 of them.
+
+**The probe appends nothing, and that is the open question.** Four more
+variants were built to close the gap, each valid under the layer on RADV and
+each passing on the board: `draw-two-sets` (the paint uniform in set one, as
+`solid.wgsl` declares it), `draw-dynamic-offset` (that set bound as
+`UNIFORM_BUFFER_DYNAMIC` at `firstSet` one with an offset, which is the line
+immediately above the faulting draw), `draw-vertex-attributes` (three
+attributes out of a real vertex buffer) and `draw-many-functions` (forty
+functions nobody calls). Enabling the six device extensions the renderer asks
+for and this does not changes nothing either.
+
+The renderer enters the append path for a *solid* draw, where the probe does
+not enter it at all, so what opens it is not the sample. Two bit tests gate
+it -- `[x24+8408]`, then bit 16 of `+496` and bit 15 of `+504` -- and both
+have to be clear. Breakpoints on the five driver return addresses put the
+divergence inside one function: the probe reaches the same call site at
+`+0x27fe4` and never reaches `+0x26224` one frame in. That is the next thing
+to find, and it is now a bounded search rather than a guess.
+
+**This corrects the section above it.** "Twenty-eight lines is the floor for
+`shade`'s body, and the module around it is still the renderer's whole
+module" was half right and the inference drawn from it was wrong. naga keeps
+a function that nothing calls, so stubbing the other thirty-nine left them in
+the module: the carved module measured **2,495 words and 42 functions**, not
+the small thing the line implies. Deleting them instead gets to 3 functions,
+1,029 words, 116 lines of WGSL and a five-`vec4` `Paint` -- which is the
+probe's shader, near enough -- and it still exits 139. So "the remaining
+ingredient is in the module's own declarations" is eliminated as well. It is
+not in the shader at all.
+
+**Naming the driver** is what this document said was still owed, and the rule
+it set was a reproduction that reproduces. There still is not one. What there
+is instead is the faulting instruction, the table's capacity computed from
+its own layout, and the count stepping over the edge -- direct evidence of
+where the defect lives, which is what the rule was asking for and a bare-API
+repro was only ever a means to.
+
+**A trap that produced a confident wrong reading, twice over.** Absolute
+addresses do not survive a change of process. `break *0xfffff7917b20` resolved
+in the renderer and came back `<PENDING>` in the probe, because the driver
+loads at `0xfffff7900000` in one and `0xfffff7b10000` in the other; a pending
+breakpoint is never hit, and a hit count of zero reads exactly like "this code
+is never reached". That is what "the probe never enters the path" rested on
+before the bases were compared. It happens to be true, but nothing had shown
+it. A breakpoint listing that says `PENDING` is to be read as a broken
+measurement rather than as a result. Resolving the base at run time is four
+lines of gdb's Python, and every count in this section was taken with it:
+
+```python
+gdb.execute("break ash::device::Device::create_image")
+gdb.execute("run")
+gdb.execute("delete")
+base = next(int(l.split()[0], 16)
+            for l in gdb.execute("info proc mappings", to_string=True).splitlines()
+            if "libvulkan_VSI" in l)
+bp = gdb.Breakpoint("*%#x" % (base + 0x17B20))
+bp.silent, bp.ignore_count = True, 10**7
+gdb.execute("continue")
+print("appends:", bp.hit_count)
+```
+
+The breakpoint on `create_image` is only there to stop somewhere after the
+driver is loaded, since it is opened with `dlopen` and no address in it
+resolves before that.
 
 ### The sync failures were ours, and are fixed
 
