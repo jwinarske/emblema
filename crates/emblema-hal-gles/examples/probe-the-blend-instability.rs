@@ -51,6 +51,12 @@ struct Ingredients {
     /// before a draw using an advanced equation. If this settles it, the
     /// sequence above was missing one and no driver is at fault.
     extra_barriers: bool,
+    /// An ordinary equation set before each advanced one, so the driver sees a
+    /// transition rather than a value it already believes is current.
+    reset_equation: bool,
+    /// One advanced equation for both draws, so the frame never switches
+    /// between two of them.
+    same_equation: bool,
 }
 
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
@@ -62,6 +68,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: true,
             blur: true,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "every ingredient the reduced scene has",
     ),
@@ -73,6 +81,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: true,
             blur: true,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "no multisample target and so no resolve",
     ),
@@ -84,6 +94,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: true,
             blur: true,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "the layer's own draws blend ordinarily",
     ),
@@ -95,6 +107,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: false,
             blur: true,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "the layer is composited ordinarily",
     ),
@@ -106,6 +120,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: false,
             blur: true,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "no advanced equation anywhere -- the control",
     ),
@@ -117,8 +133,36 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: true,
             blur: true,
             extra_barriers: true,
+            reset_equation: false,
+            same_equation: false,
         },
         "the full set, with a barrier before every draw and after the resolve",
+    ),
+    (
+        "re-set-equation",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: true,
+            same_equation: false,
+        },
+        "an ordinary equation set before each advanced one",
+    ),
+    (
+        "same-equation",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: true,
+        },
+        "both advanced draws use GL_DIFFERENCE_KHR",
     ),
     (
         "no-blur",
@@ -128,6 +172,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             advanced_composite: true,
             blur: false,
             extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
         },
         "the layer's contents are not blurred",
     ),
@@ -387,7 +433,14 @@ fn frame(
         );
         gl.enable(glow::BLEND);
         if what.advanced_inside {
-            gl.blend_equation(MULTIPLY_KHR);
+            if what.reset_equation {
+                gl.blend_equation(glow::FUNC_ADD);
+            }
+            gl.blend_equation(if what.same_equation {
+                DIFFERENCE_KHR
+            } else {
+                MULTIPLY_KHR
+            });
             if let Some(barrier) = blend_barrier {
                 barrier();
             }
@@ -466,6 +519,9 @@ fn frame(
         }
         gl.enable(glow::BLEND);
         if what.advanced_composite {
+            if what.reset_equation {
+                gl.blend_equation(glow::FUNC_ADD);
+            }
             gl.blend_equation(DIFFERENCE_KHR);
             if let Some(barrier) = blend_barrier {
                 barrier();
@@ -737,39 +793,83 @@ fn main() {
             let resolved = target(&gl, 1);
             let output = target(&gl, 1);
 
-            let first = frame(
-                &gl,
-                &programs,
-                *what,
-                &layer,
-                &resolved,
-                &output,
-                blend_barrier,
-            );
-            let again = frame(
-                &gl,
-                &programs,
-                *what,
-                &layer,
-                &resolved,
-                &output,
-                blend_barrier,
-            );
-            let worst = first
-                .iter()
-                .zip(again.iter())
-                .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
-                .max()
-                .unwrap_or(0);
-            let differing = first
-                .iter()
-                .zip(again.iter())
-                .filter(|(a, b)| a != b)
-                .count();
-            println!(
-                "{name:24} worst {worst:3} level(s), {differing:5} byte(s) of {} differ",
-                first.len()
-            );
+            // `RUNS` renders more than twice and reports each frame against
+            // the first and the one before it, with the center pixel. Two
+            // frames cannot tell a first-frame effect from a drift, and a
+            // difference cannot say which frame is the correct one.
+            let runs: usize = std::env::var("RUNS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2)
+                .max(2);
+            let center = |pixels: &[u8]| {
+                let at = ((16 * SIDE as usize) + 16) * 4;
+                format!(
+                    "[{:3},{:3},{:3},{:3}]",
+                    pixels[at],
+                    pixels[at + 1],
+                    pixels[at + 2],
+                    pixels[at + 3]
+                )
+            };
+            let render = || {
+                frame(
+                    &gl,
+                    &programs,
+                    *what,
+                    &layer,
+                    &resolved,
+                    &output,
+                    blend_barrier,
+                )
+            };
+
+            let first = render();
+            if runs > 2 {
+                println!("{name:24} frame  1: {:>40} | center {}", "", center(&first));
+            }
+            let mut previous = first.clone();
+            let mut worst = 0;
+            let mut differing = 0;
+            for run in 2..=runs {
+                let current = render();
+                let worst_first = first
+                    .iter()
+                    .zip(current.iter())
+                    .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+                    .max()
+                    .unwrap_or(0);
+                let differ_first = first
+                    .iter()
+                    .zip(current.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let worst_previous = previous
+                    .iter()
+                    .zip(current.iter())
+                    .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+                    .max()
+                    .unwrap_or(0);
+                if runs > 2 {
+                    println!(
+                        "{name:24} frame {run:2}: vs first {worst_first:3} \
+                         ({differ_first:5} byte(s)), vs previous \
+                         {worst_previous:3} | center {}",
+                        center(&current)
+                    );
+                }
+                if run == 2 {
+                    worst = worst_first;
+                    differing = differ_first;
+                }
+                previous = current;
+            }
+            if runs == 2 {
+                println!(
+                    "{name:24} worst {worst:3} level(s), {differing:5} byte(s) of {} differ",
+                    first.len()
+                );
+            }
 
             gl.delete_framebuffer(layer.framebuffer);
             gl.delete_framebuffer(resolved.framebuffer);
