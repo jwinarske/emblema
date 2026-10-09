@@ -3163,9 +3163,28 @@ board for the scene it reduced, and this probe is *stable* on the driver where
 the renderer is not. Two instabilities that swap drivers are two findings until
 something connects them, and the connection is not measured.
 
-**Not run:** the Adreno 640 on the SA8155P, the fourth row of the table above.
-The probe cross-builds for it and reaches a display through the same GBM path;
-nobody has put it on the bench since this was written.
+**The Adreno 640 has since run it, and is clean on all seven.** So is a C
+reimplementation of the same sequence, which agrees with this probe exactly --
+eight levels and 3,072 bytes on the GC7000UL, zero on the other three -- and
+that is what makes the sequence the subject rather than one program's mistake.
+The full table:
+
+| driver | coherent | the probe |
+|---|---|---|
+| Vivante GC7000UL | no | **8 levels** |
+| radeonsi | no | 0 |
+| llvmpipe | yes | 0 |
+| Adreno 640 | yes | 0 |
+
+**Which kills coherence as the explanation.** `radeonsi` reports the coherent
+variant absent and is clean; the Adreno and `llvmpipe` report it present and
+are also clean. The one driver that does it is non-coherent, and so is one that
+does not, so the flag predicts nothing here. `GL_KHR_debug` was enabled and
+synchronous for all four and said nothing.
+
+The GC7000UL result is logged where the other findings from that part are, with
+the C reproducer and the four-driver table, as the only one of the five that is
+GLES rather than Vulkan.
 
 **Where to take it next**, in the order the evidence suggests:
 
