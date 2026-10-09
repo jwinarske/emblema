@@ -3197,20 +3197,47 @@ frame  3: vs first   8 (3072 bytes), vs previous  0  center [ 18, 18, 18,255]
 ```
 
 Frames three onward are byte-identical to frame two, so there is one permanent
-transition rather than a drift. The composite is `Difference` with a source of
-zero, a destination of 0.1 and an alpha of 0.3: the equation gives
-`0.3·|0 − 0.1| + 0.7·0.1 = 0.1`, which is 26, and an ordinary source-over gives
-`0.1·(1 − 0.3) = 0.07`, which is 18. `llvmpipe` reads 26 on every frame, so the
-first frame agrees with a correct driver exactly and every later one performs a
-different blend.
+transition rather than a drift, and `llvmpipe` reads 26 on every frame -- so
+the first frame agrees with a correct driver exactly and every later one does
+not.
 
-**Which corrects the sentence this section shipped with.** "The first frame
-differs from every later one, so something initialized on first use is
-involved" had the inference backwards: the first frame is the *correct* one, so
-whatever the second frame consults is written by the first and is not the
-equation the caller set. A difference cannot say which side of it is right, and
-the center pixel against a known-good driver can -- which is the same lesson
-the channel-swap reading taught a day earlier, in a different disguise.
+**What the later frames do, measured with an operand that distinguishes.** The
+scene's layer is black, which makes the composite's source zero, and with a
+zero source several explanations give the same 18. A gray layer clear separates
+them:
+
+| | center pixel |
+|---|---|
+| the `Difference` equation, by hand | `[26, 19, 26]` |
+| an ordinary source-over | `[18, 26, 18]` |
+| the source discarded, destination attenuated | `[18, 18, 18]` |
+| **frame 1, measured** | **`[26, 19, 26]`** |
+| **frames 2 on, measured** | **`[18, 18, 18]`** |
+
+Frames two on carry **no green excess**, so the source is dropped rather than
+added, and only its alpha survives to attenuate the destination. The output
+also stops depending on the sampled texture: `[18, 18, 18]` comes back with a
+black layer and with a gray one alike.
+
+**And the draw inside the layer keeps its equation.** `inspect-layer` runs the
+same frame and reads the *resolved layer* back instead of the output: green 28
+on every frame, which is `Multiply` against gray and what `llvmpipe` reads,
+where a source-over would be 56. So the first advanced draw is correct
+throughout and only the one that **samples** the resolved texture fails.
+
+**Which corrects two sentences this section shipped with, in two days.** First,
+"the first frame differs from every later one, so something initialized on
+first use is involved" had the inference backwards: the first frame is the
+*correct* one. Then the replacement said the equation was "replaced by an
+ordinary source-over", which the gray layer disproves -- a source-over adds the
+premultiplied source and would show the green.
+
+The two mistakes have one shape. A delta cannot say which side of it is right,
+and a number produced from a *degenerate operand* cannot separate the
+mechanisms that agree on it. Black made the source zero, and with a zero source
+source-over and a discarded source are the same 18. So: read the value and not
+the difference, from more than two samples, against a driver you trust, **and
+pick operands that make the candidates disagree.**
 
 Three explanations are now eliminated, each by its own variant:
 
@@ -3223,10 +3250,9 @@ Three explanations are now eliminated, each by its own variant:
 And a single advanced draw is stable for every frame, so it is not one draw
 going wrong: it takes two.
 
-**Still open:** why the first frame is exempt, and whether the layer's own
-advanced draw degrades alongside the composite's. That one multiplies against
-black in this scene, where a source-over gives the same pixel, so this readback
-cannot tell them apart.
+**Still open:** why the first frame is exempt. It performs both advanced draws
+correctly, so whatever the second frame consults is written by the first and is
+not the equation the caller set.
 
 **Where to take it next**, in the order the evidence suggests:
 
