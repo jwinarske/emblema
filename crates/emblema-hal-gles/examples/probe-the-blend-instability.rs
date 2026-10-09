@@ -72,6 +72,13 @@ struct Ingredients {
     /// with one of these refreshed says the previous frame left its state on
     /// that object.
     fresh: u32,
+    /// Delete the targets after every frame and make new ones, so their names
+    /// and their memory are recycled -- which is what a renderer freeing a
+    /// layer target each frame does, and what `fresh` deliberately does not.
+    churn: bool,
+    /// A depth-stencil attachment on both targets with the test enabled,
+    /// which is what a renderer carrying clip state has.
+    stencil: bool,
 }
 
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
@@ -88,6 +95,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "every ingredient the reduced scene has",
     ),
@@ -104,6 +113,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "no multisample target and so no resolve",
     ),
@@ -120,6 +131,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "the layer's own draws blend ordinarily",
     ),
@@ -136,6 +149,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "the layer is composited ordinarily",
     ),
@@ -152,6 +167,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "no advanced equation anywhere -- the control",
     ),
@@ -168,6 +185,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "the full set, with a barrier before every draw and after the resolve",
     ),
@@ -184,6 +203,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "an ordinary equation set before each advanced one",
     ),
@@ -200,6 +221,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "both advanced draws use GL_DIFFERENCE_KHR",
     ),
@@ -216,6 +239,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: true,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "a gray layer clear, so the composite's source is not zero",
     ),
@@ -232,6 +257,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: true,
             read_layer: true,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "the same frame, reading the resolved layer back instead of the output",
     ),
@@ -248,6 +275,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: true,
             read_layer: false,
             fresh: 4,
+            churn: false,
+            stencil: false,
         },
         "a new output every frame, the other two kept -- the one that is clean",
     ),
@@ -264,6 +293,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: true,
             read_layer: false,
             fresh: 2,
+            churn: false,
+            stencil: false,
         },
         "a new resolve target every frame, the other two kept",
     ),
@@ -280,8 +311,46 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: true,
             read_layer: false,
             fresh: 1,
+            churn: false,
+            stencil: false,
         },
         "a new multisample layer every frame, the other two kept",
+    ),
+    (
+        "churn",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 0,
+            churn: true,
+            stencil: false,
+        },
+        "all three deleted and remade every frame, so names and memory recycle",
+    ),
+    (
+        "stencil",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 0,
+            churn: false,
+            stencil: true,
+        },
+        "a depth-stencil attachment with the test enabled",
     ),
     (
         "no-blur",
@@ -296,6 +365,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             gray_layer: false,
             read_layer: false,
             fresh: 0,
+            churn: false,
+            stencil: false,
         },
         "the layer's contents are not blurred",
     ),
@@ -411,12 +482,47 @@ fn program(gl: &glow::Context, fragment: &str, blend_support: bool) -> glow::Pro
 /// A color attachment, multisampled where `samples` is more than one.
 struct Target {
     framebuffer: glow::Framebuffer,
+    /// The renderbuffers this target owns, so `churn` can delete them.
+    owned: Vec<glow::Renderbuffer>,
     /// `None` on a multisample target, which carries a renderbuffer instead
     /// and has to be resolved before anything can sample it.
     texture: Option<glow::Texture>,
 }
 
-fn target(gl: &glow::Context, samples: i32) -> Target {
+/// A depth-stencil renderbuffer on the bound framebuffer, where asked.
+///
+/// Returned rather than forgotten so `churn` can delete it: a target that
+/// leaks its attachments is not a target that was remade.
+fn attach_stencil(gl: &glow::Context, samples: i32, with_stencil: bool) -> Vec<glow::Renderbuffer> {
+    if !with_stencil {
+        return Vec::new();
+    }
+    // SAFETY: as elsewhere in this file -- a current context on this thread.
+    unsafe {
+        let rb = gl.create_renderbuffer().expect("create_renderbuffer");
+        gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
+        if samples > 1 {
+            gl.renderbuffer_storage_multisample(
+                glow::RENDERBUFFER,
+                samples,
+                glow::DEPTH24_STENCIL8,
+                SIDE,
+                SIDE,
+            );
+        } else {
+            gl.renderbuffer_storage(glow::RENDERBUFFER, glow::DEPTH24_STENCIL8, SIDE, SIDE);
+        }
+        gl.framebuffer_renderbuffer(
+            glow::FRAMEBUFFER,
+            glow::DEPTH_STENCIL_ATTACHMENT,
+            glow::RENDERBUFFER,
+            Some(rb),
+        );
+        vec![rb]
+    }
+}
+
+fn target(gl: &glow::Context, samples: i32, with_stencil: bool) -> Target {
     // SAFETY: as above.
     unsafe {
         let framebuffer = gl.create_framebuffer().expect("create_framebuffer");
@@ -437,6 +543,8 @@ fn target(gl: &glow::Context, samples: i32) -> Target {
                 glow::RENDERBUFFER,
                 Some(rb),
             );
+            let mut owned = vec![rb];
+            owned.extend(attach_stencil(gl, samples, with_stencil));
             assert_eq!(
                 gl.check_framebuffer_status(glow::FRAMEBUFFER),
                 glow::FRAMEBUFFER_COMPLETE,
@@ -444,6 +552,7 @@ fn target(gl: &glow::Context, samples: i32) -> Target {
             );
             Target {
                 framebuffer,
+                owned,
                 texture: None,
             }
         } else {
@@ -487,6 +596,7 @@ fn target(gl: &glow::Context, samples: i32) -> Target {
                 Some(texture),
                 0,
             );
+            let owned = attach_stencil(gl, 1, with_stencil);
             assert_eq!(
                 gl.check_framebuffer_status(glow::FRAMEBUFFER),
                 glow::FRAMEBUFFER_COMPLETE,
@@ -494,6 +604,7 @@ fn target(gl: &glow::Context, samples: i32) -> Target {
             );
             Target {
                 framebuffer,
+                owned,
                 texture: Some(texture),
             }
         }
@@ -525,6 +636,15 @@ fn frame(
     // SAFETY: as above.
     unsafe {
         gl.viewport(0, 0, SIDE, SIDE);
+        if what.stencil {
+            // Enabled and always passing: the point is that the state is on,
+            // as a renderer's clip machinery leaves it, not that it clips.
+            gl.enable(glow::STENCIL_TEST);
+            gl.stencil_func(glow::ALWAYS, 0, 0xff);
+            gl.stencil_op(glow::KEEP, glow::KEEP, glow::KEEP);
+        } else {
+            gl.disable(glow::STENCIL_TEST);
+        }
 
         // The layer's own contents: an opaque rect, then a second one over it
         // under `Multiply`, which is what the scene's blurred draw blends with.
@@ -924,9 +1044,9 @@ fn main() {
 
         println!();
         for (name, what, _) in chosen {
-            let layer = target(&gl, what.samples);
-            let resolved = target(&gl, 1);
-            let output = target(&gl, 1);
+            let layer = target(&gl, what.samples, what.stencil);
+            let resolved = target(&gl, 1, what.stencil);
+            let output = target(&gl, 1, what.stencil);
 
             // `RUNS` renders more than twice and reports each frame against
             // the first and the one before it, with the center pixel. Two
@@ -953,14 +1073,28 @@ fn main() {
             let mut resolved = resolved;
             let mut output = output;
             let render = |layer: &mut Target, resolved: &mut Target, output: &mut Target| {
+                if what.churn {
+                    for t in [&mut *layer, &mut *resolved, &mut *output] {
+                        gl.delete_framebuffer(t.framebuffer);
+                        if let Some(texture) = t.texture {
+                            gl.delete_texture(texture);
+                        }
+                        for rb in std::mem::take(&mut t.owned) {
+                            gl.delete_renderbuffer(rb);
+                        }
+                    }
+                    *layer = target(&gl, what.samples, what.stencil);
+                    *resolved = target(&gl, 1, what.stencil);
+                    *output = target(&gl, 1, what.stencil);
+                }
                 if what.fresh & 1 != 0 {
-                    *layer = target(&gl, what.samples);
+                    *layer = target(&gl, what.samples, what.stencil);
                 }
                 if what.fresh & 2 != 0 {
-                    *resolved = target(&gl, 1);
+                    *resolved = target(&gl, 1, what.stencil);
                 }
                 if what.fresh & 4 != 0 {
-                    *output = target(&gl, 1);
+                    *output = target(&gl, 1, what.stencil);
                 }
                 frame(
                     &gl,

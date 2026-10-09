@@ -3295,3 +3295,27 @@ source.
 2. the radeonsi one wants what separates the renderer's sequence from this
    probe's, which is now a short list rather than a whole backend: the layer's
    allocation, the stencil attachment, the scissor, and the vertex path.
+
+**Two of those four are eliminated, 2026-10-09.** Each tried on radeonsi with
+`llvmpipe` as the clean control and the GC7000UL as the known positive, so a
+knob that does nothing can be told from one that does:
+
+| candidate | variant | radeonsi | llvmpipe | GC7000UL |
+|---|---|---|---|---|
+| the layer's allocation, never reused | `fresh-output` and friends | 0 | 0 | **clean** |
+| the layer's allocation, freed and remade | `churn` | 0 | 0 | **clean** |
+| the stencil attachment, test enabled | `stencil` | 0 | 0 | **31** |
+
+So neither how the targets are allocated nor a stencil attachment reproduces
+it there. The scissor and the vertex path are what is left.
+
+**The GC7000UL column is what makes those zeros worth anything.** `churn`
+turning that board *clean* says the knob reaches the thing VIV-5 is about, and
+`stencil` leaving it at 31 says the stencil knob does not disturb it -- so a
+zero on radeonsi is a measurement rather than a knob that was never connected.
+
+**And `churn` refines VIV-5.** Deleting the targets and making new ones every
+frame is clean, so the state is tied to the framebuffer *object's lifetime*
+rather than to its name or its memory -- a recycled name comes back with a
+clean slate. That is a cheaper workaround to state than "never delete": an
+ordinary create-use-free cycle per frame avoids it.
