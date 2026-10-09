@@ -2297,6 +2297,109 @@ The breakpoint on `create_image` is only there to stop somewhere after the
 driver is loaded, since it is opened with `dlopen` and no address in it
 resolves before that.
 
+### What opened the path: a sentinel used as a loop bound, 2026-10-08
+
+One line, and it was never in the shader.
+
+The loop that appends is a nested pair of ranges read out of a structure:
+
+```
+ldp  w0, w4, [x19, #4]      ; outer base, outer count
+add  w2, w0, w4             ; outer end
+cmp  w0, w2
+b.cs ...                    ; nothing to do
+...
+bl   VSI+0x177e0            ; the appender
+add  w23, w23, #0x1
+```
+
+Read at the breakpoint, the counts are sane for the two buffer-to-image
+copies and not for the draw:
+
+```
+visit 1 (vkCmdCopyBufferToImage): outer count = 1
+visit 2 (vkCmdCopyBufferToImage): outer count = 1
+visit 3 (cmd_draw_indexed):         outer count = 4294967295
+```
+
+`4294967295` is `0xFFFFFFFF`, which is `VK_REMAINING_MIP_LEVELS`, which the
+sampled image view asked for:
+
+```rust
+// crates/emblema-hal-vulkan/src/sampling.rs
+.level_count(vk::REMAINING_MIP_LEVELS)
+```
+
+The spec permits the sentinel there and defines it as every remaining level.
+This driver does not resolve it -- it uses it as a literal upper bound, and
+the loop appends a record per level for four billion levels into a table that
+holds 128. It gets 130 records in before entry 128 lands on the count field,
+and dies two appends later.
+
+**So the shape of the whole investigation was wrong, and the measurement that
+should have given it away is the one I read as reassuring.** "132 is a
+constant, unmoved by eight things" is not a fixed cost per sampling draw. It
+is how far a runaway loop gets before it overwrites its own bound and
+segfaults, which is of course the same number every time. Invariance under
+everything is what a self-terminating runaway looks like, and I read it as a
+budget being exceeded by four.
+
+**The fix is to say the number.**
+
+```rust
+.level_count(texture.mip_levels)
+```
+
+Identical meaning, and the sentinel never reaches the driver:
+
+| | before | after |
+|---|---|---|
+| appends in `sampling_an_uploaded_texture_is_valid` | 132, then SIGSEGV | **2** |
+| `sampling` | 1 of 4, three segfaults | **4 of 4** |
+| Vulkan suites that segfault | 2 of 14 | **0 of 14** |
+
+The two remaining appends are the copies, which were never the problem.
+
+**Two corrections to the section above.**
+
+- "The renderer enters the append path for a solid draw where the probe never
+  enters it, so what opens it is not the sample." The solid draw's single
+  append is not from a draw at all -- its backtrace is
+  `vkCmdCopyBufferToImage` under the texture upload. A solid draw appends
+  nothing. The table is simply shared between staged uploads and draws, and
+  reading one append as "the renderer enters it for a solid draw" put the
+  divergence in the wrong place.
+- The probe appends nothing because it builds its view with an explicit level
+  count, like everything else written by hand. That is why nine variants
+  could not reproduce it: explicit LOD, a sample on an extracted parameter, a
+  sample in a branch, a second descriptor set, a dynamic offset, real vertex
+  attributes, forty uncalled functions, module scale and the device extension
+  set are all things about the shader or the draw, and the difference was one
+  field of a `VkImageViewCreateInfo`. A probe grown toward the renderer can
+  only find what the person growing it thinks to add.
+
+**Where the sentinel stays.** `transition` is handed a `vk::Image` and not a
+texture, so it has no count to say instead, and threading one through its
+eight callers would be chasing a hazard the measurement does not show: a
+barrier's `REMAINING_MIP_LEVELS` read back as `1` on this device and a view's
+as `0xFFFFFFFF`. The two sites that can say the number now do, and that one is
+annotated.
+
+**Two failures this uncovered**, both previously behind the segfault and
+neither caused by the fix:
+
+- `runtime_effect`, 4 of 7: every one of them `[0, 0, 255, 255]` against an
+  expected `[255, 0, 0, 255]`. Red and blue swapped, on the runtime-effect
+  path only -- ordinary sampling is correct on the same device, so this is not
+  the sampler.
+- `device`, 2 of 15: `capability_flags_are_internally_consistent` and
+  `a_restricted_device_reports_flags_that_match_its_extensions` both assert
+  `caps.sync.export_sync_file == ctx.has_extension("VK_KHR_external_semaphore_fd")`,
+  and this device enables that extension while exporting nothing. The
+  equivalence is the one the sync work already disproved; the tests still
+  encode it, and only a device where the two disagree can say so. The right
+  assertion is the implication, not the equality.
+
 ### The sync failures were ours, and are fixed
 
 Eight of nine in `sync.rs` failed there, every one on the validation layer
