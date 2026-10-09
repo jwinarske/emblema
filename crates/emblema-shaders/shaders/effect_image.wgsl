@@ -48,7 +48,10 @@ fn vs_main(
 // and on nothing this renderer would have done for an image material.
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let coord = in.clip.xy / in.clip.z * 0.5 + vec2<f32>(0.5);
+    // Through a `var` first, for the reason `effect.wgsl` spells out: read
+    // directly, this varying arrives as the `position` builtin on a GC7000UL.
+    var clip: vec3<f32> = in.clip;
+    let coord = clip.xy / clip.z * 0.5 + vec2<f32>(0.5);
     let texel = textureSampleLevel(image_texture, image_sampler, coord, 0.0);
     let tint = paint.stops[0];
     let color = texel * tint;

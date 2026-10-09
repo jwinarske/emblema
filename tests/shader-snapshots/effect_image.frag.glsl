@@ -30,7 +30,11 @@ layout(location = 0) out vec4 _fs2p_location0;
 
 void main() {
     VertexOutput in_ = VertexOutput(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2);
-    vec2 coord = (((in_.clip.xy / vec2(in_.clip.z)) * 0.5) + vec2(0.5));
+    vec3 clip = vec3(0.0);
+    clip = in_.clip;
+    vec3 _e3 = clip;
+    float _e6 = clip.z;
+    vec2 coord = (((_e3.xy / vec2(_e6)) * 0.5) + vec2(0.5));
     vec4 texel = textureLod(_group_0_binding_0_fs, vec2(coord), 0.0);
     vec4 tint_1 = _group_1_binding_0_fs.stops[0];
     vec4 color = (texel * tint_1);
