@@ -2998,10 +2998,8 @@ reproduction that is still owed has a target and three controls: unstable on
 **Two drivers is the whole sample, and the reason is worth recording** because
 it looks like a gap someone could close and is not:
 
-- **V3D on a Raspberry Pi 5** has no `advanced_blend`, so the test skips. The
-  combination needs it twice over.
 - **V3D on a Raspberry Pi 5** genuinely has no `advanced_blend`; the test
-  skips there and that is the hardware.
+  skips there and that is the hardware, not a gap anyone can close.
 - **Vivante GC7000UL and Adreno 640 were unreachable, and that was this
   renderer's doing.** Both run now.
 
@@ -3103,3 +3101,77 @@ its bimodality is the Pi 5's: two runs of the same binary came back 34.386 and
 33.668 ms, two per cent apart, so the three-runs-a-side rule applies unchanged.
 The cached Pi 5 sysroot links binaries that run on it without alteration; both
 boards are glibc 2.41 and gcc 14.
+
+### The bare-GLES probe does not reproduce it, and finds something else, 2026-10-09
+
+`probe-the-blend-instability` is the reproduction this document said was owed:
+EGL and GL and nothing else, reaching a display through the surfaceless
+platform on Mesa and through GBM on a vendor stack, so all four drivers in the
+table above can run it. It renders one frame twice and prints the worst
+per-channel difference, with each ingredient of the reduced scene removable on
+its own.
+
+**It does not reproduce the radeonsi instability.** Zero on every variant,
+every run:
+
+| variant | radeonsi | llvmpipe | Vivante GC7000UL |
+|---|---|---|---|
+| `full` | **0** | 0 | **8** |
+| `single-sample` | 0 | 0 | 0 |
+| `no-advanced-inside` | 0 | 0 | 0 |
+| `no-advanced-composite` | 0 | 0 | 0 |
+| `no-advanced` | 0 | 0 | 0 |
+| `no-blur` | 0 | 0 | **8** |
+| `barrier-everywhere` | 0 | 0 | **8** |
+
+So the sequence this probe issues is not the one, and by this document's own
+rule the driver still is not named for the *radeonsi* instability. What the
+probe buys is a smaller search space rather than an answer: a multisample
+target, an advanced equation inside a layer, a resolve and an advanced
+composite that samples it are **not sufficient** on that driver, so whatever
+the renderer does additionally is where the rest of it is.
+
+**And the probe is unstable on the board the renderer calls stable.** Eight
+levels on a GC7000UL, 3,072 of 4,096 bytes -- which is three channels of every
+one of the thousand-and-twenty-four pixels, so it is the whole image computed
+differently rather than a stale corner of it. The ingredients bisect cleanly
+and the blur is not among them:
+
+- **multisampling is necessary** -- `single-sample` is clean;
+- **both advanced equations are necessary** -- taking either one out is clean;
+- **the blur is irrelevant** -- `no-blur` is still eight.
+
+`barrier-everywhere` is the control for the obvious explanation and it fails
+it. Both radeonsi and the GC7000UL report
+`GL_KHR_blend_equation_advanced_coherent` **absent**, so an advanced draw there
+needs `glBlendBarrierKHR` before anything it reads has settled; llvmpipe, the
+one clean driver in the renderer's table, is the coherent one. A missing
+barrier was therefore the first thing to suspect. Calling one before every draw
+and after the resolve changes nothing, and the probe already called one before
+every advanced draw -- the same placement `render.rs` uses, and for the reason
+its comment gives.
+
+`glGetError` is clean on all three after every frame. That is not proof of
+valid usage -- GLES has no validation layer, which is the whole reason this is
+harder to establish here than in Vulkan -- and the probe asserts on it rather
+than printing it so that a driver which does mind the sequence cannot be read
+as a find.
+
+**What this is not.** It is tempting to file the GC7000UL result as the same
+defect on a second driver. It is not the same: the renderer is *stable* on that
+board for the scene it reduced, and this probe is *stable* on the driver where
+the renderer is not. Two instabilities that swap drivers are two findings until
+something connects them, and the connection is not measured.
+
+**Not run:** the Adreno 640 on the SA8155P, the fourth row of the table above.
+The probe cross-builds for it and reaches a display through the same GBM path;
+nobody has put it on the bench since this was written.
+
+**Where to take it next**, in the order the evidence suggests:
+
+1. the GC7000UL result has a bare reproduction already and wants the vendor
+   report treatment -- an entry of its own, a control for valid usage better
+   than `glGetError`, and `GL_KHR_debug` output, which that driver carries;
+2. the radeonsi one wants what separates the renderer's sequence from this
+   probe's, which is now a short list rather than a whole backend: the layer's
+   allocation, the stencil attachment, the scissor, and the vertex path.
