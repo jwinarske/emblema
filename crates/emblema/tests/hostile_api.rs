@@ -39,6 +39,99 @@ use emblema::*;
 use proptest::prelude::*;
 
 /// Floats chosen to break arithmetic rather than to describe a picture.
+/// The largest single allocation any test here may ask for.
+///
+/// This file generates hostile values on purpose, and a hostile value that
+/// reaches an allocation size is the kind of defect it exists to find. Without
+/// a ceiling the finding arrives as the machine's OOM killer taking the whole
+/// binary -- which the gate reports as `BOTH SHORT, 1 binary unread` and a
+/// count thirteen short with **zero failures**, so it reads as a pass unless
+/// somebody checks the number. It happened three times before this was added.
+///
+/// A quarter of a gigabyte is far above anything a 64x64 recording needs and
+/// far below what hurts.
+const ALLOCATION_CEILING: usize = 256 * 1024 * 1024;
+
+/// Remembers the largest allocation since it was last reset.
+///
+/// Recorded rather than refused: panicking inside the allocator means
+/// allocating while panicking, and the measurement is wanted either way. A
+/// test resets this, runs, and asserts -- so proptest sees an ordinary
+/// assertion failure, shrinks it, and names the input that did it.
+struct Watermark;
+
+static PEAK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Say what happened and stop, without allocating to do it.
+///
+/// The ceiling has to be enforced here and not only in the tests that assert
+/// on the watermark: a test nobody thought to instrument is exactly where this
+/// turned up, and an allocation that succeeds is one the machine pays for.
+/// Written straight to stderr and followed by `abort`, because the panic
+/// machinery allocates and the thing being reported is that allocation has
+/// gone wrong.
+fn refuse(size: usize) -> ! {
+    // The digits right to left into a fixed buffer, then three writes. A
+    // padded field and an index to fill it was the first attempt and it put a
+    // stray dot after the number -- there is nothing here worth the
+    // arithmetic.
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    let mut value = size;
+    loop {
+        at -= 1;
+        digits[at] = b'0' + u8::try_from(value % 10).unwrap_or(0);
+        value /= 10;
+        if value == 0 || at == 0 {
+            break;
+        }
+    }
+
+    // Rust's stderr is unbuffered, so these write the bytes they were given
+    // and allocate nothing on the way.
+    use std::io::Write as _;
+    let mut err = std::io::stderr();
+    let _ = err.write_all(b"\nhostile_api: refused a single allocation of ");
+    let _ = err.write_all(&digits[at..]);
+    let _ = err.write_all(b" bytes, which is over ALLOCATION_CEILING\n");
+    std::process::abort()
+}
+
+// SAFETY: every method forwards to the system allocator with the same layout
+// and does nothing else that could invalidate its contract.
+unsafe impl std::alloc::GlobalAlloc for Watermark {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        if layout.size() >= ALLOCATION_CEILING {
+            refuse(layout.size());
+        }
+        PEAK.fetch_max(layout.size(), std::sync::atomic::Ordering::Relaxed);
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) };
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        if new_size >= ALLOCATION_CEILING {
+            refuse(new_size);
+        }
+        PEAK.fetch_max(new_size, std::sync::atomic::Ordering::Relaxed);
+        unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static WATERMARK: Watermark = Watermark;
+
+/// Forget the high-water mark, before the part of a test that is measured.
+fn reset_peak() {
+    PEAK.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The largest allocation since [`reset_peak`].
+fn peak_allocation() -> usize {
+    PEAK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn hostile_coord() -> impl Strategy<Value = f32> {
     prop_oneof![
         8 => -500.0f32..500.0,
@@ -492,6 +585,7 @@ proptest! {
     /// at `finish`.
     #[test]
     fn a_sequence_of_any_operations_records_something_addressable(ops in ops()) {
+        reset_peak();
         let mut canvas = Canvas::new(SIZE);
         for op in &ops {
             apply(&mut canvas, op);
@@ -518,6 +612,12 @@ proptest! {
             "{}",
             recording_is_addressable(&recording).unwrap_err()
         );
+        let peak = peak_allocation();
+        prop_assert!(
+            peak < ALLOCATION_CEILING,
+            "a sequence of {} operations asked for a single allocation of {peak} bytes",
+            ops.len()
+        );
     }
 
     /// The stack unwinds in exactly as many restores as it says are outstanding.
@@ -530,10 +630,19 @@ proptest! {
     /// would mean the two counts disagree about the same stack.
     #[test]
     fn the_stack_unwinds_in_as_many_restores_as_it_says(ops in ops()) {
+        reset_peak();
         let mut canvas = Canvas::new(SIZE);
         for op in &ops {
             apply(&mut canvas, op);
         }
+        // Checked here rather than at the end, because the sequence is what
+        // asks for the allocation and the unwinding below is not.
+        let peak = peak_allocation();
+        prop_assert!(
+            peak < ALLOCATION_CEILING,
+            "a sequence of {} operations asked for a single allocation of {peak} bytes",
+            ops.len()
+        );
         let outstanding = canvas.save_depth();
         for _ in 0..outstanding {
             canvas.restore();
@@ -554,6 +663,16 @@ proptest! {
         // what a caller over-restoring in an error path does.
         canvas.restore();
         prop_assert_eq!(canvas.save_depth(), 0);
+
+        // Again at the end, so an allocation asked for while unwinding or
+        // finishing is caught as well as one the sequence asked for. The
+        // earlier check is what attributes it to the sequence.
+        let peak = peak_allocation();
+        prop_assert!(
+            peak < ALLOCATION_CEILING,
+            "unwinding {} operations asked for a single allocation of {peak} bytes",
+            ops.len()
+        );
     }
 
     /// A layer configured any way at all still records addressably.
