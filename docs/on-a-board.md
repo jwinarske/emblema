@@ -2344,6 +2344,36 @@ segfaults, which is of course the same number every time. Invariance under
 everything is what a self-terminating runaway looks like, and I read it as a
 budget being exceeded by four.
 
+**The sentinel alone is not sufficient, which this section got wrong.** Said
+above: "a sampled image view created with `VK_REMAINING_MIP_LEVELS` ... this
+driver uses it as a literal upper bound". True of the renderer and not true on
+its own. Writing the bare-API reproducer for the vendor is what found the rest
+of it: a minimal program asking for the sentinel on a sampled view **does not
+crash**. The probe does not either, with the sentinel on the sampled image's
+view and nothing else.
+
+The second factor is the image's usage. One run per cell, in C, with no
+project code in it:
+
+| `levelCount` | the sampled image's usage | result |
+|---|---|---|
+| `1` | any of the four below | completes |
+| `REMAINING` | `SAMPLED` | completes |
+| `REMAINING` | `SAMPLED \| TRANSFER_SRC \| TRANSFER_DST` | completes |
+| **`REMAINING`** | **`SAMPLED \| COLOR_ATTACHMENT`** | **SIGSEGV** |
+
+`COLOR_ATTACHMENT` is the bit that matters, on an image that is then sampled
+rather than rendered into -- and the renderer's textures are
+`TextureDescriptor::offscreen`, whose usage carries it. That is why the
+renderer hit this and a probe asking only for `SAMPLED` never did, through nine
+variants.
+
+**And the sentinel is not resolved, which `mip_levels` being 1 proves.** The
+texture has one level, so `.level_count(1)` and `.level_count(REMAINING_MIP_LEVELS)`
+denote the same single level. One crashes and one does not, so the driver is
+carrying `0xFFFFFFFF` rather than the count it stands for -- which is what the
+loop header reads.
+
 **The fix is to say the number.**
 
 ```rust
