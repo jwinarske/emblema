@@ -366,7 +366,11 @@ pub fn build(
                     // through, and the failure is silent -- the chain is there,
                     // the sampler is willing, and every read still lands on the
                     // largest level.
-                    .level_count(vk::REMAINING_MIP_LEVELS)
+                    //
+                    // Said as a number rather than as `REMAINING_MIP_LEVELS`,
+                    // which means the same thing and which one driver takes
+                    // literally: see `docs/on-a-board.md`.
+                    .level_count(texture.mip_levels)
                     .layer_count(1),
             );
         match unsafe { device.create_image_view(&view_info, None) } {

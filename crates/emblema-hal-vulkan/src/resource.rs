@@ -302,9 +302,14 @@ impl VulkanContext {
         );
 
         let clear = vk::ClearColorValue { float32: color };
+        // The count rather than `REMAINING_MIP_LEVELS`, which means the same
+        // and which one driver reads as a literal bound: see
+        // `docs/on-a-board.md`. The sentinel measured harmless in a barrier on
+        // that device and ruinous in a view, and saying the number costs
+        // nothing either way.
         let range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(vk::REMAINING_MIP_LEVELS)
+            .level_count(texture.mip_levels)
             .layer_count(1);
         unsafe {
             device.cmd_clear_color_image(
@@ -663,6 +668,12 @@ pub(crate) fn transition(
                 // validation error waiting for the first minified draw. The
                 // generation below transitions levels one at a time and says so
                 // explicitly; nothing else here has any business splitting them.
+                //
+                // The sentinel stays here, where the function is handed an
+                // image and not a texture and so has no count to say instead.
+                // Measured on the one driver that reads it literally, a barrier
+                // resolves it and a view does not -- which is why the two sites
+                // that *can* say the number now do.
                 .level_count(vk::REMAINING_MIP_LEVELS)
                 .layer_count(1),
         )
