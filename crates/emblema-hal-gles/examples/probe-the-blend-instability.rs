@@ -66,6 +66,12 @@ struct Ingredients {
     /// Read the resolved layer back instead of the output, to see whether the
     /// draw inside the layer loses its equation too.
     read_layer: bool,
+    /// Which targets get brand-new framebuffers and textures every frame,
+    /// never deleted so the names cannot be recycled: bit 1 the multisample
+    /// layer, bit 2 the resolve, bit 4 the output. A frame that is correct
+    /// with one of these refreshed says the previous frame left its state on
+    /// that object.
+    fresh: u32,
 }
 
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
@@ -81,6 +87,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "every ingredient the reduced scene has",
     ),
@@ -96,6 +103,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "no multisample target and so no resolve",
     ),
@@ -111,6 +119,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "the layer's own draws blend ordinarily",
     ),
@@ -126,6 +135,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "the layer is composited ordinarily",
     ),
@@ -141,6 +151,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "no advanced equation anywhere -- the control",
     ),
@@ -156,6 +167,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "the full set, with a barrier before every draw and after the resolve",
     ),
@@ -171,6 +183,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "an ordinary equation set before each advanced one",
     ),
@@ -186,6 +199,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: true,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "both advanced draws use GL_DIFFERENCE_KHR",
     ),
@@ -201,6 +215,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: true,
             read_layer: false,
+            fresh: 0,
         },
         "a gray layer clear, so the composite's source is not zero",
     ),
@@ -216,8 +231,57 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: true,
             read_layer: true,
+            fresh: 0,
         },
         "the same frame, reading the resolved layer back instead of the output",
+    ),
+    (
+        "fresh-output",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 4,
+        },
+        "a new output every frame, the other two kept -- the one that is clean",
+    ),
+    (
+        "fresh-resolved",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 2,
+        },
+        "a new resolve target every frame, the other two kept",
+    ),
+    (
+        "fresh-layer",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 1,
+        },
+        "a new multisample layer every frame, the other two kept",
     ),
     (
         "no-blur",
@@ -231,6 +295,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             same_equation: false,
             gray_layer: false,
             read_layer: false,
+            fresh: 0,
         },
         "the layer's contents are not blurred",
     ),
@@ -882,19 +947,33 @@ fn main() {
                     pixels[at + 3]
                 )
             };
-            let render = || {
+            // Rebuilt rather than reused where the variant asks, and never
+            // deleted, so a name cannot come back and bring its state with it.
+            let mut layer = layer;
+            let mut resolved = resolved;
+            let mut output = output;
+            let render = |layer: &mut Target, resolved: &mut Target, output: &mut Target| {
+                if what.fresh & 1 != 0 {
+                    *layer = target(&gl, what.samples);
+                }
+                if what.fresh & 2 != 0 {
+                    *resolved = target(&gl, 1);
+                }
+                if what.fresh & 4 != 0 {
+                    *output = target(&gl, 1);
+                }
                 frame(
                     &gl,
                     &programs,
                     *what,
-                    &layer,
-                    &resolved,
-                    &output,
+                    layer,
+                    resolved,
+                    output,
                     blend_barrier,
                 )
             };
 
-            let first = render();
+            let first = render(&mut layer, &mut resolved, &mut output);
             if runs > 2 {
                 println!("{name:24} frame  1: {:>40} | center {}", "", center(&first));
             }
@@ -902,7 +981,7 @@ fn main() {
             let mut worst = 0;
             let mut differing = 0;
             for run in 2..=runs {
-                let current = render();
+                let current = render(&mut layer, &mut resolved, &mut output);
                 let worst_first = first
                     .iter()
                     .zip(current.iter())

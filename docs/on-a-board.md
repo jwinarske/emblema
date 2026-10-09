@@ -3250,9 +3250,42 @@ Three explanations are now eliminated, each by its own variant:
 And a single advanced draw is stable for every frame, so it is not one draw
 going wrong: it takes two.
 
-**Still open:** why the first frame is exempt. It performs both advanced draws
-correctly, so whatever the second frame consults is written by the first and is
-not the equation the caller set.
+**It is not the frame that is special, it is the framebuffer, 2026-10-09.**
+Handing one object at a time a brand-new name every frame -- never deleted, so
+nothing can be recycled -- says where the state lives:
+
+| refreshed every frame | center pixel, frame 3 |
+|---|---|
+| nothing | `[18, 18, 18]` |
+| the multisample layer | `[18, 18, 18]` |
+| the resolve target | `[18, 18, 18]` |
+| **the output** | **`[26, 19, 26]`** |
+| the programs, relinked | `[18, 18, 18]` |
+| an ordinary frame in between | `[18, 18, 18]` |
+
+A new output framebuffer is enough and nothing else is, so the state is
+attached to the framebuffer being *rendered into* -- not the context, not the
+programs, not the texture being sampled. The first frame is not special; the
+framebuffer's **first use** is, and frame one is merely when that happens.
+Relinking the programs changes nothing and neither does an ordinary frame in
+between, so it is set once rather than re-established.
+
+So the failing clause is statable, with a control for each part: **an
+advanced-blend draw that samples a texture, into a framebuffer that has been
+drawn into before, loses its equation.** The draw inside the layer is advanced
+and samples nothing and stays correct across frames on its own reused
+framebuffer, which is the control for the sampling half; `no-advanced-composite`
+is the control for the advanced half; `fresh-output` is the control for the
+reuse.
+
+**And VIV-5 gains the workaround it did not have:** a destination framebuffer
+that is never reused. The price is an allocation per frame for the target of
+any advanced-blend composite, which is the opposite of what pooling layer
+targets wants, so it is one to know about rather than to adopt.
+
+**Still open:** what the state is. Only that it is per-framebuffer, set by the
+first draw into it, and that it makes a later advanced-blend draw discard its
+source.
 
 **Where to take it next**, in the order the evidence suggests:
 
