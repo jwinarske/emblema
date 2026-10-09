@@ -57,6 +57,15 @@ struct Ingredients {
     /// One advanced equation for both draws, so the frame never switches
     /// between two of them.
     same_equation: bool,
+    /// Clear the layer to mid gray rather than black, so the composite's
+    /// source is not zero. With a zero source, the equation, an ordinary
+    /// source-over and a discarded source do not all give the same pixel --
+    /// but two of the three do, which is how the first reading of this went
+    /// wrong.
+    gray_layer: bool,
+    /// Read the resolved layer back instead of the output, to see whether the
+    /// draw inside the layer loses its equation too.
+    read_layer: bool,
 }
 
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
@@ -70,6 +79,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "every ingredient the reduced scene has",
     ),
@@ -83,6 +94,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "no multisample target and so no resolve",
     ),
@@ -96,6 +109,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "the layer's own draws blend ordinarily",
     ),
@@ -109,6 +124,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "the layer is composited ordinarily",
     ),
@@ -122,6 +139,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "no advanced equation anywhere -- the control",
     ),
@@ -135,6 +154,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: true,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "the full set, with a barrier before every draw and after the resolve",
     ),
@@ -148,6 +169,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: true,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "an ordinary equation set before each advanced one",
     ),
@@ -161,8 +184,40 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: true,
+            gray_layer: false,
+            read_layer: false,
         },
         "both advanced draws use GL_DIFFERENCE_KHR",
+    ),
+    (
+        "gray-layer",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+        },
+        "a gray layer clear, so the composite's source is not zero",
+    ),
+    (
+        "inspect-layer",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: true,
+        },
+        "the same frame, reading the resolved layer back instead of the output",
     ),
     (
         "no-blur",
@@ -174,6 +229,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             extra_barriers: false,
             reset_equation: false,
             same_equation: false,
+            gray_layer: false,
+            read_layer: false,
         },
         "the layer's contents are not blurred",
     ),
@@ -408,7 +465,11 @@ fn frame(
         // under `Multiply`, which is what the scene's blurred draw blends with.
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(layer.framebuffer));
         gl.disable(glow::BLEND);
-        gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        if what.gray_layer {
+            gl.clear_color(0.5, 0.5, 0.5, 1.0);
+        } else {
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        }
         gl.clear(glow::COLOR_BUFFER_BIT);
 
         let under = if what.advanced_inside {
@@ -549,7 +610,16 @@ fn frame(
         );
 
         let mut pixels = vec![0u8; (SIDE * SIDE * 4) as usize];
-        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(output.framebuffer));
+        // The resolved layer where asked, so the draw inside the layer can be
+        // read on its own; the output otherwise.
+        gl.bind_framebuffer(
+            glow::READ_FRAMEBUFFER,
+            Some(if what.read_layer {
+                resolved.framebuffer
+            } else {
+                output.framebuffer
+            }),
+        );
         gl.read_pixels(
             0,
             0,
