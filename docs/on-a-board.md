@@ -2497,6 +2497,39 @@ caller has to know: on this device, read a varying through a `var` before using
 it. The fixtures demonstrate the shape; they do not fix anything for anybody
 else.
 
+### The sync flags were asserted as equalities, 2026-10-08
+
+Two `device.rs` tests asserted
+`caps.sync.export_sync_file == ctx.has_extension("VK_KHR_external_semaphore_fd")`,
+which is the equivalence the sync work disproved a day earlier -- the extension
+says the entry points exist, not that any handle type is exportable. This
+device enables it and exports nothing, so it is the only one in the fleet that
+could fail the assertion, and it did.
+
+The comment above them already said the right thing: "the extension backing
+each flag must actually have been enabled, or the flag is a promise the device
+cannot keep." That is an implication. The assertion claimed the converse too.
+
+**Weakening it to the implication loses something real**, which is the trap
+here. Every test in `sync.rs` skips on a false flag, so a device query that
+regressed to answering false everywhere would make the suite go quiet rather
+than red, and the equality was the only thing that would have caught it.
+
+**The first replacement was tautological and the measurement said so.** A test
+that a device claiming it cannot export really cannot -- submit, then assert
+the fence is not exportable and the export fails -- passes with the query
+forced to false, because the renderer does not build an exportable semaphore
+when its own flag is false. It asserts that the renderer honors its own flag,
+which nothing was in doubt about.
+
+What has force is asking Vulkan again: a second instance, the same physical
+device found by its UUID, and the same two-part question the capability asks
+of the semaphore and the fence. The flag has to equal the extension **and** the
+device's own answer. Forcing `export_sync_file` to false fails it with
+`extension true, device true`, which is the regression the equality caught, and
+it holds on a device where the two legitimately disagree. `device.rs` is 16 of
+16 there.
+
 ### The sync failures were ours, and are fixed
 
 Eight of nine in `sync.rs` failed there, every one on the validation layer

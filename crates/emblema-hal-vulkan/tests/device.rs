@@ -64,18 +64,127 @@ fn capability_flags_are_internally_consistent() {
     // flag is a promise the device cannot keep.
     // Export is a semaphore operation and import is a fence one, so the two
     // flags come from different extensions rather than one covering both.
-    assert_eq!(
-        caps.sync.export_sync_file,
-        ctx.has_extension("VK_KHR_external_semaphore_fd")
+    //
+    // An implication and not an equality. These two stopped being equalities
+    // when they stopped being read off the extension list: the device is asked
+    // whether it exports a `SYNC_FD` as well, and a GC7000UL enables
+    // `VK_KHR_external_semaphore_fd` while exporting nothing. Asserting the
+    // converse made that device fail a test about our own consistency.
+    //
+    // What the equality also caught, and this does not, is a device query that
+    // regressed to false everywhere -- every test in `sync.rs` would skip and
+    // nothing would fail. `a_device_that_cannot_export_a_sync_file_really_cannot`
+    // closes that from the other side.
+    assert!(
+        !caps.sync.export_sync_file || ctx.has_extension("VK_KHR_external_semaphore_fd"),
+        "the capability exports a sync_file without the extension that backs it"
     );
-    assert_eq!(
-        caps.sync.import_sync_file,
-        ctx.has_extension("VK_KHR_external_fence_fd")
+    assert!(
+        !caps.sync.import_sync_file || ctx.has_extension("VK_KHR_external_fence_fd"),
+        "the capability imports a sync_file without the extension that backs it"
     );
     assert_eq!(
         caps.dma_buf.modifiers,
         ctx.has_extension("VK_EXT_image_drm_format_modifier")
     );
+}
+
+/// The two `sync_file` flags say what the device says, not what its extension
+/// list says.
+///
+/// This is the assertion the pair above gave up. They used to be equalities
+/// against `has_extension`, which is wrong in one direction -- a GC7000UL
+/// enables `VK_KHR_external_semaphore_fd` and exports nothing -- so they are
+/// implications now, and an implication cannot catch a device query that
+/// regressed to false everywhere. Every test in `sync.rs` skips on a false
+/// flag, so that regression would be silent.
+///
+/// Asking Vulkan again, here, is what catches it: a second instance, the same
+/// physical device found by its UUID, and the same two-part question the
+/// capability asks. The flag has to equal the extension *and* the device's own
+/// answer, which is the real rule and is stronger than either equality was.
+#[test]
+fn the_sync_flags_say_what_the_device_says() {
+    let Some(ctx) = context(DevicePreference::Auto) else {
+        return;
+    };
+    let caps = ctx.capabilities();
+    let uuid = ctx.device_uuid();
+
+    // SAFETY: the loader, instance and every chained structure below outlive
+    // the calls they are passed to, and the instance is destroyed at the end.
+    unsafe {
+        let Ok(entry) = ash::Entry::load() else {
+            eprintln!("skipping: no Vulkan loader");
+            return;
+        };
+        let app = ash::vk::ApplicationInfo::default().api_version(ash::vk::API_VERSION_1_1);
+        let instance = entry
+            .create_instance(
+                &ash::vk::InstanceCreateInfo::default().application_info(&app),
+                None,
+            )
+            .expect("create_instance");
+
+        let same = instance
+            .enumerate_physical_devices()
+            .expect("enumerate_physical_devices")
+            .into_iter()
+            .find(|pd| {
+                let mut id = ash::vk::PhysicalDeviceIDProperties::default();
+                let mut p = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut id);
+                instance.get_physical_device_properties2(*pd, &mut p);
+                id.device_uuid == uuid
+            });
+        let Some(pd) = same else {
+            // A loader that hands a second instance a different set of devices
+            // is a thing that happens; there is nothing to compare against.
+            eprintln!("skipping: the context's device is not in a second instance");
+            instance.destroy_instance(None);
+            return;
+        };
+
+        let semaphore_info = ash::vk::PhysicalDeviceExternalSemaphoreInfo::default()
+            .handle_type(ash::vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+        let mut semaphore = ash::vk::ExternalSemaphoreProperties::default();
+        instance.get_physical_device_external_semaphore_properties(
+            pd,
+            &semaphore_info,
+            &mut semaphore,
+        );
+        let device_exports = semaphore
+            .external_semaphore_features
+            .contains(ash::vk::ExternalSemaphoreFeatureFlags::EXPORTABLE)
+            && semaphore
+                .compatible_handle_types
+                .contains(ash::vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+
+        let fence_info = ash::vk::PhysicalDeviceExternalFenceInfo::default()
+            .handle_type(ash::vk::ExternalFenceHandleTypeFlags::SYNC_FD);
+        let mut fence = ash::vk::ExternalFenceProperties::default();
+        instance.get_physical_device_external_fence_properties(pd, &fence_info, &mut fence);
+        let device_imports = fence
+            .external_fence_features
+            .contains(ash::vk::ExternalFenceFeatureFlags::IMPORTABLE)
+            && fence
+                .compatible_handle_types
+                .contains(ash::vk::ExternalFenceHandleTypeFlags::SYNC_FD);
+
+        instance.destroy_instance(None);
+
+        assert_eq!(
+            caps.sync.export_sync_file,
+            ctx.has_extension("VK_KHR_external_semaphore_fd") && device_exports,
+            "export_sync_file disagrees with the device: extension {}, device {device_exports}",
+            ctx.has_extension("VK_KHR_external_semaphore_fd")
+        );
+        assert_eq!(
+            caps.sync.import_sync_file,
+            ctx.has_extension("VK_KHR_external_fence_fd") && device_imports,
+            "import_sync_file disagrees with the device: extension {}, device {device_imports}",
+            ctx.has_extension("VK_KHR_external_fence_fd")
+        );
+    }
 }
 
 /// Withholding advanced blending produces a device that has not got the
@@ -153,13 +262,16 @@ fn a_restricted_device_reports_flags_that_match_its_extensions() {
     // what makes this safe to run on any device: the pairs below hold either way.
     let caps = ctx.capabilities();
 
-    assert_eq!(
-        caps.sync.export_sync_file,
-        ctx.has_extension("VK_KHR_external_semaphore_fd")
+    // Implications, for the reason the test above gives at length. The
+    // modifier pair below stays an equality: that flag is the extension and
+    // nothing else, so the equality is the claim.
+    assert!(
+        !caps.sync.export_sync_file || ctx.has_extension("VK_KHR_external_semaphore_fd"),
+        "the capability exports a sync_file without the extension that backs it"
     );
-    assert_eq!(
-        caps.sync.import_sync_file,
-        ctx.has_extension("VK_KHR_external_fence_fd")
+    assert!(
+        !caps.sync.import_sync_file || ctx.has_extension("VK_KHR_external_fence_fd"),
+        "the capability imports a sync_file without the extension that backs it"
     );
     assert_eq!(
         caps.dma_buf.modifiers,
