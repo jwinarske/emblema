@@ -3186,11 +3186,53 @@ The GC7000UL result is logged where the other findings from that part are, with
 the C reproducer and the four-driver table, as the only one of the five that is
 GLES rather than Vulkan.
 
+**What the GC7000UL result actually is, 2026-10-09.** The advanced equation is
+applied on the first frame and **replaced by an ordinary source-over from the
+second frame on**. Six frames with the center pixel of each:
+
+```
+frame  1:                                           center [ 26, 26, 26,255]
+frame  2: vs first   8 (3072 bytes), vs previous  8  center [ 18, 18, 18,255]
+frame  3: vs first   8 (3072 bytes), vs previous  0  center [ 18, 18, 18,255]
+```
+
+Frames three onward are byte-identical to frame two, so there is one permanent
+transition rather than a drift. The composite is `Difference` with a source of
+zero, a destination of 0.1 and an alpha of 0.3: the equation gives
+`0.3·|0 − 0.1| + 0.7·0.1 = 0.1`, which is 26, and an ordinary source-over gives
+`0.1·(1 − 0.3) = 0.07`, which is 18. `llvmpipe` reads 26 on every frame, so the
+first frame agrees with a correct driver exactly and every later one performs a
+different blend.
+
+**Which corrects the sentence this section shipped with.** "The first frame
+differs from every later one, so something initialized on first use is
+involved" had the inference backwards: the first frame is the *correct* one, so
+whatever the second frame consults is written by the first and is not the
+equation the caller set. A difference cannot say which side of it is right, and
+the center pixel against a known-good driver can -- which is the same lesson
+the channel-swap reading taught a day earlier, in a different disguise.
+
+Three explanations are now eliminated, each by its own variant:
+
+| variant | what it rules out | GC7000UL |
+|---|---|---|
+| `barrier-everywhere` | a missing `glBlendBarrierKHR` | **8** |
+| `re-set-equation` | the driver skipping a redundant equation set | **8** |
+| `same-equation` | switching between two advanced equations | **9** |
+
+And a single advanced draw is stable for every frame, so it is not one draw
+going wrong: it takes two.
+
+**Still open:** why the first frame is exempt, and whether the layer's own
+advanced draw degrades alongside the composite's. That one multiplies against
+black in this scene, where a source-over gives the same pixel, so this readback
+cannot tell them apart.
+
 **Where to take it next**, in the order the evidence suggests:
 
-1. the GC7000UL result has a bare reproduction already and wants the vendor
-   report treatment -- an entry of its own, a control for valid usage better
-   than `glGetError`, and `GL_KHR_debug` output, which that driver carries;
+1. the GC7000UL result is logged where the other findings from that part are,
+   with a C reproducer, `GL_KHR_debug` enabled and silent, and the mechanism
+   above -- so what is left of it is the one open question named there;
 2. the radeonsi one wants what separates the renderer's sequence from this
    probe's, which is now a short list rather than a whole backend: the layer's
    allocation, the stencil attachment, the scissor, and the vertex path.
