@@ -28,9 +28,12 @@ layout(location = 0) out vec4 _fs2p_location0;
 
 void main() {
     VertexOutput in_ = VertexOutput(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2);
-    vec4 _e4 = _group_1_binding_0_fs.stops[0];
-    vec4 _e8 = _group_1_binding_0_fs.stops[1];
-    vec4 color = mix(_e4, _e8, clamp(in_.uv.x, 0.0, 1.0));
+    vec2 uv_1 = vec2(0.0);
+    uv_1 = in_.uv;
+    vec4 _e6 = _group_1_binding_0_fs.stops[0];
+    vec4 _e10 = _group_1_binding_0_fs.stops[1];
+    float _e12 = uv_1.x;
+    vec4 color = mix(_e6, _e10, clamp(_e12, 0.0, 1.0));
     _fs2p_location0 = vec4((color.xyz * color.w), color.w);
     return;
 }

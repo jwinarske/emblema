@@ -54,7 +54,18 @@ fn vs_main(
 // built-in path produced a similar picture.
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // The varying through a `var` before it is read, which is not a style
+    // choice. On a GC7000UL this entry point reading `in.clip` directly gets
+    // the `position` builtin instead -- and so does every other varying it
+    // names, `uv` and `tint` alike. A `var` is enough to fix it and a `let` is
+    // not, because only the `var` becomes a real variable rather than another
+    // name for the same extract. `docs/on-a-board.md` has the measurement.
+    //
+    // It belongs in this fixture rather than in the renderer because an effect
+    // is somebody else's program: the renderer cannot write a caller's shader,
+    // so the constraint is one a caller has to know about.
+    var clip: vec3<f32> = in.clip;
     let threshold = paint.geometry.x;
-    let color = select(paint.stops[1], paint.stops[0], in.clip.x / in.clip.z < threshold);
+    let color = select(paint.stops[1], paint.stops[0], clip.x / clip.z < threshold);
     return vec4<f32>(color.rgb * color.a, color.a);
 }

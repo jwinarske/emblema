@@ -64,6 +64,9 @@ fn vs_main(
 // caller's; the range is fixed because the question here is where `uv` runs.
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = mix(paint.stops[0], paint.stops[1], clamp(in.uv.x, 0.0, 1.0));
+    // Through a `var` first, for the reason `effect.wgsl` spells out: read
+    // directly, this varying arrives as the `position` builtin on a GC7000UL.
+    var uv: vec2<f32> = in.uv;
+    let color = mix(paint.stops[0], paint.stops[1], clamp(uv.x, 0.0, 1.0));
     return vec4<f32>(color.rgb * color.a, color.a);
 }

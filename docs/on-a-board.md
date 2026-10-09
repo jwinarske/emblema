@@ -2389,9 +2389,9 @@ annotated.
 neither caused by the fix:
 
 - `runtime_effect`, 4 of 7: every one of them `[0, 0, 255, 255]` against an
-  expected `[255, 0, 0, 255]`. Red and blue swapped, on the runtime-effect
-  path only -- ordinary sampling is correct on the same device, so this is not
-  the sampler.
+  expected `[255, 0, 0, 255]`. Read as red and blue swapped, which a later
+  section shows it is not -- one failing assertion cannot distinguish a
+  channel swap from the three other things that produce that pixel.
 - `device`, 2 of 15: `capability_flags_are_internally_consistent` and
   `a_restricted_device_reports_flags_that_match_its_extensions` both assert
   `caps.sync.export_sync_file == ctx.has_extension("VK_KHR_external_semaphore_fd")`,
@@ -2399,6 +2399,103 @@ neither caused by the fix:
   equivalence is the one the sync work already disproved; the tests still
   encode it, and only a device where the two disagree can say so. The right
   assertion is the implication, not the equality.
+
+### The effect's varyings arrive as the position builtin, 2026-10-08
+
+**"Red and blue swapped" was wrong**, and it was wrong because a single failing
+assertion cannot tell a channel swap from anything else that produces the same
+pixel. `[0, 0, 255, 255]` where `[255, 0, 0, 255]` was expected is what a
+swapped pair looks like, and also what a mirrored split looks like, and also
+what the effect reading one color for the whole quad looks like. It was the
+third.
+
+Printing instead of asserting says so in one run. The effect draws a vertical
+split at a threshold the caller sets, in two colors the caller gives:
+
+| threshold | RADV | Vivante |
+|---|---|---|
+| -0.5 | edge at x=8 | **no edge, all of it `stops[1]`** |
+| 0.0 | edge at x=16 | no edge, all of it `stops[1]` |
+| +0.5 | edge at x=24 | no edge, all of it `stops[1]` |
+
+No edge at any threshold, and `stops[1]` reads back exactly right -- so the
+uniform block is fine and the *condition* is false everywhere. The condition is
+`in.clip.x / in.clip.z < threshold`.
+
+**What `clip` actually contains.** Returning it as a color:
+
+| | `clip.x` across the row | `clip.y` | `clip.z` |
+|---|---|---|---|
+| RADV | 0.969 both ends, correct | 0.03 | 1.0 |
+| Vivante | 0.5 at x=0, 1.0 from x=1 | 1.0 | **0.0** |
+
+`clip.z` of zero makes the division infinite or NaN, and either is less than
+nothing. The values are `gl_FragCoord`: at x=0 it is `(0.5, 16.5, 0.0)`, which
+saturates to `[128, 255, 0]`, and at x=31 `(31.5, 16.5, 0.0)` to
+`[255, 255, 0]` -- both measured exactly. Asking for `uv.x` and `tint.x`
+instead gets `FragCoord.x` as well. **Every varying the effect names arrives as
+the position builtin.**
+
+**It is not the interface, and it is not the two-module pipeline.** Four things
+were checked and each came back identical or negative:
+
+- the declared interfaces of `SOLID_SPV` and `EFFECT_SPV` are the same variable
+  for variable -- `FragCoord` first, then `clip`, `uv`, `tint` at locations 0,
+  1 and 2, same types, same names, same decorations, same entry point names;
+- an effect pipeline takes its vertex stage from the renderer's module and its
+  fragment stage from the caller's, so mixing was the obvious suspect. Taking
+  **both** stages from the effect's own module changes nothing;
+- the renderer's own `clip` arrives perfectly on that device. A linear gradient
+  is pixel-identical to RADV, `[249, 0, 2]` through `[6, 2, 253]` across the
+  row. Nothing that passes on this board had read `clip` before -- `paint.rs`
+  is solid colors throughout -- which is why this looked like an effect problem
+  rather than a varying problem;
+- a smaller fragment shader does not help, and neither does a bigger one.
+
+**What fixes it is a `var`, and a `let` does not.**
+
+```wgsl
+var clip: vec3<f32> = in.clip;      // the varying arrives
+let clip = in.clip;                 // it does not
+```
+
+Measured both ways on the board: with the `var` the edges land at 8, 16 and 24
+exactly as on RADV; with the `let` there is no edge at all. The difference is
+that a `let` is another name for the same `OpCompositeExtract` and the `var`
+becomes a real `OpVariable` with a store and a load. That is the same shape the
+composite-construct defect wanted, which is why `solid.wgsl` already has it and
+has had it since that fix went in -- the fixtures never got the same treatment
+because nothing had made them fail.
+
+**And that makes it the composite-construct defect again, not a new one.** The
+translated output says why, in one line:
+
+```glsl
+VertexOutput in_ = VertexOutput(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2);
+```
+
+naga rebuilds the entry point's struct parameter from the separate input
+variables, and `@builtin(position)` is its **first member**. Reading `in.clip`
+is then an extract of member 1 from that composite, `in.uv` member 2 and
+`in.tint` member 3. A driver that answers every extract with member 0 hands
+back the position builtin for all three -- which is exactly the three
+measurements above, each taken before this explanation existed. The `var`
+works because a store and a load are not an extract.
+
+So this is the defect already filed from `solid.wgsl`, reached through the
+entry point's own parameter rather than through a called function. The earlier
+rule -- a composite construct fed by a value parameter or an extract of one --
+was narrower than the defect.
+
+So all four effect fixtures route their varying through a `var`, and
+`runtime_effect` goes from 3 of 7 to **7 of 7**. Thirteen of the board's
+fourteen Vulkan suites are green, and the fourteenth is the next section.
+
+**Why this is not a renderer fix.** An effect is somebody else's fragment
+program. The renderer cannot write a caller's shader, so this is a constraint a
+caller has to know: on this device, read a varying through a `var` before using
+it. The fixtures demonstrate the shape; they do not fix anything for anybody
+else.
 
 ### The sync failures were ours, and are fixed
 
