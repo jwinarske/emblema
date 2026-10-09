@@ -593,7 +593,23 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
                     .subresource_range(
                         vk::ImageSubresourceRange::default()
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .level_count(1)
+                            // `EMBLEMA_REMAINING` asks for the sentinel the
+                            // renderer used to ask for. The image has one
+                            // level, so the two denote the same single level.
+                            //
+                            // `sampled` puts it only on the image a shader
+                            // reads, which is where the renderer had it;
+                            // `all` puts it on the color target's view too.
+                            // The distinction matters: a framebuffer
+                            // attachment is a different code path, and the
+                            // whole point is to reproduce the renderer's.
+                            .level_count(match std::env::var("EMBLEMA_REMAINING").as_deref() {
+                                Ok("all") => vk::REMAINING_MIP_LEVELS,
+                                Ok("sampled") if usage.contains(vk::ImageUsageFlags::SAMPLED) => {
+                                    vk::REMAINING_MIP_LEVELS
+                                }
+                                _ => 1,
+                            })
                             .layer_count(1),
                     ),
                 None,
@@ -611,7 +627,20 @@ unsafe fn run_graphics(name: &str, words: &[u32], with_image: bool) -> std::proc
     );
     let mut sampler = vk::Sampler::null();
     if with_image {
-        sampled = make_image(vk::ImageUsageFlags::SAMPLED, 2);
+        // The renderer's textures are `TextureDescriptor::offscreen`, whose
+        // usage is sampled *and* color attachment and transfer. A probe that
+        // asks only for `SAMPLED` is not the same image, and
+        // `EMBLEMA_SAMPLED_USAGE=offscreen` closes that gap.
+        let sampled_usage = if std::env::var("EMBLEMA_SAMPLED_USAGE").as_deref() == Ok("offscreen")
+        {
+            vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+        } else {
+            vk::ImageUsageFlags::SAMPLED
+        };
+        sampled = make_image(sampled_usage, 2);
         sampler = device
             .create_sampler(&vk::SamplerCreateInfo::default(), None)
             .expect("create_sampler");
@@ -1223,6 +1252,24 @@ fn main() -> std::process::ExitCode {
         }
         return std::process::ExitCode::SUCCESS;
     };
+    // `--dump <dir>` writes each graphics variant's module out, so a C
+    // harness can be handed the same bytes. `probe-the-composite-rule` carries
+    // the same switch for the same reason.
+    if wanted == "--dump" {
+        let dir = std::env::args().nth(2).expect("a directory to dump into");
+        std::fs::create_dir_all(&dir).expect("the dump directory");
+        for (name, source, _) in GRAPHICS {
+            let words = spirv(source);
+            let mut bytes = Vec::with_capacity(words.len() * 4);
+            for word in &words {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            let path = format!("{dir}/{name}.spv");
+            std::fs::write(&path, &bytes).expect("writing the module");
+            println!("{path}: {} words", words.len());
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
     if wanted == "draw-vertex-attributes" {
         let words = spirv(WITH_ATTRIBUTES);
         println!("draw-vertex-attributes: {} words, graphics", words.len());
