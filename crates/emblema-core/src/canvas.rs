@@ -1652,8 +1652,19 @@ impl Canvas {
         // A matrix that folds the plane or carries the region across the
         // vanishing line has no region to report, and one that widens past what
         // an extent can hold is not a picture anybody asked for.
+        //
+        // The second half of that sentence was not implemented, and `as u32`
+        // **saturates**: a finite width of `3.4e38` passed the finiteness test
+        // and came out of the cast as `u32::MAX`. A layer whose extent is four
+        // billion texels then clamps a morphology radius to four billion and
+        // emits one pass per thirty-two texels of it -- a hundred and
+        // thirty-four million passes, which is a recording measured in
+        // gigabytes. Found by `hostile_api`, whose case is in that test's
+        // regressions file; it reached the gate as the OOM killer rather than
+        // as a failure.
         let (width, height) = (right - left, bottom - top);
-        if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+        let holdable = |side: f32| side.is_finite() && side > 0.0 && side <= MAX_TARGET_SIDE;
+        if !(holdable(width) && holdable(height)) {
             return None;
         }
         Some(Target {
@@ -6643,6 +6654,21 @@ pub(crate) const MAX_SIGMA: f32 = 500.0;
 /// Must match `max_taps` in the blur shader, which is where the budget is
 /// actually spent; this is the copy that decides when to shrink the image
 /// instead of spreading the taps across it.
+/// The largest side a recorded target may have, in texels.
+///
+/// Not a device limit -- this side of the renderer has no device -- but a
+/// bound on what a *recording* may describe. Every current part reports a
+/// maximum texture side of 16,384 or less, so a target twice that is already
+/// past anything that could be rendered, and the number's job is to be
+/// obviously larger than a real surface while small enough that a filter
+/// emitting a pass per `MORPHOLOGY_TAPS` texels of radius stays countable.
+///
+/// It exists because `f32 as u32` saturates rather than wrapping or refusing:
+/// without a ceiling a finite width of `3.4e38` becomes an extent of
+/// `u32::MAX`, and a morphology over that asks for a hundred and thirty-four
+/// million passes.
+pub(crate) const MAX_TARGET_SIDE: f32 = 32_768.0;
+
 pub(crate) const BLUR_MAX_TAPS: f32 = 32.0;
 
 /// The kernel radius a deviation gives, in texels of whatever it is blurring.
