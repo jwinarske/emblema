@@ -3296,18 +3296,43 @@ source.
    probe's, which is now a short list rather than a whole backend: the layer's
    allocation, the stencil attachment, the scissor, and the vertex path.
 
-**Two of those four are eliminated, 2026-10-09.** Each tried on radeonsi with
-`llvmpipe` as the clean control and the GC7000UL as the known positive, so a
-knob that does nothing can be told from one that does:
+**All four are eliminated, 2026-10-09, so the list was wrong rather than
+exhausted.** Each tried on radeonsi with `llvmpipe` as the clean control and
+the GC7000UL as the known positive, so a knob that does nothing can be told
+from one that does:
 
 | candidate | variant | radeonsi | llvmpipe | GC7000UL |
 |---|---|---|---|---|
 | the layer's allocation, never reused | `fresh-output` and friends | 0 | 0 | **clean** |
 | the layer's allocation, freed and remade | `churn` | 0 | 0 | **clean** |
-| the stencil attachment, test enabled | `stencil` | 0 | 0 | **31** |
+| the stencil attachment, test enabled | `stencil` | 0 | 0 | 31 |
+| the scissor, enabled over the whole target | `scissor` | 0 | 0 | 31 |
+| the vertex path, three attributes and `glDrawElements` | `vertex-path` | 0 | 0 | 31 |
+| **all three of those together** | `clip-state` | **0** | 0 | 31 |
 
-So neither how the targets are allocated nor a stencil attachment reproduces
-it there. The scissor and the vertex path are what is left.
+The vertex path is the same picture drawn a different way, which is checked
+rather than assumed: it reads `[26, 19, 26]` on `llvmpipe`, the same as the
+variant it replaces, so a zero there is a stable *correct* frame and not a
+stable wrong one.
+
+**Where that leaves it.** The list came from reading the renderer and asking
+what the probe lacked, and every item on it is now measured and negative --
+including all three clip-and-geometry items at once. So the thing that matters
+is not on a list drawn up that way, and the next move is the inversion that
+eventually cracked the sampling crash: instrument the **renderer** downward
+toward the probe, rather than building the probe upward toward the renderer. A
+probe grown toward a renderer only ever finds what the person growing it
+thought to add, which is a lesson this document already carries from
+`VIV-2`.
+
+**Where the variants live, so nobody rebuilds them.** `churn`, `fresh-*`,
+`stencil`, `scissor`, `vertex-path` and `clip-state` are all in the C
+reproducer in the report repository, which is the one that runs on all four
+drivers. The in-tree `probe-the-blend-instability` carries the subset that the
+GC7000UL findings rest on -- the ingredient variants, `fresh-*`, `churn` and
+`stencil`. The scissor and the vertex path are deliberately only in the C one:
+they are negative results and porting them would be work for nothing, but they
+exist and should not be written twice.
 
 **The GC7000UL column is what makes those zeros worth anything.** `churn`
 turning that board *clean* says the knob reaches the thing VIV-5 is about, and
