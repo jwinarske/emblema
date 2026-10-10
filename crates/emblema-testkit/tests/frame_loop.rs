@@ -370,13 +370,16 @@ fn the_frame_loop_actually_renders() {
 /// exactly the pass extent rather than pooling one. So whatever carries the
 /// previous frame's influence is below all of that.
 ///
-/// What would settle it is a reproduction in bare GLES with no renderer in it --
-/// a multisample framebuffer, a draw under `GL_KHR_blend_equation_advanced`, a
-/// resolve, and a sample of the result -- which is what this tree's own rule
-/// asks for before a driver is named. That has not been written. It now has a
-/// target to aim at and a control to check against, which it did not before:
-/// whatever it does has to come out unstable on `radeonsi` and clean on
-/// `llvmpipe`, and a version that fails on both is reproducing something else.
+/// **That reproduction now exists**, in bare EGL and GL with no renderer in it:
+/// `probe-the-blend-instability --  renderer-shape`, which is unstable on
+/// `radeonsi` by fifteen levels and clean on `llvmpipe`, on a GC7000UL and on
+/// an Adreno 640 -- and those three agree on the pixel `radeonsi` misses. So
+/// the driver can be named for this by the rule the tree sets.
+///
+/// The ingredient this test has and a probe built by guessing lacked is **a
+/// second draw inside the layer**: taking the under rect out of the scene above
+/// makes it stable, and adding one to the probe is what made the probe
+/// unstable. `docs/on-a-board.md` has the reduction and the four-driver table.
 ///
 /// Asserted as a bound rather than as the defect, so a fix makes this pass
 /// rather than fail: zero is within three.

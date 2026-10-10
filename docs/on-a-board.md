@@ -3353,8 +3353,41 @@ absent -- and the particular advanced mode does not matter.
 **Which names what the bare-GLES probe lacks**, and names it from the
 renderer rather than from a guess: **a mask blur, and a second draw inside the
 layer.** The probe has multisampling and two advanced equations already. Those
-two are the next things to add, and they are the first candidates in this
-investigation that were not thought up by reading the renderer and wondering.
+two are the first candidates in this investigation that were not thought up by
+reading the renderer and wondering.
+
+### And adding them reproduces it, 2026-10-09
+
+| variant | radeonsi | llvmpipe | GC7000UL | Adreno 640 |
+|---|---|---|---|---|
+| `under-draw` -- a second ordinary draw inside the layer | **4** | 0 | 31 | 0 |
+| `renderer-shape` -- that, and a sampling inside draw | **15** | 0 | 0 | 0 |
+
+**`renderer-shape` is the reproduction this document has been owed since the
+instability was reduced**: unstable on `radeonsi` and clean on the other three,
+which is the condition it set. The three clean drivers also agree on the center
+pixel -- `[20, 20, 23]` against `radeonsi`'s `[20, 19, 22]` -- so the frame
+`radeonsi` gets wrong is wrong against a quorum rather than against one
+opinion. Fifteen levels, byte-identical over five runs, and `glGetError` and
+`GL_KHR_debug` are clean throughout.
+
+**The necessary ingredient is the second draw, not the blur.** `under-draw`
+alone is four levels; `inside-samples` alone is zero. Adding the sampling draw
+on top takes it from four to fifteen, so the blur deepens it rather than
+causing it. That is the opposite of what the probe had been built around, and
+it is the thing four guessed candidates all missed -- the second draw inside a
+layer was never on the list, because reading a renderer prompts questions
+about *state* and not about *how many draws there are*.
+
+**So the driver can be named for this**, by the rule this document sets. What
+is not yet established is the mechanism; the reproduction is the thing that was
+owed, and the ingredient list is now five items long with a control for each.
+
+**A curiosity worth one line, and not more.** `renderer-shape` is *clean* on
+the GC7000UL, where `under-draw` shows VIV-5's thirty-one. So a sampling draw
+inside the layer avoids VIV-5 as well as deepening the radeonsi defect. Whether
+that is a hint about VIV-5 or a coincidence of this scene is unmeasured, and it
+should not be read as either until it is.
 
 **A confound that had to be removed first, and it moved four rows.** Run in
 one context the cases are not independent: each inherits whatever the one

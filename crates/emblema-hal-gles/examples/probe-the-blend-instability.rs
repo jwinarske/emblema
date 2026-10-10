@@ -23,7 +23,15 @@
 //! variant set where `radeonsi` is non-zero and the other three are not.
 
 // An example is a program, and it reports by printing.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::too_many_lines,
+    // `frame` takes the three targets, the coverage texture and the barrier.
+    // Bundling them into a struct would be a type whose only job is to have
+    // one fewer comma at one call site.
+    clippy::too_many_arguments
+)]
 
 use glow::HasContext;
 
@@ -79,6 +87,14 @@ struct Ingredients {
     /// A depth-stencil attachment on both targets with the test enabled,
     /// which is what a renderer carrying clip state has.
     stencil: bool,
+    /// The advanced draw inside the layer samples a texture through the nine
+    /// taps instead of being a solid fill, which is what a mask blur makes of
+    /// it: the shape's coverage is blurred and the draw reads it.
+    inside_samples: bool,
+    /// A second, ordinary draw inside the layer under the advanced one -- the
+    /// second child the renderer's reduced scene has, and the one whose
+    /// removal makes that scene stable.
+    under_draw: bool,
 }
 
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
@@ -97,6 +113,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "every ingredient the reduced scene has",
     ),
@@ -115,6 +133,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "no multisample target and so no resolve",
     ),
@@ -133,6 +153,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "the layer's own draws blend ordinarily",
     ),
@@ -151,6 +173,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "the layer is composited ordinarily",
     ),
@@ -169,6 +193,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "no advanced equation anywhere -- the control",
     ),
@@ -187,6 +213,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "the full set, with a barrier before every draw and after the resolve",
     ),
@@ -205,6 +233,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "an ordinary equation set before each advanced one",
     ),
@@ -223,6 +253,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "both advanced draws use GL_DIFFERENCE_KHR",
     ),
@@ -241,6 +273,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "a gray layer clear, so the composite's source is not zero",
     ),
@@ -259,6 +293,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "the same frame, reading the resolved layer back instead of the output",
     ),
@@ -277,6 +313,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 4,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "a new output every frame, the other two kept -- the one that is clean",
     ),
@@ -295,6 +333,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 2,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "a new resolve target every frame, the other two kept",
     ),
@@ -313,6 +353,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 1,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "a new multisample layer every frame, the other two kept",
     ),
@@ -331,6 +373,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: true,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "all three deleted and remade every frame, so names and memory recycle",
     ),
@@ -349,8 +393,50 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: true,
+            inside_samples: false,
+            under_draw: false,
         },
         "a depth-stencil attachment with the test enabled",
+    ),
+    (
+        "under-draw",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 0,
+            churn: false,
+            stencil: false,
+            inside_samples: false,
+            under_draw: true,
+        },
+        "a second ordinary draw inside the layer, under the advanced one",
+    ),
+    (
+        "renderer-shape",
+        Ingredients {
+            samples: 4,
+            advanced_inside: true,
+            advanced_composite: true,
+            blur: true,
+            extra_barriers: false,
+            reset_equation: false,
+            same_equation: false,
+            gray_layer: true,
+            read_layer: false,
+            fresh: 0,
+            churn: false,
+            stencil: false,
+            inside_samples: true,
+            under_draw: true,
+        },
+        "that and a sampling inside draw -- what the renderer's scene needs",
     ),
     (
         "no-blur",
@@ -367,6 +453,8 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             fresh: 0,
             churn: false,
             stencil: false,
+            inside_samples: false,
+            under_draw: false,
         },
         "the layer's contents are not blurred",
     ),
@@ -632,6 +720,7 @@ fn frame(
     resolved: &Target,
     output: &Target,
     blend_barrier: Option<extern "C" fn()>,
+    coverage: Option<glow::Texture>,
 ) -> Vec<u8> {
     // SAFETY: as above.
     unsafe {
@@ -657,12 +746,58 @@ fn frame(
         }
         gl.clear(glow::COLOR_BUFFER_BIT);
 
-        let under = if what.advanced_inside {
-            programs.solid_blend
+        // The second child first, as the renderer's scene has it: an ordinary
+        // draw under the advanced one, which gives it a destination to read.
+        if what.under_draw {
+            gl.use_program(Some(programs.solid_plain));
+            gl.uniform_4_f32(
+                gl.get_uniform_location(programs.solid_plain, "u_rect")
+                    .as_ref(),
+                -0.84,
+                -0.84,
+                0.12,
+                0.12,
+            );
+            gl.uniform_4_f32(
+                gl.get_uniform_location(programs.solid_plain, "u_color")
+                    .as_ref(),
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            );
+            gl.enable(glow::BLEND);
+            gl.blend_equation(glow::FUNC_ADD);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            gl.draw_arrays(glow::TRIANGLES, 0, 6);
+        }
+
+        let under = if what.inside_samples {
+            let program = if what.advanced_inside {
+                programs.blur_blend
+            } else {
+                programs.blur_plain
+            };
+            gl.use_program(Some(program));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, coverage);
+            gl.uniform_1_i32(gl.get_uniform_location(program, "u_tex").as_ref(), 0);
+            gl.uniform_1_f32(gl.get_uniform_location(program, "u_alpha").as_ref(), 1.0);
+            gl.uniform_2_f32(
+                gl.get_uniform_location(program, "u_step").as_ref(),
+                1.0 / SIDE as f32,
+                0.0,
+            );
+            program
         } else {
-            programs.solid_plain
+            let program = if what.advanced_inside {
+                programs.solid_blend
+            } else {
+                programs.solid_plain
+            };
+            gl.use_program(Some(program));
+            program
         };
-        gl.use_program(Some(under));
         gl.uniform_4_f32(
             gl.get_uniform_location(under, "u_rect").as_ref(),
             -0.84,
@@ -670,13 +805,15 @@ fn frame(
             0.5,
             0.5,
         );
-        gl.uniform_4_f32(
-            gl.get_uniform_location(under, "u_color").as_ref(),
-            0.0,
-            0.221_247,
-            0.0,
-            1.0,
-        );
+        if !what.inside_samples {
+            gl.uniform_4_f32(
+                gl.get_uniform_location(under, "u_color").as_ref(),
+                0.0,
+                0.221_247,
+                0.0,
+                1.0,
+            );
+        }
         gl.enable(glow::BLEND);
         if what.advanced_inside {
             if what.reset_equation {
@@ -1042,6 +1179,15 @@ fn main() {
             }
         };
 
+        // Something for an inside draw to sample: a texture filled once and
+        // never touched again, standing in for a blurred coverage.
+        let cov = target(&gl, 1, false);
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(cov.framebuffer));
+        gl.disable(glow::BLEND);
+        gl.clear_color(0.75, 0.5, 0.25, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        let coverage = cov.texture;
+
         println!();
         for (name, what, _) in chosen {
             let layer = target(&gl, what.samples, what.stencil);
@@ -1104,6 +1250,7 @@ fn main() {
                     resolved,
                     output,
                     blend_barrier,
+                    coverage,
                 )
             };
 
