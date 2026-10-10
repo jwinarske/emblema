@@ -2995,6 +2995,11 @@ this renderer issues is not sufficient to produce it, and the bare-GLES
 reproduction that is still owed has a target and three controls: unstable on
 `radeonsi` and clean on the rest, or it is reproducing something else.
 
+> **Since paid.** `renderer-shape` meets those conditions -- see *And adding
+> them reproduces it* below, and *Bisecting the reproduction* after it. The
+> paragraph above is left as written because the conditions it set are the
+> ones the reproduction was held to.
+
 **Two drivers is the whole sample, and the reason is worth recording** because
 it looks like a gap someone could close and is not:
 
@@ -3104,6 +3109,12 @@ boards are glibc 2.41 and gcc 14.
 
 ### The bare-GLES probe does not reproduce it, and finds something else, 2026-10-09
 
+> **Superseded in part, later the same day.** The seven variants in this
+> section are still zero on `radeonsi` and the GC7000UL findings below still
+> stand -- what changed is that the probe gained two more ingredients and one
+> of them reproduces. So read "the probe does not reproduce it" as "these seven
+> variants do not", and see *And adding them reproduces it*.
+
 `probe-the-blend-instability` is the reproduction this document said was owed:
 EGL and GL and nothing else, reaching a display through the surfaceless
 platform on Mesa and through GBM on a vendor stack, so all four drivers in the
@@ -3125,7 +3136,8 @@ every run:
 | `barrier-everywhere` | 0 | 0 | **8** |
 
 So the sequence this probe issues is not the one, and by this document's own
-rule the driver still is not named for the *radeonsi* instability. What the
+rule the driver is not named for the *radeonsi* instability **by these seven
+variants**. It is named by `renderer-shape`, two sections below. What the
 probe buys is a smaller search space rather than an answer: a multisample
 target, an advanced equation inside a layer, a resolve and an advanced
 composite that samples it are **not sufficient** on that driver, so whatever
@@ -3416,3 +3428,86 @@ frame is clean, so the state is tied to the framebuffer *object's lifetime*
 rather than to its name or its memory -- a recycled name comes back with a
 clean slate. That is a cheaper workaround to state than "never delete": an
 ordinary create-use-free cycle per frame avoids it.
+
+### Bisecting the reproduction, 2026-10-09
+
+Every `no-*` variant above subtracts from `full`, and `full` is **zero on
+`radeonsi`**. So that bisect was run against a scene that never reproduced,
+and it could not have named a mechanism whatever it found. The `shape-*`
+variants subtract from `renderer-shape`, which does.
+
+One invocation per variant throughout. In a single context the cases are not
+independent -- the same confound recorded above -- and a sweep that shares one
+context reads `renderer-shape` as **zero**, because the case before it leaves
+the state that masks it. Every number below is a fresh process, and the
+`radeonsi` column is three runs that agree exactly.
+
+**Necessary. Take any one away and it is clean:**
+
+| ingredient | variant | radeonsi |
+|---|---|---|
+| multisampling, and so the resolve | `shape-single-sample` | 0 |
+| an advanced equation on the inside draw | `shape-no-advanced-inside` | 0 |
+| a second draw under it, inside the layer | `shape-no-under-draw` | 0 |
+| a layer cleared to something other than black | `shape-black-layer` | 0 |
+
+**Not necessary. It survives without these, smaller:**
+
+| ingredient | variant | radeonsi | bytes of 4,096 |
+|---|---|---|---|
+| the advanced composite | `shape-no-advanced-composite` | 14 | 318 |
+| the mask blur | `shape-no-blur` | **15** | 87 |
+| the sampling inside draw | `shape-no-inside-samples` | 4 | 78 |
+| *(the reproduction itself)* | `renderer-shape` | 15 | 317 |
+
+**Controls, and none of them explains it:**
+
+| control | variant | radeonsi |
+|---|---|---|
+| a barrier before and after every draw | `shape-barriers` | **15**, and the same 317 bytes |
+| an ordinary equation set before each advanced one | `shape-re-set-equation` | 15 |
+| one advanced equation for both draws | `shape-same-equation` | **19** -- worse |
+| a depth-stencil attachment, test enabled | `shape-stencil` | 15 |
+
+`llvmpipe` is 0 on all thirteen.
+
+**The barrier explanation is now closed, on evidence.** `barrier-everywhere`
+had only ever been run against `full`, which is zero on `radeonsi` -- so it
+refuted nothing, and this document's earlier "the control for the obvious
+explanation and it fails it" was a control run against a scene with nothing to
+control for. `shape-barriers` runs it against the reproduction: a barrier
+before and after every draw, and after the resolve, leaves **the same fifteen
+levels and the same 317 bytes**. The renderer is not missing a blend barrier.
+
+One caveat on the control that is not `shape-barriers`: `llvmpipe` advertises
+`GL_KHR_blend_equation_advanced_coherent` and `radeonsi` does not, so on
+`llvmpipe` the probe issues no barriers at all. Its zero is a control for the
+*scene*, not for barrier placement. Only `shape-barriers` on `radeonsi` can
+answer that, and it does.
+
+**A fourth necessary ingredient, not previously named: the layer's clear.**
+With the layer cleared to black the reproduction is clean, and an advanced
+equation reading a zero destination is exactly where several of them
+degenerate. This also explains the gap this document has been chasing: `full`
+clears black, so `full` could not have reproduced it however many other
+ingredients it had.
+
+**The blur is not an ingredient at all.** The earlier reading was that it
+"deepens rather than causes"; subtracting it from the reproduction leaves
+fifteen levels, so it is not required -- what it changes is the extent, 317
+bytes down to 87. The same holds the other way for the sampling inside draw:
+removing it drops the depth to four but keeps it non-zero.
+
+**So the shape of the defect is four things**, on this driver: a multisampled
+layer, an advanced equation, an earlier draw it overlaps, and a destination
+that is not zero. That is narrower than the renderer's scene by the blur and
+the advanced composite, and it is still not a mechanism -- it is the smallest
+scene that does it.
+
+**Two rows coincide with variants that already existed, and agree with them.**
+`shape-no-inside-samples` is ingredient-for-ingredient `under-draw`, and both
+give four levels and 78 bytes; `shape-no-under-draw` is what the section above
+calls `inside-samples`, a name no variant in the probe actually carries, and
+both are zero. The agreement is worth having -- the two were written
+independently -- and the missing name is worth knowing about before someone
+greps for it.
