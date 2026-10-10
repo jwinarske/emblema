@@ -3325,6 +3325,45 @@ probe grown toward a renderer only ever finds what the person growing it
 thought to add, which is a lesson this document already carries from
 `VIV-2`.
 
+### The reduction, from the renderer's side, 2026-10-09
+
+Taking the reduced scene apart one element at a time, on `radeonsi`, each
+element removed on its own:
+
+| the scene, minus | worst per channel |
+|---|---|
+| nothing -- the reduced case | **3** |
+| multisampling (one sample) | 0 |
+| the layer's advanced blend | 0 |
+| the layer's 0.3 alpha (so 1.0) | **8** |
+| the advanced blend on the draw inside | 0 |
+| the mask blur | 0 |
+| the second draw under it | 0 |
+| the layer itself | 0 |
+
+And a second round: a layer with neither blend nor alpha is stable, `Difference`
+and `Screen` on the inside draw are each as unstable as `Multiply`, and **two**
+samples is enough (2 levels).
+
+So what it takes is **multisampling, an advanced blend on the layer, an
+advanced blend on a draw inside it, a mask blur, and a second draw under that
+one.** The alpha is not among them -- at 1.0 the difference is larger, not
+absent -- and the particular advanced mode does not matter.
+
+**Which names what the bare-GLES probe lacks**, and names it from the
+renderer rather than from a guess: **a mask blur, and a second draw inside the
+layer.** The probe has multisampling and two advanced equations already. Those
+two are the next things to add, and they are the first candidates in this
+investigation that were not thought up by reading the renderer and wondering.
+
+**A confound that had to be removed first, and it moved four rows.** Run in
+one context the cases are not independent: each inherits whatever the one
+before it left set, which is the very thing being measured, so a sweep in one
+context reports the order as much as the scene. With a fresh context per case
+`no layer blend` went from 3 to 0, `inner Screen` from 0 to 3, `two samples`
+from 0 to 2, and `plain layer at two samples` from 7 to 0. The table above is
+the isolated one, and it repeats byte for byte across three runs.
+
 **Where the variants live, so nobody rebuilds them.** `churn`, `fresh-*`,
 `stencil`, `scissor`, `vertex-path` and `clip-state` are all in the C
 reproducer in the report repository, which is the one that runs on all four
