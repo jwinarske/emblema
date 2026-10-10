@@ -97,6 +97,29 @@ struct Ingredients {
     under_draw: bool,
 }
 
+/// The reproduction, named so the bisect below can be written as deltas from it.
+///
+/// Every `no-*` variant above subtracts from `full`, which is **zero on radeonsi** -- so
+/// subtracting from it says nothing about the driver this is chasing. The `shape-*` variants
+/// subtract from the scene that does reproduce, which is the only bisect that can name a
+/// mechanism.
+const SHAPE: Ingredients = Ingredients {
+    samples: 4,
+    advanced_inside: true,
+    advanced_composite: true,
+    blur: true,
+    extra_barriers: false,
+    reset_equation: false,
+    same_equation: false,
+    gray_layer: true,
+    read_layer: false,
+    fresh: 0,
+    churn: false,
+    stencil: false,
+    inside_samples: true,
+    under_draw: true,
+};
+
 const VARIANTS: &[(&str, Ingredients, &str)] = &[
     (
         "full",
@@ -420,22 +443,7 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
     ),
     (
         "renderer-shape",
-        Ingredients {
-            samples: 4,
-            advanced_inside: true,
-            advanced_composite: true,
-            blur: true,
-            extra_barriers: false,
-            reset_equation: false,
-            same_equation: false,
-            gray_layer: true,
-            read_layer: false,
-            fresh: 0,
-            churn: false,
-            stencil: false,
-            inside_samples: true,
-            under_draw: true,
-        },
+        SHAPE,
         "that and a sampling inside draw -- what the renderer's scene needs",
     ),
     (
@@ -457,6 +465,107 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
             under_draw: false,
         },
         "the layer's contents are not blurred",
+    ),
+    // The bisect of the reproduction. One delta each from `SHAPE`, so what a row says is what
+    // that one ingredient is worth on the driver that reproduces.
+    (
+        "shape-barriers",
+        Ingredients {
+            extra_barriers: true,
+            ..SHAPE
+        },
+        "the reproduction with a barrier before and after every draw -- the control that decides \
+         whether a driver is at fault at all",
+    ),
+    (
+        "shape-single-sample",
+        Ingredients {
+            samples: 1,
+            ..SHAPE
+        },
+        "the reproduction with no multisample target and so no resolve",
+    ),
+    (
+        "shape-no-advanced-inside",
+        Ingredients {
+            advanced_inside: false,
+            ..SHAPE
+        },
+        "the reproduction with the layer's own draws blending ordinarily",
+    ),
+    (
+        "shape-no-advanced-composite",
+        Ingredients {
+            advanced_composite: false,
+            ..SHAPE
+        },
+        "the reproduction with the layer composited ordinarily",
+    ),
+    (
+        "shape-no-advanced",
+        Ingredients {
+            advanced_inside: false,
+            advanced_composite: false,
+            ..SHAPE
+        },
+        "the reproduction with no advanced equation anywhere -- the control",
+    ),
+    (
+        "shape-no-blur",
+        Ingredients {
+            blur: false,
+            ..SHAPE
+        },
+        "the reproduction with the layer's contents not blurred",
+    ),
+    (
+        "shape-no-inside-samples",
+        Ingredients {
+            inside_samples: false,
+            ..SHAPE
+        },
+        "the reproduction with the advanced inside draw a solid fill again",
+    ),
+    (
+        "shape-no-under-draw",
+        Ingredients {
+            under_draw: false,
+            ..SHAPE
+        },
+        "the reproduction without the second draw inside the layer",
+    ),
+    (
+        "shape-black-layer",
+        Ingredients {
+            gray_layer: false,
+            ..SHAPE
+        },
+        "the reproduction with the layer cleared to black rather than gray",
+    ),
+    (
+        "shape-same-equation",
+        Ingredients {
+            same_equation: true,
+            ..SHAPE
+        },
+        "the reproduction with one advanced equation for both draws",
+    ),
+    (
+        "shape-re-set-equation",
+        Ingredients {
+            reset_equation: true,
+            ..SHAPE
+        },
+        "the reproduction with an ordinary equation set before each advanced one",
+    ),
+    (
+        "shape-stencil",
+        Ingredients {
+            stencil: true,
+            ..SHAPE
+        },
+        "the reproduction with a depth-stencil attachment and the test enabled, as a renderer \
+         carrying clip state has",
     ),
 ];
 
