@@ -215,6 +215,59 @@ fn reaches_the_gles_instability(scene: &Scene) -> bool {
         && scene.items.iter().any(has_advanced_blend)
 }
 
+/// Whether a case reaches `a_single_sample_scene_is_disturbed_by_multisampled_frames`.
+///
+/// A second instability, and not a wider reading of the first. Measured with
+/// `examples/ablate-the-frame-loop.rs`, which reduces #180's case and takes
+/// each ingredient out on its own:
+///
+/// | taken out | worst |
+/// |---|---|
+/// | *(nothing -- as found)* | 1 |
+/// | the subject's single sample, raised to four | 0 |
+/// | the subject's layer blur | 0 |
+/// | the subject's advanced blend | 0 |
+/// | the other frames' multisampling | 0 |
+/// | the other frames' advanced blend | 0 |
+/// | the other frames' mask blur | 1 |
+/// | every clip and difference clip | 1 |
+///
+/// So it needs a **single-sample** subject with a layer blur and an advanced
+/// blend, and **multisampled** other frames reaching an advanced blend. The
+/// first instability needs the opposite of the subject's first condition -- it
+/// is multisampled -- which is why this is named apart rather than folded in.
+/// Nothing about it is a clip: `no-clips` is still one level, which is worth
+/// saying because this file exists for a scissor that a clip left enabled.
+///
+/// Both sides, unlike [`reaches_the_gles_instability`], because the state that
+/// does it is left by the frames *around* the subject and no predicate reading
+/// the subject alone can see them.
+fn reaches_the_multisample_leak(subject: &Scene, others: &[Scene]) -> bool {
+    fn layer_blur(node: &Node) -> bool {
+        match node {
+            Node::Layer {
+                layer, children, ..
+            } => layer.blur > 0.0 || children.iter().any(layer_blur),
+            _ => false,
+        }
+    }
+    fn advanced(node: &Node) -> bool {
+        match node {
+            Node::Draw(item) => item.blend.is_advanced(),
+            Node::Layer {
+                layer, children, ..
+            } => layer.blend.is_advanced() || children.iter().any(advanced),
+            _ => false,
+        }
+    }
+    subject.samples == 1
+        && subject.items.iter().any(layer_blur)
+        && subject.items.iter().any(advanced)
+        && others
+            .iter()
+            .any(|other| other.samples > 1 && other.items.iter().any(advanced))
+}
+
 proptest! {
     // Each case is up to five renders on each of two backends.
     #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
@@ -245,7 +298,9 @@ proptest! {
         // bound fitted to the defect, which is the trade `image.rs` refuses in
         // its own words -- so the combination is named and left out, and
         // everything else stays exact.
-        if !reaches_the_gles_instability(&subject) {
+        if !reaches_the_gles_instability(&subject)
+            && !reaches_the_multisample_leak(&subject, &others)
+        {
             if let Ok(mut gles) = GlesValidated::new(DisplayTarget::Surfaceless) {
                 if let Some(worst) = repeat::<GlesHal>(&mut gles, &subject, &others) {
                     prop_assert_eq!(
@@ -471,5 +526,195 @@ fn a_blurred_advanced_blend_layer_is_unstable_on_gles() {
     assert_eq!(
         a.pixels, b.pixels,
         "a plain multisampled fill is stable on this backend"
+    );
+}
+
+/// A single-sample scene renders differently once multisampled frames have run.
+///
+/// The second instability this file records, and a distinct one: the first
+/// needs a *multisampled* subject and this needs a single-sample one. Found by
+/// `a_generated_scene_survives_other_frames` (#180), reduced by
+/// `examples/ablate-the-frame-loop.rs`, and the ingredient table is on
+/// [`reaches_the_multisample_leak`].
+///
+/// What it needs is state a multisampled frame leaves that a later
+/// single-sample frame reads. The subject is stable rendered twice with nothing
+/// between -- which is what makes this a frame-loop defect rather than a
+/// version of the first.
+///
+/// Asserted as a bound rather than as the defect, the way
+/// `a_blurred_advanced_blend_layer_is_unstable_on_gles` is, so a fix makes this
+/// pass rather than fail: zero is within two.
+#[test]
+fn a_single_sample_scene_is_disturbed_by_multisampled_frames() {
+    let Ok(mut gles) = GlesValidated::new(DisplayTarget::Surfaceless) else {
+        eprintln!("skipping: no GLES context");
+        return;
+    };
+    if !gles.capabilities().advanced_blend {
+        eprintln!("skipping: this GLES context has no advanced blending");
+        return;
+    }
+
+    let subject = Scene::tree(
+        "subject",
+        vec![
+            Node::Draw(Box::new(Item::filled(
+                Shape::Rect {
+                    min: [6.0, 26.0],
+                    max: [49.0, 43.0],
+                },
+                Fill::Solid([0.547_580_6, 0.339_360_3, 0.171_661_6, 1.0]),
+            ))),
+            Node::Layer {
+                layer: Box::new(
+                    LayerSpec::opacity(0.680_524_2)
+                        .with_blend(BlendMode::Overlay)
+                        .with_blur(3.128_923_4),
+                ),
+                bounds: None,
+                transform: emblema_testkit::Transform::default(),
+                children: vec![
+                    Node::Draw(Box::new(Item::filled(
+                        Shape::Rect {
+                            min: [31.0, 21.0],
+                            max: [62.0, 42.0],
+                        },
+                        Fill::Solid([0.822_578_67, 0.279_028_27, 0.669_239_34, 1.0]),
+                    ))),
+                    Node::Draw(Box::new(
+                        Item::filled(
+                            Shape::Rect {
+                                min: [10.0, 23.0],
+                                max: [44.0, 64.0],
+                            },
+                            Fill::Solid([0.167_555_4, 0.442_319_3, 0.497_562_4, 0.772_613_64]),
+                        )
+                        .with_blend(BlendMode::Overlay),
+                    )),
+                ],
+            },
+        ],
+    )
+    .with_samples(1);
+
+    // Multisampled, and reaching an advanced equation. The mask blur the
+    // generated case had is left out: `others-no-mask-blur` is still one level.
+    let others = vec![Scene::tree(
+        "other",
+        vec![Node::Layer {
+            layer: Box::new(LayerSpec::opacity(0.984_054_4).with_blend(BlendMode::SrcOver)),
+            bounds: None,
+            transform: emblema_testkit::Transform::default(),
+            children: vec![Node::Draw(Box::new(
+                Item::filled(
+                    Shape::Rect {
+                        min: [36.0, 17.0],
+                        max: [67.0, 42.0],
+                    },
+                    Fill::Solid([0.249_706_09, 0.282_845_02, 0.295_750_5, 1.0]),
+                )
+                .with_blend(BlendMode::Difference),
+            ))],
+        }],
+    )
+    .with_samples(4)];
+
+    // The subject against itself, with nothing between: this must be stable, or
+    // what follows is the first instability rather than this one.
+    let Some(alone) = repeat::<GlesHal>(&mut gles, &subject, &[]) else {
+        eprintln!("skipping: this context declined the scene");
+        return;
+    };
+    assert_eq!(
+        alone, 0,
+        "the subject is unstable by itself, so this is not a frame-loop defect"
+    );
+
+    let worst = repeat::<GlesHal>(&mut gles, &subject, &others)
+        .expect("the scene was accepted a moment ago");
+    assert!(
+        worst <= 2,
+        "the multisample leak is {worst} levels, which is larger than this has been"
+    );
+    eprintln!("the multisample leak: {worst} level(s) after one multisampled frame");
+}
+
+/// The predicate fires on the case it names, and on none of its ablations.
+///
+/// Needs no device. The bound in
+/// `a_single_sample_scene_is_disturbed_by_multisampled_frames` cannot catch a
+/// predicate that is wrong: a predicate that fires too widely costs coverage
+/// silently, and one that fires too narrowly puts the failure back in
+/// `a_generated_scene_survives_other_frames` where it is a seed rather than a
+/// name. So the four conditions are pinned here, one at a time.
+#[test]
+fn the_multisample_leak_predicate_names_its_own_case() {
+    fn layered(samples: u32, blur: f32, blend: BlendMode) -> Scene {
+        Scene::tree(
+            "s",
+            vec![Node::Layer {
+                layer: Box::new(LayerSpec::opacity(0.7).with_blend(blend).with_blur(blur)),
+                bounds: None,
+                transform: emblema_testkit::Transform::default(),
+                children: vec![Node::Draw(Box::new(Item::filled(
+                    Shape::Rect {
+                        min: [1.0, 1.0],
+                        max: [9.0, 9.0],
+                    },
+                    Fill::Solid([0.5, 0.5, 0.5, 1.0]),
+                )))],
+            }],
+        )
+        .with_samples(samples)
+    }
+
+    let subject = layered(1, 3.0, BlendMode::Overlay);
+    let other = layered(4, 0.0, BlendMode::Difference);
+    assert!(
+        reaches_the_multisample_leak(&subject, std::slice::from_ref(&other)),
+        "the case it is written for"
+    );
+
+    assert!(
+        !reaches_the_multisample_leak(
+            &layered(4, 3.0, BlendMode::Overlay),
+            std::slice::from_ref(&other)
+        ),
+        "a multisampled subject is the other instability, not this one"
+    );
+    assert!(
+        !reaches_the_multisample_leak(
+            &layered(1, 0.0, BlendMode::Overlay),
+            std::slice::from_ref(&other)
+        ),
+        "without a layer blur the subject is stable -- measured, and the gap \
+         `has_mask_blur` has, since it never reads `LayerSpec::blur`"
+    );
+    assert!(
+        !reaches_the_multisample_leak(
+            &layered(1, 3.0, BlendMode::SrcOver),
+            std::slice::from_ref(&other)
+        ),
+        "without an advanced blend the subject is stable"
+    );
+    assert!(
+        !reaches_the_multisample_leak(&subject, &[layered(1, 0.0, BlendMode::Difference)]),
+        "single-sample other frames leave nothing that does it"
+    );
+    assert!(
+        !reaches_the_multisample_leak(&subject, &[layered(4, 0.0, BlendMode::SrcOver)]),
+        "other frames that reach no advanced equation leave nothing that does it"
+    );
+    assert!(
+        !reaches_the_multisample_leak(&subject, &[]),
+        "and with no other frames there is nothing to inherit from"
+    );
+
+    // The first predicate does not claim this case, which is what makes two of
+    // them necessary.
+    assert!(
+        !reaches_the_gles_instability(&subject),
+        "if the first predicate covered it there would be no second one"
     );
 }

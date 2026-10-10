@@ -3511,3 +3511,63 @@ calls `inside-samples`, a name no variant in the probe actually carries, and
 both are zero. The agreement is worth having -- the two were written
 independently -- and the missing name is worth knowing about before someone
 greps for it.
+
+### A second instability, and it is the other way up, 2026-10-09
+
+`a_generated_scene_survives_other_frames` found a scene that
+`reaches_the_gles_instability` did not exclude, and the first reading was that
+the predicate was not conservative enough. It is not: the case is a **different
+defect**, and widening the first exclusion to cover it would have hidden it.
+
+Reduced by `crates/emblema-testkit/examples/ablate-the-frame-loop.rs`, which takes the shrunk case and
+removes one ingredient at a time. A context per variant, because what is
+measured is what one frame leaves for the next.
+
+| taken out | worst |
+|---|---|
+| *(nothing -- as found)* | **1** |
+| the subject's single sample, raised to four | 0 |
+| the subject's layer blur | 0 |
+| the subject's advanced blend | 0 |
+| the other frames' multisampling | 0 |
+| the other frames' advanced blend | 0 |
+| the other frames' mask blur | **1** |
+| every clip and difference clip | **1** |
+
+**So it needs a single-sample subject, and multisampled frames around it.** A
+layer blur and an advanced blend on the subject, a multisample target and an
+advanced blend on a frame that runs between its two renders. The first
+instability needs the subject *multisampled*; this one is clean the moment the
+subject is. That is why it is named apart --
+`reaches_the_multisample_leak` reads both sides, and
+`reaches_the_gles_instability` cannot be made to cover it without excluding
+the scenes it was written for.
+
+**It is not a clip.** `no-clips` is still one level, which is worth stating
+plainly because `frame_loop.rs` exists for a scissor a clip left enabled, and
+that is the first thing anyone will suspect. The clips in the generated case
+are incidental.
+
+**Nor is it the mask blur**, on either side. The subject's blur is a
+`LayerSpec::blur` and is necessary; the other frames' `mask_blur` is not. That
+also names a real gap in the first predicate, left alone deliberately:
+`has_mask_blur` matches a `Draw`'s `mask_blur` and recurses into a layer's
+children, so it never reads `layer.blur`. Whether a *multisampled* subject with
+a layer blur reaches the first instability is unmeasured -- the one measurement
+here says it does not, since raising this subject to four samples is clean --
+and widening that predicate on one negative is the trade this document refuses
+elsewhere.
+
+**Why the reduction took two attempts, recorded because the first was wrong.**
+The case was reduced by hand first without its clips and without two of its
+three other frames, and read **zero** -- a reduction that does not reproduce
+says nothing about ingredients, and reporting its ablations would have been a
+table of noise. The clips turned out to be unnecessary after all and the three
+other frames reduce to one, but that is a result of the bisect rather than an
+assumption that could be made before it.
+
+The reproduction is `a_single_sample_scene_is_disturbed_by_multisampled_frames`,
+asserted as a bound the way the first one is, so a fix makes it pass. It
+carries its own control: the subject rendered twice with nothing between is
+exact, which is what makes this a frame-loop defect rather than a second
+reading of the first.
