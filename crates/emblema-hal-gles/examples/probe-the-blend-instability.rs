@@ -97,6 +97,40 @@ struct Ingredients {
     under_draw: bool,
 }
 
+/// The blur's tap direction as `(x, y)` steps, one texel each.
+///
+/// Horizontal is what the reduced scene uses, and it is why the differing
+/// pixels form seven-wide columns but one-tall rows: nine taps at one texel
+/// reach four pixels either side, so a vertical edge spreads and a horizontal
+/// one does not. `BLUR=v` transposes it, which should transpose the map.
+fn blur_step() -> (f32, f32) {
+    let texel = 1.0 / SIDE as f32;
+    match std::env::var("BLUR").as_deref() {
+        Ok("v") => (0.0, texel),
+        _ => (texel, 0.0),
+    }
+}
+
+/// The under draw's far corner, in pixels down and right from the origin.
+///
+/// 17.92 is where the reduced scene puts it, and the whole reason this is a
+/// knob: the near edge lands at 2.56 and the far one at 17.92, which are *not*
+/// the same fraction of a pixel. At four samples a fraction of 0.56 leaves two
+/// of the four uncovered while 0.92 leaves none, so the far edge's pixels are
+/// fully covered at sample resolution and the near edge's are not. That
+/// predicts the top-row-and-left-column-only asymmetry without any appeal to
+/// the driver -- `FAR=17.5` is the test, and it should make the far edge differ
+/// too.
+fn under_far_px() -> f32 {
+    static FAR: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *FAR.get_or_init(|| {
+        std::env::var("FAR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(17.92)
+    })
+}
+
 /// The reproduction, named so the bisect below can be written as deltas from it.
 ///
 /// Every `no-*` variant above subtracts from `full`, which is **zero on radeonsi** -- so
@@ -864,8 +898,8 @@ fn frame(
                     .as_ref(),
                 -0.84,
                 -0.84,
-                0.12,
-                0.12,
+                under_far_px() / SIDE as f32 * 2.0 - 1.0,
+                under_far_px() / SIDE as f32 * 2.0 - 1.0,
             );
             gl.uniform_4_f32(
                 gl.get_uniform_location(programs.solid_plain, "u_color")
@@ -894,8 +928,8 @@ fn frame(
             gl.uniform_1_f32(gl.get_uniform_location(program, "u_alpha").as_ref(), 1.0);
             gl.uniform_2_f32(
                 gl.get_uniform_location(program, "u_step").as_ref(),
-                1.0 / SIDE as f32,
-                0.0,
+                blur_step().0,
+                blur_step().1,
             );
             program
         } else {
@@ -1005,8 +1039,8 @@ fn frame(
         if what.blur {
             gl.uniform_2_f32(
                 gl.get_uniform_location(composite, "u_step").as_ref(),
-                1.0 / SIDE as f32,
-                0.0,
+                blur_step().0,
+                blur_step().1,
             );
         }
         gl.enable(glow::BLEND);

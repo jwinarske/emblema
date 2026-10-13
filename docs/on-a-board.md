@@ -3912,9 +3912,48 @@ only state as a fact: with a zero destination the wrong contribution and the
 right one compute to the same number, so the defect is invisible rather than
 absent.
 
-**Observed and not explained:** only the *top* row and the *left* column
-differ, not the bottom row or the right column, though those are partially
-covered too. Whatever the asymmetry is, it is recorded rather than guessed at.
+**The asymmetry is the geometry, and it is no longer unexplained**, 2026-10-13.
+Only the *top* row and the *left* column differ, not the bottom row or the right
+column -- and the reason is that those two edges are not partially covered at
+all once samples are counted, though they are at pixel resolution.
+
+The rect spans 2.56 to 17.92. Within the near pixel the covered part is the
+fraction 0.56 to 1.0; within the far one it is 0.0 to 0.92. Those are not
+equivalent. At four samples, two of the four sample offsets fall above 0.56 and
+**none** fall above 0.92, so the near edge has uncovered samples and the far
+edge has none. A fully covered pixel is an interior pixel, and interior pixels
+are exact.
+
+`FAR=` on `probe-the-blend-instability` moves that far corner, which is what
+turns the explanation into a measurement. Sweeping it, at three runs a point:
+
+| fraction of the far pixel | bytes differing | samples covered on that edge |
+|---|---|---|
+| 0.0 -- 0.12 | 297 | 0 -- the pixel is not drawn |
+| 0.13 -- 0.37 | 529 | 1 |
+| 0.38 -- 0.62 | **714** | 2 |
+| 0.63 -- 0.87 | 600 | 3 |
+| 0.88 -- 1.0 | 317 | 4 -- fully covered, nothing differs there |
+
+**Five plateaus, so four thresholds, which is what four samples predicts.**
+Bisected to a hundredth, they sit between 0.12 and 0.13, 0.37 and 0.38, 0.62
+and 0.63, and 0.87 and 0.88 -- so the sample offsets are **0.125, 0.375, 0.625
+and 0.875**, the standard four-sample pattern, recovered from outside the driver
+through nothing but the byte count of a two-frame difference. The reduced
+scene's 17.92 sits in the top plateau and 18.0 gives the same 317 bytes, which
+is the control: a far edge that is already fully covered behaves exactly like
+one that is pixel-aligned.
+
+So the scene reproduced the defect on two of its four edges by accident of where
+its corners landed, and `FAR=17.5` makes all four edges differ.
+
+**The block shapes are the blur, and that was checked rather than asserted.**
+The differing pixels form nine-wide columns but one-tall rows, which is the
+nine-tap mask blur stepping one texel horizontally: it reaches four pixels
+either side along its own axis, so a vertical edge spreads and a horizontal one
+does not. `BLUR=v` transposes the taps, and the map transposes exactly --
+nine-tall rows and one-wide columns, the differing region turning from rows 2
+to 17 by columns 0 to 21 into rows 0 to 21 by columns 2 to 17.
 
 `AT=x,y` and `MAP=1` on `probe-the-blend-instability` are the instrument, and
 they are worth reaching for before another ingredient is added: a count of
