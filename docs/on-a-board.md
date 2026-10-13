@@ -4120,6 +4120,51 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The two instabilities split by mechanism, 2026-10-13
+
+The second one was called a different defect on the strength of its
+ingredients. It is a different defect on the strength of its mechanism, and the
+two are separated by knobs that each leave the other alone.
+
+| `AMD_DEBUG` | first: levels / bytes, 3 runs | second: reproduced, 8 runs |
+|---|---|---|
+| *(none)* | 15 / 317, every run | 1 level, **6 of 8** |
+| `nodccmsaa` | **0 / 0**, every run | 1 level, **8 of 8** |
+| `nooptvariant` | 15 / 317, every run | **0 of 8** |
+| `mono` | 15 / 317, every run | **0 of 8** |
+| `usellvm` | 15 / 317, every run | **0 of 8** |
+
+**Each is suppressed by exactly the family the other ignores.** The first is DCC
+for MSAA and does not care what compiles its shaders; the second is shader
+compilation and does not care about DCC.
+
+**The second one's intermittency is now a number**, and it is why the rate had
+to be measured rather than the knob tried once: at six of eight, a single clean
+run under a knob is not evidence of anything. Three independent knobs at zero of
+eight against that base rate is.
+
+**`nodccmsaa` is the control that matters here.** It does not suppress the second
+instability -- it makes it *more* reproducible, eight of eight against six. So
+the three that do suppress it are not just perturbing the driver until a fragile
+thing stops happening; something specific to them is responsible.
+
+**Which points at ACO rather than at the variant machinery alone.** `usellvm`
+swaps the compiler backend outright, and it is as clean as `nooptvariant`. So the
+reading is that ACO's optimized variant of one of these shaders is miscompiled,
+`nooptvariant` and `mono` avoid that variant, and `usellvm` compiles it with
+something else.
+
+That also offers the intermittency an explanation it did not have:
+radeonsi compiles optimized variants in the background and draws with a generic
+one until they are ready, so whether a given frame uses the bad variant is a
+race with the compile thread. **Consistent, and not shown here** -- nothing
+above timed the compile or caught a frame changing behavior mid-run, and the
+shader itself is unidentified. The knob family is established; the specific
+shader and the race are not.
+
+**Both are this driver only.** The software reference reads 0 levels for the
+second instability as it does for the first, so neither is this renderer's.
+
 ### A second instability, and it is the other way up, 2026-10-09
 
 `a_generated_scene_survives_other_frames` found a scene that
