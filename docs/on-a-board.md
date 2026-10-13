@@ -4014,9 +4014,15 @@ say, and the wrong value names its own source.
 **Everything in the scene is gray except one thing.** The layer clears to mid
 gray, both draws are black, and the only non-gray operand is the texture the
 blurred draw samples -- filled `0.75, 0.5, 0.25` once and never touched again.
-So a correct pixel here is gray, and the wrong one is not: at (7, 2) frame one
-reads `[29, 29, 29]` and frame two `[44, 39, 34]`. The excess is `(15, 10, 5)`,
-which is 20/255 of `(191, 128, 64)` -- that fill, to the level.
+At (7, 2) frame one reads `[29, 29, 29]` and frame two `[44, 39, 34]`, an excess
+of `(15, 10, 5)`, which is 20/255 of `(191, 128, 64)` -- that fill, to the level.
+
+**Narrower than it was first written.** This entry said "a correct pixel here is
+gray, and the wrong one is not", which is too broad: the composite samples that
+texture as well, so a correct pixel is gray only where the texture contributes
+nothing. The reference reads `[20, 20, 23]` at the center, legitimately not
+gray. The gray test holds at (7, 2) and the reference confirms it there, which
+is what the comparison below rests on -- not on the general claim.
 
 **`COV=r,g,b` makes it causal rather than arithmetic.** Changing the fill moves
 the excess with it, per channel and in proportion:
@@ -4059,6 +4065,60 @@ under a word meaning (16, 16). It now prints `at (x,y)` with the coordinates it
 used. The reading above was checked against `AT=10,10`, which gives
 `[25, 25, 25]` -- the interior value this document already recorded -- before
 any of it was believed.
+
+### The state is DCC for MSAA, and two families are ruled out, 2026-10-13
+
+What carries the difference between frame one and the rest. Three answers, two
+of them negative, and the negatives took the obvious candidates off the table.
+
+**Not any render target.** `shape-fresh-layer`, `shape-fresh-resolved`,
+`shape-fresh-output` and `shape-churn` -- the `fresh` and `churn` ingredients
+asked of the scene that reproduces, rather than of `full`, which is zero here
+and can answer nothing. All four read `[29, 29, 29]` then `[44, 39, 34]`, the
+same as the unchanged scene. **`churn` deletes and remakes all three targets
+every frame and does not help.**
+
+**Not shader compilation.** `AMD_DEBUG=nooptvariant`, `mono`, `usellvm` and
+`nooptvariant,mono` -- disabling optimized variants, forcing old-style
+monolithic shaders, and swapping ACO for LLVM. All four identical to baseline,
+so the defect is not in the compiled shader.
+
+**It is DCC for MSAA.** Of nine `AMD_DEBUG` options tried, exactly two move it,
+and `nodccmsaa` is the minimal one:
+
+| `AMD_DEBUG` | frames 1 to 4 at (7, 2) |
+|---|---|
+| *(none)* | `[29,29,29]` then `[44,39,34]` thrice |
+| **`nodcc`** | `[44,39,34]` **four times** |
+| **`nodccmsaa`** | `[44,39,34]` **four times** |
+| `nodccclear`, `nodccstore`, `nofmask`, `forcegfxblit`, `forcecomputeblit`, `forcefastclear` | as baseline |
+
+Three repetitions each: `nodccmsaa` is **0 levels and 0 bytes** across four
+frames, every time, against 15 levels and 317 bytes for baseline.
+
+**Which turns the instability inside out.** Against the reference, per pixel:
+
+| pixel | `llvmpipe` | `nodccmsaa` | frame 1 | frames 2+ |
+|---|---|---|---|---|
+| (7, 2) edge | `[30,30,30]` | `[44,39,34]` | `[29,29,29]` | `[44,39,34]` |
+| (2, 2) corner | `[39,39,39]` | `[45,43,41]` | `[39,39,39]` | `[45,43,41]` |
+| (2, 10) edge | `[30,30,30]` | `[31,30,30]` | `[29,29,29]` | `[31,30,30]` |
+| (10, 10) interior | `[26,26,26]` | `[25,25,25]` | `[25,25,25]` | `[25,25,25]` |
+| (16, 16) center | `[20,20,23]` | `[20,19,22]` | `[20,19,22]` | `[20,19,22]` |
+
+**Frame one matches the reference everywhere**, and `nodccmsaa` matches frames
+two onward everywhere. So the wrong value is this driver's ordinary answer at a
+partially covered pixel, and DCC for MSAA is what produces the right one on a
+target's first use. **This is not an unstable renderer settling down; it is a
+consistent disagreement that DCC hides once.** Turning DCC off does not fix it,
+it removes the one frame that was correct.
+
+**And one tension, recorded rather than smoothed over.** If the mechanism were
+fresh DCC metadata per target, then `shape-fresh-layer` -- a brand-new
+multisample layer every frame -- should read correctly on every frame. It does
+not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
+target, and nothing here has established what it is or why one frame per process
+gets it. The knob is identified; the mechanism behind the knob is not.
 
 ### A second instability, and it is the other way up, 2026-10-09
 
