@@ -398,10 +398,41 @@ fn a_device_asked_for_by_uuid_is_the_one_returned() {
         return;
     };
     let wanted = first.device_uuid();
-    assert_ne!(
-        wanted, [0u8; 16],
-        "a real device reported no uuid, so the properties2 chain did not reach it"
-    );
+    if wanted == [0u8; 16] {
+        // All zeros has two causes and they point opposite ways: this side's
+        // `properties2` chain never reached the device, or the driver reports
+        // nothing. The software reference tells them apart, because a broken
+        // chain is broken for every device while a driver gap is not.
+        //
+        // PanVK on a Mali-G52 is the driver that made this necessary: it
+        // reports zeros where llvmpipe on the same board, through the same
+        // binary, reports a real one. `docs/on-a-board.md` has it.
+        match context(DevicePreference::Software) {
+            Some(reference) if reference.device_uuid() != [0u8; 16] => {
+                eprintln!(
+                    "skipping: {} reports an all-zero uuid, so it cannot be \
+                     asked for by one -- the software reference reports a real \
+                     uuid through this same chain, so this is the driver",
+                    first.capabilities().device_name
+                );
+                return;
+            }
+            // Both zero, or no reference to compare against. Either way nothing
+            // here has shown the chain works, so this does not get to blame a
+            // driver -- it fails, and says what would tell the two apart.
+            other => panic!(
+                "{} reports an all-zero uuid, and {} -- so this cannot say \
+                 whether the properties2 chain reached the device or the driver \
+                 reports nothing. Run this against a device whose uuid is known \
+                 good, or with the software ICD available, to tell them apart",
+                first.capabilities().device_name,
+                match other {
+                    Some(_) => "the software reference reports one too",
+                    None => "there is no software reference here to compare with",
+                }
+            ),
+        }
+    }
     eprintln!("auto picked {wanted:02x?}");
 
     let Some(again) = context(DevicePreference::Uuid(wanted)) else {
