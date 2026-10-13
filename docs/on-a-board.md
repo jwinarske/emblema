@@ -3098,12 +3098,22 @@ exportable-format list is empty -- the capability asks for something
 exportable and this device has none, which is the filter shipped deliberately.
 Either way there is nothing to intersect with the plane's list.
 
-**The validation layer is not installed**, which is why every run on this
-board prints "skipping: the validation layer is unavailable, so API use went
-unchecked". Debian 12 has `vulkan-validationlayers` 1.3.239.0-2, matching the
-loader 1.3.239. Worth having before any further Vulkan work here, and worth
-having *with* the PanVK opt-in rather than against llvmpipe, since an
-experimental driver is exactly where a layer earns its keep.
+**The validation layer is installed now**, 2026-10-13:
+`vulkan-validationlayers` 1.3.239.0-2, matching the loader 1.3.239. Before
+that, every run on this board printed "skipping: the validation layer is
+unavailable, so API use went unchecked".
+
+**Do not read the suites passing as evidence it loaded.** `validation.rs` is
+five of five on this board both before and after the install, because it skips
+when the layer is absent -- so a green suite says nothing either way, which is
+the shape of fail-open this document keeps finding. The confirmation has to come
+from outside: `VK_LOADER_DEBUG=layer` prints
+`Loading layer library libVkLayer_khronos_validation.so`, and that is the
+evidence the layer is live.
+
+A second trap for anyone reading those skip messages: the harness captures
+output unless a test fails, so `--nocapture` is required to see them at all.
+Their absence from a captured run is not their absence.
 
 **A newer Mesa is available and does not change the ceiling.**
 `bookworm-backports` is already in this board's sources, and every Mesa package
@@ -3266,6 +3276,44 @@ evidence. Mesa 26.2 carries a `NO_USER_MMAP_SYNC` debug option that routes map
 synchronization through the kernel, which suggests the interface is at least
 contested; 24.2 is not known here to have it. Telling the two apart needs the
 newer stack, which is the Yocto build.
+
+**Under the layer, the segfault is unchanged and the layer says nothing**,
+which is the useful part. The call that faults is valid API use, so the fault is
+the driver's and not a reaction to anything this renderer did wrong. `gdb` on
+the board, with the layer loaded:
+
+```
+Thread 2 received signal SIGSEGV
+#0  0x...aac in ?? () from /usr/lib/aarch64-linux-gnu/libvulkan_panfrost.so
+#1  0x...ce4 in ?? () from /lib/aarch64-linux-gnu/libVkLayer_khronos_validation.so
+#2  ash::device::Device::cmd_draw_indexed (index_count=6, instance_count=1,
+                                           first_index=0, vertex_offset=0)
+#3  emblema_hal_vulkan::render::record_draw (render.rs:1471)
+```
+
+**Frame zero is inside the driver**, reached through the layer, from the most
+ordinary draw there is: six indices, one instance, no offsets.
+
+**Reduced to the indexed path, by mutation.** Changing that one call to
+`cmd_draw` -- non-indexed, drawing the wrong geometry on purpose, since the
+question is only whether it faults -- and the suite runs to completion: six
+passed, three failed, the three being pixel assertions the wrong geometry was
+always going to fail. **No segfault at all.**
+
+**And that corrects the obvious reading of the message order.**
+`MESA: error: mmap() failed (err=22)` looks like the cause, and it is not: the
+non-indexed run prints it **thirteen times and still finishes**. The `mmap`
+failure is ambient on this board and survivable. What is unique to the indexed
+path is the line after it --
+`WARNING: Crawling index buffers from the CPU isn't valid in Vulkan`, which
+appears once in the indexed run and **not at all** in the non-indexed one.
+
+So: PanVK on Bifrost v7 reads index buffers from the CPU on an indexed draw,
+says in its own words that this is not valid in Vulkan, and faults on that path.
+Both strings are in `libvulkan_panfrost.so`, so both are the driver's. The
+`mmap` failure remains the plausible reason the mapping that crawl wants is not
+there -- but it is a cause of the crawl failing, not of the crash, and nothing
+here has shown the driver checks it.
 
 **The `device` failure is separate and is also the driver.** PanVK reports an
 all-zero `deviceUUID`. llvmpipe on this same board, through this same binary,
