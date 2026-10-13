@@ -623,6 +623,33 @@ const VARIANTS: &[(&str, Ingredients, &str)] = &[
         "the reproduction with a depth-stencil attachment and the test enabled, as a renderer \
          carrying clip state has",
     ),
+    // Which object carries the state, asked of the scene that reproduces. The
+    // `fresh-*` variants above subtract from `full`, which is zero on radeonsi,
+    // so they cannot answer this -- these subtract from `SHAPE`.
+    (
+        "shape-fresh-layer",
+        Ingredients { fresh: 1, ..SHAPE },
+        "the reproduction with a new multisample layer every frame, the other two kept",
+    ),
+    (
+        "shape-fresh-resolved",
+        Ingredients { fresh: 2, ..SHAPE },
+        "the reproduction with a new resolve target every frame, the other two kept",
+    ),
+    (
+        "shape-fresh-output",
+        Ingredients { fresh: 4, ..SHAPE },
+        "the reproduction with a new output every frame, the other two kept",
+    ),
+    (
+        "shape-churn",
+        Ingredients {
+            churn: true,
+            ..SHAPE
+        },
+        "the reproduction with all three deleted and remade every frame, so names and memory \
+         recycle",
+    ),
 ];
 
 /// A quad over `u_rect`, from six indices and no vertex buffer.
