@@ -3553,10 +3553,32 @@ are incidental.
 also names a real gap in the first predicate, left alone deliberately:
 `has_mask_blur` matches a `Draw`'s `mask_blur` and recurses into a layer's
 children, so it never reads `layer.blur`. Whether a *multisampled* subject with
-a layer blur reaches the first instability is unmeasured -- the one measurement
-here says it does not, since raising this subject to four samples is clean --
-and widening that predicate on one negative is the trade this document refuses
-elsewhere.
+a layer blur reaches the first instability was unmeasured, and the trade of
+widening a predicate on one negative is one this document refuses elsewhere.
+
+**Measured instead, 2026-10-12: it does not, and the gap is already covered.**
+Two readings, the second of which is the one that settles it.
+
+A search first, because a handful of shapes cannot answer "does *any* such
+scene do it": 240 scenes carrying a layer blur and no draw mask blur, at two
+and four samples, with each of six advanced modes on the inside draw and on
+the layer, over varied alpha and extents, a context apiece. **Worst zero.**
+Against that, the first instability's own reduced scene -- the same shape with
+the blur on the *draw* -- reads three. So it is the draw's mask blur that
+reaches it and not a layer's blur. Adding a layer blur on top of the mask blur
+reads two rather than three, so it does not even deepen it.
+
+**And the existing property has been asserting this all along**, which is why
+there was no counterexample to find. `layer()` gives one layer in four a blur
+of one to five, and `reaches_the_gles_instability` does not exclude those
+scenes -- it reads a `Draw`'s `mask_blur` and never `layer.blur` -- so
+`a_generated_scene_survives_other_frames` already demands byte-exactness on
+GLES for multisampled scenes with layer blurs, and gets it, every gate run.
+
+So the gap stays, and now for a measured reason rather than a cautious one:
+**widening `has_mask_blur` to read `layer.blur` would remove live coverage.**
+Those scenes are exact today; excluding them from the strict assertion would
+buy nothing and stop checking something that passes.
 
 **Why the reduction took two attempts, recorded because the first was wrong.**
 The case was reduced by hand first without its clips and without two of its
