@@ -2943,6 +2943,75 @@ One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
 mode would read as a hang on a large one.
 
+### Where the second instability is, and that it is intermittent, 2026-10-13
+
+The same two measurements that named the first one's mechanism, neither of
+which had been taken here: read the **value** rather than the delta, and ask
+**which pixels** differ rather than how many levels.
+
+**It is intermittent, which the table above could not have shown.** One
+invocation per row is what produced it, and `as-found` reproduces in about ten
+runs of twelve. So a row reading zero once might have been a miss. Re-measured
+at twelve runs a row, the conclusions hold and hold harder:
+
+| variant | hits of twelve |
+|---|---|
+| `as-found` | 10 |
+| `others-no-mask-blur` | 10 |
+| `no-clips` | 10 |
+| `subject-multisampled` | **0** |
+| `subject-no-layer-blur` | **0** |
+| `subject-no-advanced` | **0** |
+| `others-plain` | **0** |
+| `others-single-sample` | **0** |
+| `others-no-advanced` | **0** |
+
+Nothing moved. A one-in-six miss rate could have turned a necessary ingredient
+into a false zero on a single run, and **zero of twelve across six variants**
+is what rules that out rather than luck.
+
+**Which render is wrong.** At the worst-differing pixel, (13, 27):
+
+| | first render | second render |
+|---|---|---|
+| `radeonsi`, on a hit | `[136, 87, 44]` | **`[136, 86, 44]`** |
+| `llvmpipe`, every run | `[136, 87, 44]` | `[136, 87, 44]` |
+
+So the subject's **first** render is exact -- it matches a clean driver byte for
+byte -- and the re-render after the other frames is the wrong one. That is the
+orientation the first instability has and VIV-5 has, and it is worth stating
+every time because "unstable" suggests both renders are suspect and they are
+not.
+
+**The signature is one-sided and one channel.** Of the 28 differing bytes in
+65,536, **all 28 are lower** in the second render and **all 28 are green**:
+nothing higher, nothing in red, blue or alpha. Identical across three hits. A
+rounding or dither difference scatters both ways and across channels; this does
+neither, so something contributes slightly less green the second time.
+
+**And it is an edge.** The differing pixels are a vertical line two pixels
+wide, x twelve and thirteen, rows twenty-seven to forty-two:
+
+```
+  y= 30 ............--..................................
+  y= 31 ............--..................................          (and so on)
+```
+
+So both instabilities are confined to an **edge** with the first render
+correct -- which is a parallel worth noticing and not a claim that they are one
+defect. They are not: this one is clean the moment the subject is
+multisampled, and the first one needs it to be. What they share is that the
+damage is at a boundary and arrives after the first frame.
+
+**Still not established:** what the state is. The ingredients, the orientation,
+the sign, the channel and the geometry are measured; the thing the multisampled
+frames leave behind is not.
+
+`AT=x,y` and `MAP=1` on `ablate-the-frame-loop` are the instrument. `AT` prints
+its pixel whether or not the two renders differ, which is what a clean driver
+has to be asked -- it has no difference to report, and its value is what the
+other two are measured against.
+
 ## The Radxa Zero 3 writes back, and is LINEAR only, 2026-10-13
 
 This board was carried on the list as "the only fleet member that might scan
