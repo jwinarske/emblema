@@ -97,6 +97,28 @@ struct Ingredients {
     under_draw: bool,
 }
 
+/// The coverage texture's fill, default `0.75,0.5,0.25`.
+///
+/// Deliberately not gray, and that is what identifies the contaminant: every
+/// other operand in this scene is gray, so a correct result is gray, and the
+/// wrong pixel is not. At the reduced scene's worst pixel frame one reads
+/// `[29, 29, 29]` and frame two `[44, 39, 34]` -- the excess being
+/// `(15, 10, 5)`, which is 20/255 of `(191, 128, 64)`, which is this fill.
+/// Changing it is the test: the excess has to follow.
+fn coverage_fill() -> (f32, f32, f32) {
+    static COV: std::sync::OnceLock<(f32, f32, f32)> = std::sync::OnceLock::new();
+    *COV.get_or_init(|| {
+        let parsed = std::env::var("COV").ok().and_then(|v| {
+            let parts: Vec<f32> = v.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+            match parts[..] {
+                [r, g, b] => Some((r, g, b)),
+                _ => None,
+            }
+        });
+        parsed.unwrap_or((0.75, 0.5, 0.25))
+    })
+}
+
 /// The blur's tap direction as `(x, y)` steps, one texel each.
 ///
 /// Horizontal is what the reduced scene uses, and it is why the differing
@@ -1327,7 +1349,8 @@ fn main() {
         let cov = target(&gl, 1, false);
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(cov.framebuffer));
         gl.disable(glow::BLEND);
-        gl.clear_color(0.75, 0.5, 0.25, 1.0);
+        let (cr, cg, cb) = coverage_fill();
+        gl.clear_color(cr, cg, cb, 1.0);
         gl.clear(glow::COLOR_BUFFER_BIT);
         let coverage = cov.texture;
 
@@ -1365,8 +1388,10 @@ fn main() {
                     pixels[at + 3]
                 )
             };
+            let readout = asked.unwrap_or((16, 16));
+            let label = format!("at ({},{})", readout.0, readout.1);
             let center = |pixels: &[u8]| {
-                let (x, y) = asked.unwrap_or((16, 16));
+                let (x, y) = readout;
                 let at = ((y * SIDE as usize) + x) * 4;
                 format!(
                     "[{:3},{:3},{:3},{:3}]",
@@ -1419,7 +1444,11 @@ fn main() {
 
             let first = render(&mut layer, &mut resolved, &mut output);
             if runs > 2 {
-                println!("{name:24} frame  1: {:>40} | center {}", "", center(&first));
+                println!(
+                    "{name:24} frame  1: {:>40} | {label} {}",
+                    "",
+                    center(&first)
+                );
             }
             let mut previous = first.clone();
             let mut worst = 0;
@@ -1447,7 +1476,7 @@ fn main() {
                     println!(
                         "{name:24} frame {run:2}: vs first {worst_first:3} \
                          ({differ_first:5} byte(s)), vs previous \
-                         {worst_previous:3} | center {}",
+                         {worst_previous:3} | {label} {}",
                         center(&current)
                     );
                 }
