@@ -3035,10 +3035,45 @@ picture rather than one flat color, and the controller composited what the
 renderer drew. That is the third device the writeback comparison has run on
 and the first that is neither vkms nor vc4.
 
-**The render side advertises nothing at all.** PanVK on an RK3566 reports no
-format-and-modifier pairs, which is a stronger version of the same gap: there
-is nothing to intersect with the plane's list, so scanout negotiation cannot
-succeed rather than failing to agree.
+**The render side advertises nothing to export, and the device is not the
+Mali.** The entry above said "PanVK on an RK3566 reports no
+format-and-modifier pairs" and that attribution was wrong, corrected
+2026-10-13: `/usr/share/vulkan/icd.d` on this board holds `broadcom`, `dzn`,
+`freedreno` and `lvp` and **no PanVK at all**, and the device the suite gets is
+`llvmpipe (LLVM 15.0.7, 128 bits)` -- software. So the board as configured does
+not exercise its own GPU through Vulkan, and nothing measured here says
+anything about Mali.
+
+What that device does report, from `probe-the-export-query`, is more specific
+than "nothing":
+
+```
+== llvmpipe (LLVM 15.0.7, 128 bits)
+  Bgra8Unorm     modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
+  Rgba8Unorm     modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
+  Rgb10A2Unorm   modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
+```
+
+Every format is renderable at `LINEAR` and every one is **`IMPORTABLE` and not
+`EXPORTABLE`**. That is why the renderer's exportable-format list comes back
+empty and scanout negotiation has nothing to intersect: the capability asks for
+something exportable, which this device has none of, and that is the filter
+shipped deliberately. So the empty list is the renderer reading the device
+correctly rather than a gap in what the device says.
+
+**Which leaves the LINEAR-only finding standing and narrows what it proves.**
+The plane's `IN_FORMATS` is a property of `rockchip-drm` and is unaffected by
+which ICD is installed, so "no board on this bench scans out a tiled or
+compressed modifier" holds. But this board cannot be the one that answers the
+V3D question for a second reason as well: with no hardware Vulkan driver on it,
+there is no tiled export here to meet the display's LINEAR in the first place.
+
+**The validation layer is not installed either**, which is why every run on
+this board prints "skipping: the validation layer is unavailable, so API use
+went unchecked". Debian 12 has it as `vulkan-validationlayers` 1.3.239.0-2,
+matching the loader, so it is one `apt install` away -- and worth having before
+any further Vulkan work on this board, since a software device will still
+answer for API misuse even though it says nothing about Mali.
 
 **`kms.rs` was reporting both of those as six failures**, which is the part
 worth fixing rather than noting. A board that has not got the thing a test
