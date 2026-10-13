@@ -3035,31 +3035,70 @@ picture rather than one flat color, and the controller composited what the
 renderer drew. That is the third device the writeback comparison has run on
 and the first that is neither vkms nor vc4.
 
-**The render side advertises nothing to export, and the device is not the
-Mali.** The entry above said "PanVK on an RK3566 reports no
-format-and-modifier pairs" and that attribution was wrong, corrected
-2026-10-13: `/usr/share/vulkan/icd.d` on this board holds `broadcom`, `dzn`,
-`freedreno` and `lvp` and **no PanVK at all**, and the device the suite gets is
-`llvmpipe (LLVM 15.0.7, 128 bits)` -- software. So the board as configured does
-not exercise its own GPU through Vulkan, and nothing measured here says
-anything about Mali.
+**The suite was getting software Vulkan on this board, and nothing said so.**
+The entry above said "PanVK on an RK3566 reports no format-and-modifier pairs"
+and named the wrong driver; the first correction to it said there was **no
+PanVK ICD at all**, and that was wrong too, from a listing cut off by
+`head -4`. What is actually the case, measured 2026-10-13:
 
-What that device does report, from `probe-the-export-query`, is more specific
-than "nothing":
+`/usr/share/vulkan/icd.d` holds **seven** manifests -- `broadcom`, `dzn`,
+`freedreno`, `lvp`, `panfrost`, `radeon`, `virtio` -- and
+`libvulkan_panfrost.so` is installed beside them. Mesa is 24.2 from the oibaf
+PPA rather than Debian 12's stock. So PanVK is present, and the reason the
+suite does not use it is upstream's own:
 
-```
-== llvmpipe (LLVM 15.0.7, 128 bits)
-  Bgra8Unorm     modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
-  Rgba8Unorm     modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
-  Rgb10A2Unorm   modifier 0x0  renderable true  features IMPORTABLE, compatible DMA_BUF_EXT
-```
+| configuration | device the suite gets |
+|---|---|
+| as the board ships | `llvmpipe (LLVM 15.0.7, 128 bits)` |
+| `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` | **`Mali-G52 r1 (Panfrost)`** |
+| the panfrost ICD forced, no opt-in | `ERROR_INITIALIZATION_FAILED` |
 
-Every format is renderable at `LINEAR` and every one is **`IMPORTABLE` and not
-`EXPORTABLE`**. That is why the renderer's exportable-format list comes back
-empty and scanout negotiation has nothing to intersect: the capability asks for
-something exportable, which this device has none of, and that is the filter
-shipped deliberately. So the empty list is the renderer reading the device
-correctly rather than a gap in what the device says.
+**PanVK refuses to create an instance unless that variable is set**, and the
+loader then skips the ICD with nothing louder than
+`terminator_CreateInstance: Failed to CreateInstance in ICD 4. Skipping ICD.`
+behind `VK_LOADER_DEBUG`. So the fallback to software is **silent**, and every
+earlier result recorded for this board -- including this document's "writeback
+is three of three on it" -- was a software-Vulkan result wearing a board's
+name. That is the part worth fixing in how boards are read, not just here.
+
+**Upstream says so deliberately.** Mesa's own Panfrost page: PanVK is "a
+Vulkan implementation for Bifrost and later"; "on GPUs where PanVK support is
+experimental, the driver refuses to load by default"; "setting
+`PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` enables it"; and "experimental support
+comes with no guarantees: it may be broken, may require newer kernel driver
+versions, and may be removed." Its table gives Vulkan 1.3 for Bifrost v6-v7,
+which is where a G52 sits, and the driver prints
+`WARNING: panvk is not a conformant Vulkan implementation, testing use only.`
+on every run. So a failure on this configuration is not evidence against this
+renderer until it has been asked twice, which is the trap this document exists
+to keep naming.
+
+**The results hold on the hardware anyway.** With the opt-in, `writeback.rs`
+is three of three and `kms.rs` seven of seven with twelve skips -- the same as
+on llvmpipe. So nothing recorded for this board was wrong *because* of the
+fallback; it was just measuring something other than what it appeared to.
+
+**What each device says about export**, which is the thing scanout
+negotiation needs and the reason it fails here either way:
+
+| device | the three render formats |
+|---|---|
+| `llvmpipe` | renderable at `LINEAR`, **`IMPORTABLE` and not `EXPORTABLE`** |
+| PanVK on a G52 | **no modifiers advertised at all** |
+
+So the earlier sentence was right about PanVK and wrong about which driver was
+answering: PanVK really does advertise nothing. `llvmpipe` advertises
+something and it is not exportable, which is why the renderer's
+exportable-format list is empty -- the capability asks for something
+exportable and this device has none, which is the filter shipped deliberately.
+Either way there is nothing to intersect with the plane's list.
+
+**The validation layer is not installed**, which is why every run on this
+board prints "skipping: the validation layer is unavailable, so API use went
+unchecked". Debian 12 has `vulkan-validationlayers` 1.3.239.0-2, matching the
+loader 1.3.239. Worth having before any further Vulkan work here, and worth
+having *with* the PanVK opt-in rather than against llvmpipe, since an
+experimental driver is exactly where a layer earns its keep.
 
 **Which leaves the LINEAR-only finding standing and narrows what it proves.**
 The plane's `IN_FORMATS` is a property of `rockchip-drm` and is unaffected by
