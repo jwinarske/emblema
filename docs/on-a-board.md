@@ -3225,6 +3225,67 @@ symbols, which is what gave it away. The rule in
 because of this exact failure. A fallback that reaches for `ls` when the json
 lookup comes back empty is the same mistake wearing a belt.
 
+## What hardware Vulkan on the G52 actually does, 2026-10-13
+
+With the opt-in taken and the panfrost ICD forced -- so a silent fallback to
+llvmpipe cannot be mistaken for a hardware result -- the fifteen
+`emblema-hal-vulkan` suites were run on the board. Forcing the ICD is the
+point: `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` alone leaves llvmpipe enumerated
+beside the G52, and the entry above is about exactly that mistake.
+
+| outcome | suites |
+|---|---|
+| clean | `assume_layout`, `export`, `pixels`, `validation`, the lib tests |
+| one test failed | `device` -- 15 of 16 |
+| **`SIGSEGV`** | `batch`, `blend`, `draw`, `msaa`, `paint`, `runtime_effect`, `sampling`, `stencil`, `sync` |
+
+**Nine of fifteen segfault, and the predictor is exact: every suite that draws
+dies, and every suite that only allocates, clears, reads back, exports or
+queries completes.** Each death is the same three lines -- the conformance
+warning, then `MESA: error: mmap() failed (err=22)`, then
+`WARNING: Crawling index buffers from the CPU isn't valid in Vulkan` -- and
+then exit 139. `err=22` is `EINVAL`.
+
+**The control is the same fifteen binaries on the same board against
+`lvp_icd`: fifteen of fifteen clean.** So this is PanVK and not this renderer,
+and it is not the harness either -- the binaries are byte-identical between the
+two runs and only `VK_DRIVER_FILES` differs.
+
+That control is what the entry above could not have given. A board reporting
+nine segfaults reads as a renderer in trouble, and the second ICD is the whole
+reason it does not.
+
+**What it is consistent with, and what has not been shown.** An `EINVAL` from
+`mmap` on the first draw is consistent with the vendor kernel being older than
+what this PanVK asks of it, which is what upstream's "may require newer kernel
+driver versions" warns about, and it is the strongest argument yet for the
+kernel row of the table above. It is *not* proof: nothing here has traced the
+failing `mmap` to a specific kernel interface, and the alternative -- a plain
+driver defect at 24.2 that a newer userspace fixed on its own -- fits the same
+evidence. Mesa 26.2 carries a `NO_USER_MMAP_SYNC` debug option that routes map
+synchronization through the kernel, which suggests the interface is at least
+contested; 24.2 is not known here to have it. Telling the two apart needs the
+newer stack, which is the Yocto build.
+
+**The `device` failure is separate and is also the driver.** PanVK reports an
+all-zero `deviceUUID`. llvmpipe on this same board, through this same binary,
+reports a real one.
+
+`a_device_asked_for_by_uuid_is_the_one_returned` caught it but blamed the wrong
+side: its message read "a real device reported no uuid, so the properties2
+chain did not reach it", which is an accusation against this renderer for a
+fact about the driver. All zeros has two causes pointing opposite ways, and one
+assertion cannot tell them apart -- the same shape of error this document keeps
+recording.
+
+It now discriminates, because a broken chain is broken for *every* device while
+a driver gap is not: on zeros it asks the software reference, skips naming the
+driver when the reference reports a real uuid through that same chain, and
+**fails** when the reference reports zeros too or when there is no reference to
+compare against. The second half matters more than the first -- a skip on
+zeros alone would fail open on exactly the regression the assertion existed to
+catch. Both branches were forced and watched to fire before this was written.
+
 ## Two test binaries, one card, 2026-10-08
 
 `kms.rs` and `writeback.rs` both take modesetting master on the same device,
