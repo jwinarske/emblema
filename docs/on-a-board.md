@@ -2943,6 +2943,69 @@ One more figure from the same runs: at 2560x1600 the writeback fence does not
 signal within two seconds, and does within fifteen. A timeout tuned on the small
 mode would read as a hang on a large one.
 
+## The Radxa Zero 3 writes back, and is LINEAR only, 2026-10-13
+
+This board was carried on the list as "the only fleet member that might scan
+out a non-linear modifier". **That premise is false, measured.** Its Rockchip
+plane advertises one modifier for every format it takes:
+
+```
+scanout side: XR24 [LINEAR], AR24 [LINEAR], XB24 [LINEAR], AB24 [LINEAR],
+              RG24 [LINEAR], BG24 [LINEAR], RG16 [LINEAR], BG16 [LINEAR]
+```
+
+So the fleet has no part that scans out a tiled or compressed modifier, and
+the question [[gles-scanout-needs-gbm-for-the-modifier]] records for V3D --
+the renderer exports a tiled layout and the controller takes LINEAR -- has no
+counter-example here to answer it with.
+
+**It does have a writeback connector, and the comparison passes on it.**
+`card0-Writeback-1` on `rockchip-drm`, kernel 6.1.84, and `writeback.rs` is
+**three of three**: the quadrant reads back its own color, the capture is a
+picture rather than one flat color, and the controller composited what the
+renderer drew. That is the third device the writeback comparison has run on
+and the first that is neither vkms nor vc4.
+
+**The render side advertises nothing at all.** PanVK on an RK3566 reports no
+format-and-modifier pairs, which is a stronger version of the same gap: there
+is nothing to intersect with the plane's list, so scanout negotiation cannot
+succeed rather than failing to agree.
+
+**`kms.rs` was reporting both of those as six failures**, which is the part
+worth fixing rather than noting. A board that has not got the thing a test
+drives has not failed it, and this file already has the idiom -- it skips,
+saying why, in six other places. Two capability gaps now skip the same way:
+
+- `Error::Unsupported` from building the scanout target, which is the backend
+  saying "this device cannot allocate its own scanout buffers; use the GBM
+  path" in as many words;
+- a render device whose format list is **empty**, where there is nothing to
+  negotiate.
+
+Only those two. Every other error still panics, so a defect cannot hide in
+the new arms. And the control is that neither skip fires on this desktop's
+vkms, where all seven still run -- a skip that fired everywhere would have
+hidden the suite instead of describing a board.
+
+`kms.rs` on the Radxa is now seven of seven with six skips naming their
+reason, against one passing test -- `committing_a_framebuffer_this_output_did
+_not_import_is_refused`, which needs no scanout buffer of its own and is the
+one thing on that board this file can still check.
+
+**A trap this cost half an hour to, and it is one this document already
+names.** The first run reported
+`libc.so.6: version GLIBC_2.39 not found`, which reads as a cross-compile
+against the wrong sysroot -- and the Radxa's sysroot is cached and correct.
+The binary shipped was a **stale** one: the path came from
+`ls target/.../deps/writeback-* | head -1`, which is alphabetical and picked a
+Pi-built binary from an earlier session out of the three that were sitting
+there. `objdump -T` on the binary actually built showed **zero** GLIBC_2.39
+symbols, which is what gave it away. The rule in
+[[test-boards-on-the-bench]] says to take test-binary paths from
+`cargo test --no-run --message-format=json` and not from `ls`, and it says so
+because of this exact failure. A fallback that reaches for `ls` when the json
+lookup comes back empty is the same mistake wearing a belt.
+
 ## Two test binaries, one card, 2026-10-08
 
 `kms.rs` and `writeback.rs` both take modesetting master on the same device,

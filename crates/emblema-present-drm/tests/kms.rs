@@ -88,6 +88,13 @@ fn a_rendered_frame_reaches_a_real_display_controller() {
     // chosen in advance. Linear is a valid answer here: vkms accepts nothing
     // else, and that being reported rather than assumed is the point.
     let render = ctx.capabilities().render_formats.clone();
+    if render.is_empty() {
+        // Not a negotiation that failed: a render device that advertises no
+        // format and modifier at all, which PanVK on an RK3566 does. There is
+        // nothing to intersect with the plane's list.
+        eprintln!("skipping: this render device advertises no formats to negotiate with");
+        return;
+    }
     let agreed = negotiate(
         &render,
         output.supported_formats(),
@@ -162,6 +169,10 @@ fn several_frames_flip_in_turn() {
         return;
     };
     let mode = output.mode();
+    if ctx.capabilities().render_formats.is_empty() {
+        eprintln!("skipping: this render device advertises no formats to negotiate with");
+        return;
+    }
     let agreed = negotiate(
         &ctx.capabilities().render_formats.clone(),
         output.supported_formats(),
@@ -264,6 +275,15 @@ fn the_scanout_target_drives_a_real_display_controller() {
     // Three buffers: one on screen, one being flipped to, one being drawn.
     let mut target = match DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3) {
         Ok(target) => target,
+        // A device that cannot allocate its own scanout buffers has not
+        // failed this -- it has not got the thing this drives. Rockchip on a
+        // Radxa Zero 3 says exactly that and wants the GBM path. Only
+        // `Unsupported` skips; every other error still fails, so a defect
+        // cannot hide here.
+        Err(emblema_hal::Error::Unsupported(what)) => {
+            eprintln!("skipping: {what}");
+            return;
+        }
         Err(e) => panic!("building the scanout target: {e}"),
     };
 
@@ -352,6 +372,15 @@ fn a_long_run_neither_leaks_nor_loses_blanks() {
     let period = output.exact_frame_nanos();
     let mut target = match DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3) {
         Ok(target) => target,
+        // A device that cannot allocate its own scanout buffers has not
+        // failed this -- it has not got the thing this drives. Rockchip on a
+        // Radxa Zero 3 says exactly that and wants the GBM path. Only
+        // `Unsupported` skips; every other error still fails, so a defect
+        // cannot hide here.
+        Err(emblema_hal::Error::Unsupported(what)) => {
+            eprintln!("skipping: {what}");
+            return;
+        }
         Err(e) => panic!("building the scanout target: {e}"),
     };
 
@@ -476,6 +505,15 @@ fn a_frame_with_layers_reaches_a_real_display_controller() {
     };
     let mut target = match DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, 3) {
         Ok(target) => target,
+        // A device that cannot allocate its own scanout buffers has not
+        // failed this -- it has not got the thing this drives. Rockchip on a
+        // Radxa Zero 3 says exactly that and wants the GBM path. Only
+        // `Unsupported` skips; every other error still fails, so a defect
+        // cannot hide here.
+        Err(emblema_hal::Error::Unsupported(what)) => {
+            eprintln!("skipping: {what}");
+            return;
+        }
         Err(e) => panic!("building the scanout target: {e}"),
     };
     let extent = target.extent();
@@ -608,6 +646,15 @@ fn a_storm_of_resizes_neither_leaks_nor_breaks_the_commit() {
     const ROUNDS: usize = 4;
     let mut target = match DrmScanoutTarget::<VulkanHal, _>::new(&mut ctx, output, DEPTH) {
         Ok(target) => target,
+        // A device that cannot allocate its own scanout buffers has not
+        // failed this -- it has not got the thing this drives. Rockchip on a
+        // Radxa Zero 3 says exactly that and wants the GBM path. Only
+        // `Unsupported` skips; every other error still fails, so a defect
+        // cannot hide here.
+        Err(emblema_hal::Error::Unsupported(what)) => {
+            eprintln!("skipping: {what}");
+            return;
+        }
         Err(e) => panic!("building the scanout target: {e}"),
     };
     let descriptors = open_descriptors();
