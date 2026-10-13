@@ -2193,3 +2193,167 @@ fn a_hairline_holds_its_weight_under_a_transform() {
         );
     }
 }
+
+/// Whether a scene reaches the condition behind the `radeonsi` instability.
+///
+/// The same three clauses as `frame_loop.rs`'s `reaches_the_gles_instability`,
+/// kept here rather than shared because the two ask different questions of
+/// them: there it decides what a generated case may skip, here it measures
+/// whether the fixed scenes reach it at all.
+fn reaches_the_radeonsi_condition(scene: &Scene) -> bool {
+    fn has_mask_blur(node: &Node) -> bool {
+        match node {
+            Node::Draw(item) => item.mask_blur > 0.0,
+            Node::Layer { children, .. } => children.iter().any(has_mask_blur),
+            _ => false,
+        }
+    }
+    fn has_advanced_blend(node: &Node) -> bool {
+        match node {
+            Node::Draw(item) => item.blend.is_advanced(),
+            Node::Layer {
+                layer, children, ..
+            } => layer.blend.is_advanced() || children.iter().any(has_advanced_blend),
+            _ => false,
+        }
+    }
+    scene.samples > 1
+        && scene.items.iter().any(has_mask_blur)
+        && scene.items.iter().any(has_advanced_blend)
+}
+
+/// No fixed scene reaches it, which is why no comparison here sees it.
+///
+/// `docs/on-a-board.md` records the defect: on `radeonsi`, at pixels where only
+/// some samples are covered, a multisampled scene with a mask blur and an
+/// advanced blend reads correctly on the **first frame of a context** and wrongly
+/// on every frame after -- and a fresh target does not reset it, so it is the
+/// frame and not the allocation that matters.
+///
+/// That makes this collection's coverage a question worth asserting rather than
+/// assuming, because `render_corpus` walks every scene through **one** context.
+/// If a scene here did reach the condition, it would render correctly when it
+/// happened to be first and wrongly otherwise, so the comparison it feeds would
+/// depend on its position in the list. None does, and that is why nothing here
+/// has ever disagreed on account of it.
+///
+/// This is a coverage statement and not a bound: it does not say the condition
+/// is unreachable, and the generated cases in `frame_loop.rs` reach it on
+/// purpose and skip by predicate. If this fires, that is the news -- the scene
+/// named is reaching a known-wrong driver path, and its golden image is only
+/// trustworthy while it stays first.
+#[test]
+fn no_fixed_scene_reaches_the_condition_the_frame_loop_skips() {
+    let reaching: Vec<&str> = catalog()
+        .iter()
+        .chain(emblema_testkit::scene::corpus().iter())
+        .filter(|scene| reaches_the_radeonsi_condition(scene))
+        .map(|scene| scene.name)
+        .collect();
+
+    // The count is reported either way, so a walk that silently stopped
+    // matching anything cannot read as a clean result.
+    let total = catalog().len() + emblema_testkit::scene::corpus().len();
+    eprintln!("checked {total} fixed scenes for the multisample-blur-advanced combination");
+    assert!(
+        total > 100,
+        "only {total} fixed scenes were walked, which is fewer than there are"
+    );
+
+    assert!(
+        reaching.is_empty(),
+        "these fixed scenes reach the condition `radeonsi` renders wrongly after a \
+         context's first frame, so their comparison depends on list position: {}",
+        reaching.join(", ")
+    );
+}
+
+/// Every scene renders the same the second time through a context as the first.
+///
+/// The title of this file has claimed "rendered the same way twice" since it was
+/// written, and meant the two backends. This is the other reading, and it is a
+/// different question: `render_corpus` walks every scene through **one** context,
+/// so all but the first are rendering into a context that has drawn before.
+///
+/// On `radeonsi` that distinction has teeth. `docs/on-a-board.md` records a
+/// defect where a multisampled scene with an advanced blend reads correctly on a
+/// context's first frame and wrongly after -- and a fresh target does not reset
+/// it, so position in the list is what decides. A mask blur amplifies it but is
+/// **not** required: `shape-no-blur` still reports fifteen levels. So the
+/// narrower predicate `frame_loop.rs` uses cannot stand in for this.
+///
+/// Exact rather than toleranced. Two renders of one scene on one device have no
+/// legitimate reason to differ by a level, so a tolerance here would only hide
+/// the thing being looked for.
+#[test]
+fn every_catalog_scene_renders_the_same_twice_in_one_context() {
+    let Ok(mut gles) = GlesValidated::new(DisplayTarget::Surfaceless) else {
+        eprintln!("skipping: no GLES device");
+        return;
+    };
+    eprintln!("device: {}", gles.capabilities().device_name);
+
+    // Named and left out, rather than covered by a tolerance -- the trade
+    // `frame_loop.rs` makes for the same reason: a bound raised until the suite
+    // passes is a bound fitted to the defect, so everything else stays exact.
+    //
+    // Both are `radeonsi` and neither is this renderer: the software reference
+    // renders all 438 twice identically. Each belongs to one of the two defects
+    // `docs/on-a-board.md` separates by mechanism.
+    const KNOWN_UNSTABLE: [&str; 2] = [
+        // 104 levels over 6634 bytes, every run of five. `AMD_DEBUG=nodccmsaa`
+        // removes it and `nooptvariant` does not, so it is the DCC-for-MSAA one.
+        "blend/draw-advanced-blend-partly-offscreen",
+        // 5 levels over 16 bytes, two runs in five. Intermittent at about the
+        // rate the shader-variant defect reproduces at, and `nooptvariant` does
+        // not clear it here -- it is small enough that this is suggestive
+        // rather than attributed.
+        "blend/can-draw-paint-with-advanced-blend",
+    ];
+
+    let mut unexpected = Vec::new();
+    let mut expected_seen = Vec::new();
+    let mut compared = 0usize;
+    for scene in catalog() {
+        if !scene.supported_by(gles.capabilities()) {
+            continue;
+        }
+        let first = render::<GlesHal>(&mut gles, &scene);
+        let again = render::<GlesHal>(&mut gles, &scene);
+        compared += 1;
+        if first.pixels == again.pixels {
+            continue;
+        }
+        let (worst, count) = compare(&first, &again)
+            .map(|d| (d.max_delta, d.differing))
+            .unwrap_or((u8::MAX, 0));
+        let report = format!("{} by {worst} level(s) over {count} byte(s)", scene.name);
+        if KNOWN_UNSTABLE.contains(&scene.name) {
+            expected_seen.push(report);
+        } else {
+            unexpected.push(report);
+        }
+    }
+
+    // Reported so a walk that compared nothing cannot read as agreement.
+    eprintln!("rendered {compared} catalog scenes twice in one context");
+    assert!(
+        compared > 50,
+        "only {compared} scenes were rendered twice, which is fewer than this \
+         device supports and means the walk skipped most of them"
+    );
+    // Printed rather than asserted, in both directions. On a device without
+    // these defects none of them fire, and asserting that they do would make
+    // this test demand a broken driver.
+    if expected_seen.is_empty() {
+        eprintln!("none of the known-unstable scenes differed on this device");
+    } else {
+        eprintln!("known unstable, left out: {}", expected_seen.join(", "));
+    }
+    assert!(
+        unexpected.is_empty(),
+        "these scenes rendered differently the second time in the same context, \
+         so their recorded image depends on their position in the list: {}",
+        unexpected.join(", ")
+    );
+}

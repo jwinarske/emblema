@@ -4120,6 +4120,65 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The catalog has two scenes nothing was looking at, 2026-10-13
+
+The instability work had been done on probes and generated cases. Asking the
+*fixed* scenes the same question found two of them affected, and found that
+nothing in the suite had ever rendered them on the backend where it shows.
+
+`every_catalog_scene_renders_the_same_twice_in_one_context` renders all 438
+catalog scenes twice through one GLES context and compares them exactly. Two
+differ:
+
+| scene | worst | differing | runs |
+|---|---|---|---|
+| `blend/draw-advanced-blend-partly-offscreen` | **104 levels** | 6634 bytes, ~10% of the frame | 5 of 5 |
+| `blend/can-draw-paint-with-advanced-blend` | 5 levels | 16 bytes | 2 of 5 |
+
+**The software reference renders all 438 twice identically**, so both are
+`radeonsi`. `nodccmsaa` removes the large one and `nooptvariant` does not, which
+puts it with the DCC-for-MSAA defect; the small intermittent one sits at about
+the shader-variant defect's rate, which is suggestive rather than attributed.
+
+**What arms it is a prior advanced-blend draw in the context.** Rendering that
+scene alone in a brand-new context, against rendering it after something else:
+
+| what came before it | difference from rendering it alone |
+|---|---|
+| nothing -- first in a fresh context | -- |
+| `blend/paint-blend-mode-is-respected`, four samples, **no** advanced blend | **0 levels** |
+| `blend/can-draw-paint-with-advanced-blend`, four samples, advanced blend | **104 levels** |
+| itself | **104 levels** |
+
+So it is neither repetition nor any prior draw: it is a prior *advanced-blend*
+draw. **Two readings were wrong before that table had both of its rows.** The
+first control used a single-sample scene, which allocates no multisample target
+and so was no control at all -- it read 0 and said "only re-rendering the same
+scene matters". A multisampled scene without an advanced blend still read 0 and
+seemed to confirm it. Only an advanced-blending one disagreed. A control has to
+do the same *kind* of work as the thing it is controlling for, or it just agrees
+with you.
+
+**Nothing in the suite was looking.** Both scenes are in the 41 that
+`the_catalog_matches_across_backends` reports as gaps -- it compares **397 of
+438** -- because this workstation's Vulkan device has no advanced-blend
+extension, so the scene is unsupported there and never compared. `golden.rs`
+renders on Vulkan only. So no comparison in this repo had rendered either scene
+on GLES, and their recorded appearance rested on a backend that skips them.
+
+**And the predicate would not have found them.** `reaches_the_gles_instability`
+requires a mask blur, and the mask blur is **not necessary**: `shape-no-blur`
+still reports 15 levels, at 87 bytes against the full scene's 317. So that
+clause describes the reduction that was convenient, not the condition -- which is
+why this had to be found by rendering the scenes rather than by reasoning about
+which ones qualify. `no_fixed_scene_reaches_the_condition_the_frame_loop_skips`
+records the narrow version separately, over 512 fixed scenes, so the gap between
+the two statements stays visible.
+
+Both scenes are named in the new test and left out, with everything else exact --
+the trade `frame_loop.rs` already makes, for the reason it gives: a bound raised
+until the suite passes is a bound fitted to the defect.
+
 ### The two instabilities split by mechanism, 2026-10-13
 
 The second one was called a different defect on the strength of its
