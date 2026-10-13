@@ -2357,3 +2357,142 @@ fn every_catalog_scene_renders_the_same_twice_in_one_context() {
         unexpected.join(", ")
     );
 }
+
+/// The scenes the hardware Vulkan device cannot render, compared on GLES
+/// against software Vulkan.
+///
+/// `the_catalog_matches_across_backends` compares 397 of 438 here and reports
+/// the rest as gaps, because this workstation's Vulkan device has no
+/// advanced-blend extension and a scene needing one is unsupported there.
+/// `golden.rs` renders on Vulkan only. So those 41 scenes' GLES output was
+/// compared against nothing at all, which is how a 104-level defect in one of
+/// them went unnoticed until something rendered it twice -- see
+/// `docs/on-a-board.md`.
+///
+/// This closes the half of that hole that can be closed. A software Vulkan
+/// device has the extension, so it can render what the hardware one cannot, and
+/// GLES against it is a real comparison rather than a missing one.
+///
+/// Twenty of the forty-one still cannot be referenced: lavapipe at Mesa 26.2.x
+/// writes nothing for a group composited under an advanced blend, the defect
+/// `composites_a_group_under_an_advanced_blend` probes for, so those scenes are
+/// held out exactly as the cross-backend test holds them out -- and on a
+/// software device that does composite them, they are compared like the rest.
+///
+/// The budget is the catalog's own, unchanged. Twenty-one scenes pass inside it
+/// with nothing added, which is the point: this is coverage that was missing,
+/// not a tolerance stretched to admit something.
+#[test]
+fn scenes_the_vulkan_device_cannot_render_are_compared_against_software() {
+    let Ok(hw) = Validated::new(DevicePreference::Auto) else {
+        eprintln!("skipping: no Vulkan device");
+        return;
+    };
+    let mut sw = match Validated::new(DevicePreference::Software) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("skipping: no software Vulkan device ({e})");
+            return;
+        }
+    };
+    let Ok(mut gles) = GlesValidated::new(DisplayTarget::Surfaceless) else {
+        eprintln!("skipping: no GLES context");
+        return;
+    };
+    // Same probe and same reason as the cross-backend test: a comparison cannot
+    // be held against a device that drops the draw.
+    let composites_groups = composites_a_group_under_an_advanced_blend(&mut sw);
+    eprintln!(
+        "reference {} composites groups under an advanced blend: {composites_groups}",
+        sw.capabilities().device_name
+    );
+
+    let mut failures = Vec::new();
+    let mut unreferenceable = Vec::new();
+    let mut held_for_groups = Vec::new();
+    let mut compared = 0usize;
+    let mut gaps = 0usize;
+    for scene in catalog() {
+        // Only the ones the hardware device could not take. Everything else is
+        // already compared backend against backend.
+        if scene.supported_by(hw.capabilities()) {
+            continue;
+        }
+        gaps += 1;
+        // The reference cannot render it either. On a machine whose only Vulkan
+        // device is a software one, this is every gap scene -- there is no
+        // second device to be the reference, and that is the machine's shape
+        // rather than anything to assert about.
+        if !scene.supported_by(sw.capabilities()) || !scene.supported_by(gles.capabilities()) {
+            unreferenceable.push(scene.name);
+            continue;
+        }
+        if !composites_groups
+            && (groups_under_an_advanced_blend(&scene)
+                || ADVANCED_BLEND_DIVERGENCES.contains(&scene.name))
+        {
+            held_for_groups.push(scene.name);
+            continue;
+        }
+        let from_gles = render::<GlesHal>(&mut gles, &scene);
+        let from_software = render::<VulkanHal>(&mut sw, &scene);
+        compared += 1;
+        let difference = match compare(&from_gles, &from_software) {
+            Ok(d) => d,
+            Err(e) => {
+                failures.push(format!("{}: {e}", scene.name));
+                continue;
+            }
+        };
+        if !accepts(&difference, tolerance_for(&scene)) {
+            failures.push(format!(
+                "{}: {} level(s) over {} of {} byte(s)",
+                scene.name, difference.max_delta, difference.differing, difference.total
+            ));
+        }
+    }
+
+    // Every gap scene landed in exactly one bucket. This is the guard against a
+    // walk that silently stops classifying things -- not a count of how many
+    // comparisons a machine owes, which is a property of its devices and not of
+    // this code. The first version asserted ten and failed on CI, where the only
+    // Vulkan device is a software one without advanced blending, so there is no
+    // second device to be anyone's reference.
+    assert_eq!(
+        compared + unreferenceable.len() + held_for_groups.len(),
+        gaps,
+        "the walk did not account for every scene the hardware device could not render"
+    );
+    eprintln!(
+        "{gaps} scene(s) the hardware Vulkan device cannot render: compared {compared} against \
+         software Vulkan, {} with no reference here, {} held out as group composites",
+        unreferenceable.len(),
+        held_for_groups.len()
+    );
+    // Named, not just counted. A held-out scene is coverage nobody got, and the
+    // way these entries keep going wrong is by letting a number stand in for a
+    // list.
+    for (why, names) in [
+        ("no reference on this machine", &unreferenceable),
+        ("group composite the reference drops", &held_for_groups),
+    ] {
+        if !names.is_empty() {
+            eprintln!("held out, {why}: {}", names.join(", "));
+        }
+    }
+    if compared == 0 && gaps > 0 {
+        // Said out loud rather than passing quietly, so the skip census counts
+        // it as coverage that was not got.
+        eprintln!(
+            "skipping: nothing here can reference the {gaps} scene(s) the Vulkan device \
+             cannot render -- {} needs a second Vulkan device that has advanced blending",
+            sw.capabilities().device_name
+        );
+        return;
+    }
+    assert!(
+        failures.is_empty(),
+        "GLES and software Vulkan disagree on scenes nothing else compares: {}",
+        failures.join(", ")
+    );
+}

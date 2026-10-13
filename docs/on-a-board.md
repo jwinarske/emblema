@@ -4120,6 +4120,66 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### Half the gap closed, and the other half named, 2026-10-13
+
+The entry below found two catalog scenes nothing compared, and the reason: on
+this workstation `the_catalog_matches_across_backends` compares **397 of 438**
+and reports 41 as gaps, because the Vulkan device has no advanced-blend
+extension and a scene needing one is unsupported there -- while `golden.rs`
+renders on Vulkan only. So 41 scenes' GLES output was held against nothing.
+
+**A software Vulkan device has the extension**, so it can render what the
+hardware one cannot, and GLES against it is a real comparison rather than a
+missing one. `scenes_the_vulkan_device_cannot_render_are_compared_against_software`
+does that:
+
+| | scenes |
+|---|---|
+| compared, GLES against software Vulkan | **21** |
+| held out, no reference available here | 20 |
+
+**And the count guard it first shipped with was wrong**, which CI caught and
+this workstation could not. It asserted that at least ten scenes had been
+compared -- a property of *this* machine's devices, not of the code. CI's only
+Vulkan device is a software one reporting **advanced blend: no**, so there `Auto`
+and `Software` resolve to the same device, every one of the 41 is unreferenceable,
+and the assertion fired at `only 0 of the hardware device's 41 gap scenes`.
+
+The guard is now that every gap scene lands in exactly one bucket -- compared,
+unreferenceable, or held out as a group composite -- which is a statement about
+the walk rather than about how many comparisons a machine owes. When nothing can
+be referenced it says `skipping:` and returns, so the census counts it as
+coverage not got. Both the CI shape and the broken accounting were forced and
+watched before this was written.
+
+**All 21 pass the catalog's existing budget, with nothing added** -- 0 of 21
+rejected at `Tolerance::new(1, 0.03)`. Most differ by one or two levels over
+seven to nineteen per cent of the frame, which is two rasterizers disagreeing at
+edges and exactly what that budget is for. The point is that this is coverage
+that was missing, not a bound stretched to admit something: tightening it to
+`EXACT` rejects immediately, which is how the comparison was shown to be live.
+
+**The 20 held out, named rather than counted.** Fifteen `blend-mode-src-alpha-*`
+plates, `framebuffer-advanced-blend-coverage`,
+`draw-advanced-blend-partly-offscreen`,
+`atlas/sprites-multiplied-into-what-is-behind`, and two `dl/` scenes. They are
+the group composites and the known divergences, held out on the same probe the
+cross-backend test uses -- lavapipe at Mesa 26.2.x writes nothing for a group
+composited under an advanced blend, and a comparison cannot be held against a
+device that drops the draw. On a software device that does composite them they
+are compared like the rest, so this is a property of the reference and not a
+permanent exclusion.
+
+**What this test does and does not reach.** It compares
+`blend/can-draw-paint-with-advanced-blend`, one of the two unstable scenes, and
+that scene passes the budget -- its difference is five levels over sixteen bytes,
+well inside. `draw-advanced-blend-partly-offscreen`, the one at 104 levels, is
+among the held out. So this is not the instrument for either defect; the
+render-twice test is. **This test catches nothing today**, and that is worth
+writing down rather than dressing up: its value is that twenty-one scenes which
+had no reference now have one, so the next thing to go wrong in them fails
+against something.
+
 ### The catalog has two scenes nothing was looking at, 2026-10-13
 
 The instability work had been done on probes and generated cases. Asking the
