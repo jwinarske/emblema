@@ -3035,10 +3035,160 @@ picture rather than one flat color, and the controller composited what the
 renderer drew. That is the third device the writeback comparison has run on
 and the first that is neither vkms nor vc4.
 
-**The render side advertises nothing at all.** PanVK on an RK3566 reports no
-format-and-modifier pairs, which is a stronger version of the same gap: there
-is nothing to intersect with the plane's list, so scanout negotiation cannot
-succeed rather than failing to agree.
+**The suite was getting software Vulkan on this board, and nothing said so.**
+The entry above said "PanVK on an RK3566 reports no format-and-modifier pairs"
+and named the wrong driver; the first correction to it said there was **no
+PanVK ICD at all**, and that was wrong too, from a listing cut off by
+`head -4`. What is actually the case, measured 2026-10-13:
+
+`/usr/share/vulkan/icd.d` holds **seven** manifests -- `broadcom`, `dzn`,
+`freedreno`, `lvp`, `panfrost`, `radeon`, `virtio` -- and
+`libvulkan_panfrost.so` is installed beside them. Mesa is 24.2 from the oibaf
+PPA rather than Debian 12's stock. So PanVK is present, and the reason the
+suite does not use it is upstream's own:
+
+| configuration | device the suite gets |
+|---|---|
+| as the board ships | `llvmpipe (LLVM 15.0.7, 128 bits)` |
+| `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` | **`Mali-G52 r1 (Panfrost)`** |
+| the panfrost ICD forced, no opt-in | `ERROR_INITIALIZATION_FAILED` |
+
+**PanVK refuses to create an instance unless that variable is set**, and the
+loader then skips the ICD with nothing louder than
+`terminator_CreateInstance: Failed to CreateInstance in ICD 4. Skipping ICD.`
+behind `VK_LOADER_DEBUG`. So the fallback to software is **silent**, and every
+earlier result recorded for this board -- including this document's "writeback
+is three of three on it" -- was a software-Vulkan result wearing a board's
+name. That is the part worth fixing in how boards are read, not just here.
+
+**Upstream says so deliberately.** Mesa's own Panfrost page: PanVK is "a
+Vulkan implementation for Bifrost and later"; "on GPUs where PanVK support is
+experimental, the driver refuses to load by default"; "setting
+`PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` enables it"; and "experimental support
+comes with no guarantees: it may be broken, may require newer kernel driver
+versions, and may be removed." The driver prints
+`WARNING: panvk is not a conformant Vulkan implementation, testing use only.`
+on every run.
+
+That page's hardware table gives **Vulkan 1.3 for Bifrost v6-v7**, which is
+where a G52 sits, and **that column is not what ships**. Mesa's own `features.txt`
+qualifies every PanVK entry above 1.0 as `panvk/v10+` -- Valhall v10 and later
+-- on `25.0`, on `25.3` and on `main`. The device agrees: it reports
+`apiVersion 1.0.289`. Read the per-version file and not the hardware table. So a failure on this configuration is not evidence against this
+renderer until it has been asked twice, which is the trap this document exists
+to keep naming.
+
+**The results hold on the hardware anyway.** With the opt-in, `writeback.rs`
+is three of three and `kms.rs` seven of seven with twelve skips -- the same as
+on llvmpipe. So nothing recorded for this board was wrong *because* of the
+fallback; it was just measuring something other than what it appeared to.
+
+**What each device says about export**, which is the thing scanout
+negotiation needs and the reason it fails here either way:
+
+| device | the three render formats |
+|---|---|
+| `llvmpipe` | renderable at `LINEAR`, **`IMPORTABLE` and not `EXPORTABLE`** |
+| PanVK on a G52 | **no modifiers advertised at all** |
+
+So the earlier sentence was right about PanVK and wrong about which driver was
+answering: PanVK really does advertise nothing. `llvmpipe` advertises
+something and it is not exportable, which is why the renderer's
+exportable-format list is empty -- the capability asks for something
+exportable and this device has none, which is the filter shipped deliberately.
+Either way there is nothing to intersect with the plane's list.
+
+**The validation layer is not installed**, which is why every run on this
+board prints "skipping: the validation layer is unavailable, so API use went
+unchecked". Debian 12 has `vulkan-validationlayers` 1.3.239.0-2, matching the
+loader 1.3.239. Worth having before any further Vulkan work here, and worth
+having *with* the PanVK opt-in rather than against llvmpipe, since an
+experimental driver is exactly where a layer earns its keep.
+
+**A newer Mesa is available and does not change the ceiling.**
+`bookworm-backports` is already in this board's sources, and every Mesa package
+on it offers 25.0.7 against the installed 24.2:
+
+| package | installed | candidate |
+|---|---|---|
+| `mesa-vulkan-drivers` | `24.2~git2407100600.ae3e0a~oibaf~j` | `25.0.7-2~bpo12+1` |
+| `libgl1-mesa-dri`, `libegl-mesa0`, `libgbm1`, `libglx-mesa0` | the same oibaf snapshot | the same backport |
+| `libglapi-mesa` | the same oibaf snapshot | **none -- 25.0 dropped libglapi** |
+
+The oibaf source line is **no longer in `/etc/apt`**, so the installed set is
+frozen where it is and backports is the only way forward from it. But an
+upgrade is a *partial* one: it has to remove a library the working GLES stack
+links against, and every GLES number in this document -- including both
+instability findings -- was measured on 24.2.
+
+**Neither a newer package nor a newer image lifts this part past Vulkan 1.0**,
+because the limit is the GPU generation. Checked at Mesa's tip of tree:
+`panvk_physical_device.c` on `main` still gates arch **6, 7, 11 and 14** behind
+`PAN_I_WANT_A_BROKEN_VULKAN_DRIVER` as "not well-tested", and leaves 10, 12 and
+13 ungated. A G52 is Bifrost v7. So the opt-in and the 1.0 cap are both still
+there on main, and there is no release to wait for.
+
+**The kernel is not the constraint for what works today.** This board has two
+DRM devices and PanVK walks both:
+
+| node | kernel driver |
+|---|---|
+| `card0` / `renderD128` | `rockchip-drm` |
+| `card1` / `renderD129` | **`panfrost`** |
+
+With the opt-in set, PanVK prints
+`device /dev/dri/renderD128 does not use the panfrost kernel driver` for the
+display node and then enumerates the G52 off `renderD129` anyway. The message
+is noise rather than a failure, and `main` drops the check that emits it --
+`create_kmod_dev` goes through `pan_kmod`, which takes either kernel driver. So
+the vendor kernel 6.1.84 is answering PanVK correctly today.
+
+**A Yocto image moves three things that the Debian package cannot**, and the
+tree to do it already exists at `/mnt/raid10/yocto/master/zero3e` --
+`MACHINE = "radxa-zero-3e"`, built with `vulkan` in `DISTRO_FEATURES`:
+
+| | this board, Debian 12 | that tree, as its layers stand |
+|---|---|---|
+| Mesa | 24.2, frozen | **26.2.4** from `openembedded-core` |
+| kernel | vendor `6.1.84-10-rk2410-nocsf` | **mainline `linux-yocto` 6.18 or 7.2** |
+| validation layers | `1.3.239.0-2`, needs root on the board | **`1.4.363.0`, by `IMAGE_INSTALL`** |
+
+PanVK does get built there: `meta-rockchip`'s `mesa.bbappend` sets
+`MALI_DRIVER = "panfrost"` for every Rockchip part it does not override, and
+rk3566 is not overridden, so `panfrost` and `libclc` both land in
+`PACKAGECONFIG` and the recipe's `VULKAN_DRIVERS` picks up `panfrost`.
+
+The kernel row is the one that matters, because it is the row upstream's
+warning is about -- experimental PanVK "may require newer kernel driver
+versions", and a backport cannot give a newer kernel. Two years of PanVK fixes
+is the second: "experimental" at 24.2 and at 26.2 are not the same amount of
+broken, and the same jump lands on the `panfrost` GLES driver, which is what
+both instability findings on this board were actually measured against.
+
+**What no image changes is the ceiling.** 26.2 says `panvk/v10+` exactly as
+`main` does, so Bifrost v7 is Vulkan 1.0 and behind the opt-in on every branch
+that exists. A Yocto image buys a newer kernel, a newer driver and a layer that
+installs without root. It does not buy a conformant Vulkan device, and nothing
+upstream suggests one is coming for this part.
+
+One caveat about that tree: its `bblayers.conf` still points at
+`sources/poky/meta`, whose master branch is **retired** -- its HEAD commit says
+so, dated 2025-11-07. `openembedded-core` and `meta-yocto` are already checked
+out beside it, so the repoint is small, but the versions above are what those
+two hold and not what a build from the file as it stands would use.
+
+So: hold at 24.2 while the GLES findings are the open work, since that is what
+they were measured against; take the opt-in now, because it is free; and spend
+the Yocto build when the question is whether a current panfrost still has those
+instabilities, which is the question this board cannot answer as it is.
+
+**Which leaves the LINEAR-only finding standing and narrows what it proves.**
+The plane's `IN_FORMATS` is a property of `rockchip-drm` and is unaffected by
+which ICD is installed, so "no board on this bench scans out a tiled or
+compressed modifier" holds. But this board cannot be the one that answers the
+V3D question for a second reason as well: the hardware Vulkan driver it does
+have advertises no modifiers at all, so there is no tiled export here to meet
+the display's LINEAR in the first place.
 
 **`kms.rs` was reporting both of those as six failures**, which is the part
 worth fixing rather than noting. A board that has not got the thing a test
