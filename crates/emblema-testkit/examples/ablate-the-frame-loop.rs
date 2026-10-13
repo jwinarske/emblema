@@ -302,16 +302,114 @@ fn repeat(ctx: &mut <GlesHal as Hal>::Context, subject: &Scene, others: &[Scene]
         }
     }
     let again = render_scene::<GlesHal>(ctx, subject).ok()?;
-    Some(
-        first
+    let worst = first
+        .pixels
+        .iter()
+        .zip(again.pixels.iter())
+        .map(|(a, b)| i32::from(*a) - i32::from(*b))
+        .map(i32::abs)
+        .max()
+        .unwrap_or(0);
+
+    // `MAP=1` draws which pixels differ and names the worst, with both
+    // renders' value there. A count of levels says how far wrong without
+    // saying where, and a difference cannot say which of the two renders is
+    // the correct one -- the value against a driver that agrees with the
+    // others can. Both measurements are what named the first instability's
+    // mechanism, and neither had been taken here.
+    // `AT=x,y` prints that pixel from both renders whether or not they differ,
+    // which is what a clean driver has to be asked for: its answer is the one
+    // the two are measured against, and it has no difference to report.
+    if let Some((x, y)) = std::env::var("AT").ok().and_then(|v| {
+        let (a, b) = v.split_once(',')?;
+        Some((
+            a.trim().parse::<usize>().ok()?,
+            b.trim().parse::<usize>().ok()?,
+        ))
+    }) {
+        let rgba = |p: &[u8]| {
+            let i = ((y * SIDE as usize) + x) * 4;
+            format!("[{:3},{:3},{:3},{:3}]", p[i], p[i + 1], p[i + 2], p[i + 3])
+        };
+        println!(
+            "  at ({x},{y}): first {} again {}",
+            rgba(&first.pixels),
+            rgba(&again.pixels)
+        );
+    }
+    if worst > 0 && std::env::var_os("MAP").is_some() {
+        let differing = first
             .pixels
             .iter()
             .zip(again.pixels.iter())
-            .map(|(a, b)| i32::from(*a) - i32::from(*b))
-            .map(i32::abs)
-            .max()
-            .unwrap_or(0),
-    )
+            .filter(|(a, b)| a != b)
+            .count();
+        // Which way, and in which channel. A one-sided error is a different
+        // claim from a wobble: dither or rounding scatters both ways, and a
+        // contribution that is lost or doubled does not.
+        let (mut lower, mut higher) = (0usize, 0usize);
+        let mut channels = [0usize; 4];
+        for (i, (a, b)) in first.pixels.iter().zip(again.pixels.iter()).enumerate() {
+            match b.cmp(a) {
+                std::cmp::Ordering::Less => {
+                    lower += 1;
+                    channels[i % 4] += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    higher += 1;
+                    channels[i % 4] += 1;
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        println!("  {differing} byte(s) of {} differ", first.pixels.len());
+        println!(
+            "  the second render is lower in {lower} and higher in {higher}; \
+             by channel r{} g{} b{} a{}",
+            channels[0], channels[1], channels[2], channels[3]
+        );
+        for y in 0..SIDE as usize {
+            let mut row = String::new();
+            let mut any = false;
+            for x in 0..SIDE as usize {
+                let at = ((y * SIDE as usize) + x) * 4;
+                let d = (0..4)
+                    .map(|c| {
+                        (i32::from(first.pixels[at + c]) - i32::from(again.pixels[at + c])).abs()
+                    })
+                    .max()
+                    .unwrap_or(0);
+                any |= d > 0;
+                row.push(match d {
+                    0 => '.',
+                    1 => '-',
+                    2..=4 => '+',
+                    _ => '#',
+                });
+            }
+            if any {
+                println!("  y={y:3} {row}");
+            }
+        }
+        if let Some(at) = first
+            .pixels
+            .iter()
+            .zip(again.pixels.iter())
+            .position(|(a, b)| (i32::from(*a) - i32::from(*b)).abs() == worst)
+        {
+            let (x, y) = ((at / 4) % SIDE as usize, (at / 4) / SIDE as usize);
+            let rgba = |p: &[u8]| {
+                let i = ((y * SIDE as usize) + x) * 4;
+                format!("[{:3},{:3},{:3},{:3}]", p[i], p[i + 1], p[i + 2], p[i + 3])
+            };
+            println!(
+                "  worst at ({x},{y}): first {} again {}",
+                rgba(&first.pixels),
+                rgba(&again.pixels)
+            );
+        }
+    }
+    Some(worst)
 }
 
 fn main() {
