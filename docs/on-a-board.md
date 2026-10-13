@@ -3960,6 +3960,58 @@ they are worth reaching for before another ingredient is added: a count of
 differing bytes cannot tell an outline from a filled shape, and a delta cannot
 tell which of two frames to trust.
 
+**The second half of that sentence is now paid**, 2026-10-13: the reference can
+say, and the wrong value names its own source.
+
+**Everything in the scene is gray except one thing.** The layer clears to mid
+gray, both draws are black, and the only non-gray operand is the texture the
+blurred draw samples -- filled `0.75, 0.5, 0.25` once and never touched again.
+So a correct pixel here is gray, and the wrong one is not: at (7, 2) frame one
+reads `[29, 29, 29]` and frame two `[44, 39, 34]`. The excess is `(15, 10, 5)`,
+which is 20/255 of `(191, 128, 64)` -- that fill, to the level.
+
+**`COV=r,g,b` makes it causal rather than arithmetic.** Changing the fill moves
+the excess with it, per channel and in proportion:
+
+| `COV` | frame 1 | frame 2 | excess |
+|---|---|---|---|
+| `0.75,0.5,0.25` (as found) | `[29, 29, 29]` | `[44, 39, 34]` | `(15, 10, 5)` |
+| `1,0,0` | `[29, 29, 29]` | `[48, 29, 29]` | `(19, 0, 0)` |
+| `0,0,1` | `[29, 29, 29]` | `[29, 29, 48]` | `(0, 0, 19)` |
+| `0.5,0.5,0.5` | `[29, 29, 29]` | `[39, 39, 39]` | `(10, 10, 10)` |
+| `1,1,1` | `[29, 29, 29]` | `[48, 48, 48]` | `(19, 19, 19)` |
+| `0,0,0` | -- | -- | **no difference anywhere** |
+
+Channel-isolated, linear in the fill, and gone when the fill is zero. **So the
+wrong contribution is the sampled texture and nothing else.**
+
+**And frame one does not depend on that fill at all** -- `[29, 29, 29]` in every
+row above. That is the sharp statement of the defect, because it is a draw that
+*samples* the texture: at a partially covered pixel the first frame takes
+nothing from it, and every frame after takes about nineteen levels per channel
+at full fill.
+
+**Which one is wrong is a question for the reference, and it answers.** The same
+binary under `LIBGL_ALWAYS_SOFTWARE=1`:
+
+| driver | (7, 2), every frame |
+|---|---|
+| `llvmpipe` (LLVM 22.1.8) | `[30, 30, 30]`, stable across four frames |
+| `radeonsi`, frame 1 | `[29, 29, 29]` -- one level off the reference |
+| `radeonsi`, frames 2 onward | `[44, 39, 34]` -- **fourteen levels off** |
+
+**Frame one is the correct one.** It agrees with the reference to within the
+level of rounding two drivers differ by anyway, and frames two onward do not.
+So this is not a first-frame artifact that settles down; it is a correct first
+frame followed by wrong ones, which is the opposite of how a warm-up reads.
+
+**One instrument defect found in the doing.** The per-frame readout was labeled
+`center` whether or not `AT` had moved it, so a value read at (7, 2) printed
+under a word meaning (16, 16). It now prints `at (x,y)` with the coordinates it
+used. The reading above was checked against `AT=10,10`, which gives
+`[25, 25, 25]` -- the interior value this document already recorded -- before
+any of it was believed.
+
 ### A second instability, and it is the other way up, 2026-10-09
 
 `a_generated_scene_survives_other_frames` found a scene that
