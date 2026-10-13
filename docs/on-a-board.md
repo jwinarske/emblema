@@ -4138,6 +4138,20 @@ does that:
 | compared, GLES against software Vulkan | **21** |
 | held out, no reference available here | 20 |
 
+**And the count guard it first shipped with was wrong**, which CI caught and
+this workstation could not. It asserted that at least ten scenes had been
+compared -- a property of *this* machine's devices, not of the code. CI's only
+Vulkan device is a software one reporting **advanced blend: no**, so there `Auto`
+and `Software` resolve to the same device, every one of the 41 is unreferenceable,
+and the assertion fired at `only 0 of the hardware device's 41 gap scenes`.
+
+The guard is now that every gap scene lands in exactly one bucket -- compared,
+unreferenceable, or held out as a group composite -- which is a statement about
+the walk rather than about how many comparisons a machine owes. When nothing can
+be referenced it says `skipping:` and returns, so the census counts it as
+coverage not got. Both the CI shape and the broken accounting were forced and
+watched before this was written.
+
 **All 21 pass the catalog's existing budget, with nothing added** -- 0 of 21
 rejected at `Tolerance::new(1, 0.03)`. Most differ by one or two levels over
 seven to nineteen per cent of the frame, which is two rasterizers disagreeing at
