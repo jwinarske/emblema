@@ -1312,8 +1312,28 @@ fn main() {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(2)
                 .max(2);
+            // `AT=x,y` reports that pixel instead of the middle one, because
+            // the middle of the target need not be among the bytes that
+            // differ -- and a delta cannot say which of the two frames is the
+            // correct one. The value can, against a driver that agrees with
+            // the others.
+            let asked: Option<(usize, usize)> = std::env::var("AT").ok().and_then(|v| {
+                let (x, y) = v.split_once(',')?;
+                Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+            });
+            let rgba = |pixels: &[u8], x: usize, y: usize| {
+                let at = ((y * SIDE as usize) + x) * 4;
+                format!(
+                    "[{:3},{:3},{:3},{:3}]",
+                    pixels[at],
+                    pixels[at + 1],
+                    pixels[at + 2],
+                    pixels[at + 3]
+                )
+            };
             let center = |pixels: &[u8]| {
-                let at = ((16 * SIDE as usize) + 16) * 4;
+                let (x, y) = asked.unwrap_or((16, 16));
+                let at = ((y * SIDE as usize) + x) * 4;
                 format!(
                     "[{:3},{:3},{:3},{:3}]",
                     pixels[at],
@@ -1400,6 +1420,50 @@ fn main() {
                 if run == 2 {
                     worst = worst_first;
                     differing = differ_first;
+                    // Where the worst difference is, and both frames' pixel
+                    // there. A driver that agrees with the other three then
+                    // says which of the two frames is wrong, which the delta
+                    // on its own cannot.
+                    // `MAP=1` draws which pixels differ. A defect confined to
+                    // partially covered samples shows up as an outline, and a
+                    // defect in the blend itself fills the shape -- which a
+                    // count of differing bytes cannot tell apart.
+                    if std::env::var_os("MAP").is_some() {
+                        for y in 0..SIDE as usize {
+                            let mut row = String::new();
+                            for x in 0..SIDE as usize {
+                                let at = ((y * SIDE as usize) + x) * 4;
+                                let d = (0..4)
+                                    .map(|c| {
+                                        (i32::from(first[at + c]) - i32::from(current[at + c]))
+                                            .abs()
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
+                                row.push(match d {
+                                    0 => '.',
+                                    1..=4 => '-',
+                                    5..=9 => '+',
+                                    _ => '#',
+                                });
+                            }
+                            println!("  {row}");
+                        }
+                    }
+                    if let Some(at) = first
+                        .iter()
+                        .zip(current.iter())
+                        .position(|(a, b)| (i32::from(*a) - i32::from(*b)).abs() == worst_first)
+                    {
+                        if worst_first > 0 {
+                            let (x, y) = ((at / 4) % SIDE as usize, (at / 4) / SIDE as usize);
+                            println!(
+                                "{name:24} worst at ({x},{y}): frame 1 {} frame 2 {}",
+                                rgba(&first, x, y),
+                                rgba(&current, x, y)
+                            );
+                        }
+                    }
                 }
                 previous = current;
             }

@@ -3512,6 +3512,72 @@ both are zero. The agreement is worth having -- the two were written
 independently -- and the missing name is worth knowing about before someone
 greps for it.
 
+### Where the first instability is: partial coverage, 2026-10-12
+
+The bisect above names four ingredients and says plainly that it is "still not
+a mechanism -- it is the smallest scene that does it". Two measurements it did
+not take get most of the way there, and both are ones this document has learnt
+to take first: read the **value** rather than the delta, and ask **which
+pixels** differ rather than how many bytes.
+
+**Which frame is wrong.** The reproduction's worst difference is at (7,2), and
+with the blur subtracted at (5,2). There:
+
+| | frame 1 | frames 2 on |
+|---|---|---|
+| `radeonsi` | `[29, 29, 29]` | **`[44, 39, 34]`** |
+| `llvmpipe`, every frame | `[30, 30, 30]` | `[30, 30, 30]` |
+
+So **frame one is correct** -- one level off `llvmpipe`, which is rounding --
+and every frame after it is wrong. That is the same orientation as VIV-5 and
+the opposite of what "unstable" suggests, which is why it is worth stating:
+the renderer's first frame of a scene is right and its later ones are not.
+
+The error is *warm* where the correct answer is neutral, and
+`[44, 39, 34]` minus `[30, 30, 30]` is `(14, 9, 4)` against a source color in
+the ratio `3 : 2 : 1`. So the later frames carry **extra source contribution**
+rather than corruption.
+
+**Which pixels.** `MAP=1` draws them. With the blur subtracted -- the variant
+that keeps all fifteen levels in 87 bytes -- it is an outline and nothing else:
+
+```
+  ................................
+  ................................
+  ...###############..............
+  ................................
+  ..#.............................
+  ..#.............................          (fourteen more rows like it)
+```
+
+The overlapping draw spans 2.56 to 17.92 in both axes, so **row 2 and column 2
+are its partially covered pixels** -- and they are the only ones that differ.
+An interior pixel is exact on every frame: (10, 10) reads `[25, 25, 25]` on
+`radeonsi` for frame one and for every frame after.
+
+**So the blend arithmetic is right and the partial coverage is not.** A defect
+in the equation would move the interior, and the interior does not move. What
+moves is the contribution at pixels where only some samples are covered, from
+the second frame onward.
+
+**That is what the four ingredients were describing.** Multisampling is
+necessary because there are no partial samples without it. The second
+overlapping draw is necessary because it is what has an edge inside the layer.
+The advanced equation is necessary because it is the path that mishandles
+them. And the non-black layer clear is necessary for a reason the bisect could
+only state as a fact: with a zero destination the wrong contribution and the
+right one compute to the same number, so the defect is invisible rather than
+absent.
+
+**Observed and not explained:** only the *top* row and the *left* column
+differ, not the bottom row or the right column, though those are partially
+covered too. Whatever the asymmetry is, it is recorded rather than guessed at.
+
+`AT=x,y` and `MAP=1` on `probe-the-blend-instability` are the instrument, and
+they are worth reaching for before another ingredient is added: a count of
+differing bytes cannot tell an outline from a filled shape, and a delta cannot
+tell which of two frames to trust.
+
 ### A second instability, and it is the other way up, 2026-10-09
 
 `a_generated_scene_survives_other_frames` found a scene that
