@@ -17,6 +17,16 @@ pub const DEFAULT_RING_DEPTH: usize = 3;
 struct Slot<H: Hal> {
     texture: H::Texture,
     fb: FbHandle,
+    /// The GBM allocation this slot's texture and framebuffer both refer to,
+    /// where the ring was built that way.
+    ///
+    /// Owned by the slot because it owns the memory: the texture holds an
+    /// imported view of it and the framebuffer holds another, and dropping
+    /// this while either is alive is the one way to use the GBM path wrongly.
+    /// `release` destroys both of those before the slot goes, so the order is
+    /// right by construction rather than by a comment.
+    #[cfg(feature = "gbm")]
+    _gbm: Option<crate::gbm::Allocated>,
     /// Set while this buffer has been committed but not yet replaced on screen.
     ///
     /// The ring must never hand back a buffer in this state: the display is
@@ -36,6 +46,18 @@ struct Slot<H: Hal> {
     /// work is done. What each one was stops mattering once the submission
     /// is made; when it is safe to free is the same answer for all of them.
     retained: Vec<H::Texture>,
+}
+
+/// What a GBM-allocated ring needs to allocate again.
+///
+/// Separate from the target's other fields so that the whole GBM path is one
+/// `Option`: either this target allocates through GBM and has it, or it does
+/// not and the ordinary `build_ring` applies.
+#[cfg(feature = "gbm")]
+struct GbmRing {
+    allocator: crate::gbm::GbmAllocator,
+    /// The format negotiated once, at `with_gbm`.
+    fourcc: emblema_hal::Fourcc,
 }
 
 /// A presentation target that scans out directly to a display.
@@ -63,6 +85,14 @@ pub struct DrmScanoutTarget<H: Hal, O: ScanoutOutput> {
     /// Commits made without a sync_file attached, because the device could not
     /// export one.
     cpu_waits: u64,
+    /// What a GBM-allocated ring needs to rebuild itself.
+    ///
+    /// Kept rather than re-derived, because `reconfigure` has to allocate again
+    /// at the new extent and the format was negotiated once at `with_gbm`. The
+    /// allocator holds the GBM device; the buffers hold it alive too, so this
+    /// is here for rebuilding and not for lifetime.
+    #[cfg(feature = "gbm")]
+    gbm: Option<GbmRing>,
     /// How long a committed flip may take before the display is called stopped.
     ///
     /// Adjustable because the right answer differs by who is asking. A frame
@@ -85,7 +115,7 @@ where
             // renderer. Reporting which one applies belongs to capabilities, so
             // this refuses rather than silently doing something else.
             return Err(Error::Unsupported(
-                "this device cannot allocate its own scanout buffers; use the GBM path",
+                "this device cannot allocate its own scanout buffers; use DrmScanoutTarget::with_gbm, behind the `gbm` feature",
             ));
         }
         let render_formats = capabilities.render_formats.clone();
@@ -108,8 +138,73 @@ where
             flip_pending: false,
             cpu_waits: 0,
             flip_timeout: FRAME_WAIT_TIMEOUT,
+            #[cfg(feature = "gbm")]
+            gbm: None,
         };
         target.build_ring(ctx, depth.max(2), &candidates)?;
+        Ok(target)
+    }
+
+    /// Build a scanout target whose buffers GBM allocates.
+    ///
+    /// The path [`Self::new`] refuses into. Where the renderer cannot allocate
+    /// its own scanout buffers — no dma-buf export, or no explicit modifiers —
+    /// GBM allocates on the display's own device and the renderer imports what
+    /// it made. On a split render/display SoC that is the only route to
+    /// scanout: the GPU would choose a layout the display controller cannot
+    /// accept.
+    ///
+    /// Usable on a device that *can* allocate, too, and not refused there: a
+    /// caller comparing the two paths on one machine is exactly who finds out
+    /// that one of them is wrong.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] where the output has no DRM device to allocate on
+    /// — a stand-in rather than a card — or where the renderer cannot import a
+    /// dma-buf, since then neither path is available. Otherwise whatever the
+    /// allocation, the import or the format negotiation reports.
+    #[cfg(feature = "gbm")]
+    pub fn with_gbm(ctx: &mut H::Context, output: O, depth: usize) -> Result<Self> {
+        if !ctx.capabilities().dma_buf.import {
+            return Err(Error::Unsupported(
+                "the GBM path needs a renderer that can import a dma-buf",
+            ));
+        }
+        let Some(fd) = output.device_fd() else {
+            return Err(Error::Unsupported(
+                "this output has no DRM device for GBM to allocate on",
+            ));
+        };
+        let allocator = crate::gbm::GbmAllocator::open(fd)?;
+
+        // The display's own list on both sides of the negotiation. On this path
+        // the renderer imposes no format constraint — it imports whatever GBM
+        // made rather than allocating to a list of its own — so the only
+        // constraints are what the display accepts and what `pixel_format_for`
+        // can name. Negotiating the display against itself picks the preferred
+        // format among those it offers, which is the whole question here.
+        let formats = output.supported_formats().to_vec();
+        let chosen = negotiate(&formats, &formats, PREFERRED_FORMATS)?;
+        let format = pixel_format_for(chosen.fourcc)?;
+        let extent = output.mode().extent;
+
+        let mut target = Self {
+            output,
+            slots: Vec::with_capacity(depth),
+            acquired: None,
+            format,
+            extent,
+            mode_set: false,
+            flip_pending: false,
+            cpu_waits: 0,
+            flip_timeout: FRAME_WAIT_TIMEOUT,
+            gbm: Some(GbmRing {
+                allocator,
+                fourcc: chosen.fourcc,
+            }),
+        };
+        target.build_ring_from_gbm(ctx, depth.max(2))?;
         Ok(target)
     }
 
@@ -126,6 +221,18 @@ where
     /// missing.
     pub fn cpu_waits(&self) -> u64 {
         self.cpu_waits
+    }
+
+    /// Whether this target's buffers come from GBM rather than the renderer.
+    ///
+    /// Worth asking because on a device that can allocate its own scanout
+    /// buffers the two paths are observationally the same from outside — both
+    /// present, both resize — so a target that silently took the wrong one
+    /// would look correct. A caller comparing them, or a test asserting which
+    /// it got, needs this to be able to tell.
+    #[cfg(feature = "gbm")]
+    pub fn allocates_through_gbm(&self) -> bool {
+        self.gbm.is_some()
     }
 
     pub fn output(&self) -> &O {
@@ -154,6 +261,57 @@ where
                 on_screen: false,
                 fence: None,
                 retained: Vec::new(),
+                #[cfg(feature = "gbm")]
+                _gbm: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Allocate the ring through GBM and hand each buffer to both sides.
+    ///
+    /// Two descriptors per buffer, because ownership of one transfers to
+    /// whoever imports it and `gbm_bo_get_fd` hands out a new one per call. The
+    /// modifier is taken from what came back rather than what was asked for: a
+    /// driver may answer a constrained request with a layout outside the list,
+    /// and the display has to be told what it actually got.
+    #[cfg(feature = "gbm")]
+    fn build_ring_from_gbm(&mut self, ctx: &mut H::Context, depth: usize) -> Result<()> {
+        let modifiers: Vec<emblema_hal::Modifier> = self
+            .output
+            .supported_formats()
+            .iter()
+            .filter(|set| {
+                self.gbm
+                    .as_ref()
+                    .is_some_and(|ring| set.fourcc == ring.fourcc)
+            })
+            .flat_map(|set| set.modifiers.iter().copied())
+            .collect();
+
+        for _ in 0..depth {
+            let Some(ring) = self.gbm.as_ref() else {
+                return Err(Error::Unsupported("this target was not built through GBM"));
+            };
+            let allocated = ring
+                .allocator
+                .allocate(self.extent, ring.fourcc, &modifiers)?;
+            let for_renderer = allocated.describe()?;
+            let for_display = allocated.describe()?;
+            let texture = ctx.import_texture(for_renderer, self.extent, self.format)?;
+            let fb = self.output.import_dmabuf(DmaBufPlanes {
+                planes: for_display.planes,
+                fourcc: for_display.fourcc,
+                modifier: for_display.modifier,
+                extent: self.extent,
+            })?;
+            self.slots.push(Slot {
+                texture,
+                fb,
+                on_screen: false,
+                fence: None,
+                retained: Vec::new(),
+                _gbm: Some(allocated),
             });
         }
         Ok(())
@@ -429,6 +587,15 @@ where
         self.release(ctx);
         self.extent = extent;
         self.mode_set = false;
+        // A GBM ring rebuilds through GBM. Calling the renderer-allocated path
+        // here would ask a device that cannot allocate scanout buffers to do
+        // exactly that, and the resize would fail at the call after the one
+        // that asked -- which is the shape of the defect writing the resize
+        // storm found in the first place.
+        #[cfg(feature = "gbm")]
+        if self.gbm.is_some() {
+            return self.build_ring_from_gbm(ctx, depth);
+        }
         self.build_ring(ctx, depth, &modifiers)
     }
 

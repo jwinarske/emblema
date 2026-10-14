@@ -4120,6 +4120,46 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The GBM ring presents, and what this machine cannot tell about it, 2026-10-14
+
+`DrmScanoutTarget::with_gbm` builds a ring whose buffers GBM allocates. Each
+slot owns its `Allocated` alongside the texture and the framebuffer, because it
+owns the memory those two are views of; `PresentTarget::destroy` releases the
+framebuffer and destroys the texture before the slot goes, so the drop order is
+right by construction. `reconfigure` dispatches: a GBM ring rebuilds through
+GBM, since sending it down the renderer-allocated path would ask a device that
+cannot allocate scanout buffers to do exactly that, and the failure would arrive
+at the `present` after the call that asked -- the shape of the defect that
+writing the resize storm found.
+
+Measured on `card0`: a ring of three at 1024x768, four frames presented, resized
+to **4096x2160**, four more, resized back, destroyed. Validation clean.
+
+**What this machine cannot tell**, and it is most of what is worth saying. This
+workstation's renderer *can* allocate its own scanout buffers, so both paths
+present and resize identically from outside: every assertion in that test would
+pass on a target that had quietly taken the renderer-allocated path. So
+`allocates_through_gbm()` exists and is asserted -- it is the one line that says
+which path is under test. Forced to return `false` and the test fails, which is
+how it was chosen.
+
+Even that does not say which *builder* filled the slots. A target could report
+GBM and have been filled by `build_ring`, and on a device that can allocate the
+pixels would be identical. The run that distinguishes it is one where `new`
+refuses -- a Radxa Zero 3, whose Rockchip controller says exactly that -- and
+that is a board run this entry does not have.
+
+**Two things found by running it rather than reading it.** The first version
+ended without `destroy`, and the validation layer reported three images and
+three memories outliving the device: exactly the final ring. Before that it
+reported a pipeline and a render pass destroyed while a command buffer still
+referred to them, because the frames submitted at 4096x2160 were still executing
+when the test returned. And a claim written here in between -- that
+`DrmScanoutTarget` had no teardown to call -- was **wrong**: `PresentTarget` has
+`destroy`, which every other target test in the file already called. The grep
+that missed it looked for `pub fn destroy` in one file; the method is a trait
+implementation.
+
 ### GBM allocates and the renderer draws into it, 2026-10-14
 
 The path is closed. `drmkit-gbm` 0.1.1 from the registry, at
