@@ -4120,6 +4120,62 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The GBM path needed an import, and export turns out to be single-plane, 2026-10-14
+
+Adopting `drmkit-gbm` looked like a dependency decision. It is not: the
+dependency was never the blocker.
+
+`DrmScanoutTarget::new` refuses with "this device cannot allocate its own
+scanout buffers; use the GBM path", `capabilities.rs` models that path
+(`import_only_devices_still_support_scanout`, and `supports_scanout()` is true
+for an import-only device), and `ExternalImageDesc`'s own doc says it exists
+"from day one for the sake of the DRM path" so "the renderer must be able to
+draw into images it did not allocate -- buffers GBM made". **Nothing
+implemented it.** The HAL had `create_exportable_texture` and `export_texture`
+and no import at all; both backends carried only the extension *names* for
+capability reporting -- GLES has `EGL_EXT_image_dma_buf_import` as a constant,
+Vulkan's `external.rs` had no `ImportMemoryFdInfoKHR`.
+
+So a GBM buffer could reach KMS through `import_dmabuf` while the renderer
+still could not draw into it, which is the ring's whole purpose. `import_texture`
+is now on the HAL, defaulted to `Unsupported` like its two neighbors, and
+implemented for Vulkan: explicit modifier rather than a list, memory type from
+`VkMemoryFdPropertiesKHR` intersected with the image's requirements rather than
+a property search, dedicated allocation, and the descriptor released from
+`OwnedFd` only once `vkAllocateMemory` has taken it.
+
+**And trying to import found something in the export path.** Round-tripping
+this device's own export is refused:
+
+```
+create_image (imported): ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT
+exported 1 plane(s), modifier 0x20000000056bb03
+```
+
+That modifier is AMD DCC, which has **two** memory planes. `export_texture`
+queries `MEMORY_PLANE_0_EXT` only and returns `vec![one plane]`, so an image
+RADV allocated for sharing is exported with half its layout described. **This is
+pre-existing and not the import's fault**, and it is latent rather than observed
+because no board on this bench scans out a non-linear modifier and LINEAR has one
+plane -- but on a device that does, the descriptor handed to `import_dmabuf`
+would be incomplete. Import refuses a multi-plane descriptor in as many words
+rather than taking the first plane, because a picture built from plane zero of
+two looks nearly right.
+
+So the round trip is tested at **LINEAR**, which is what GBM returns on every
+board here and therefore the case the GBM path needs. The test draws into the
+imported image and reads **every** texel back, which is not fastidiousness: the
+first version checked `pixels[..4]`, and doubling `row_pitch` on import passed
+it -- a stride stated wrongly moves later rows and leaves pixel zero perfectly
+green. Checking the whole image fails that mutation, which is how the assertion
+was chosen.
+
+**Not claimed:** that the memory-type intersection is exercised. Ignoring
+`VkMemoryFdPropertiesKHR` entirely still passes here, because this device's
+image requirements and its dma-buf's permitted types coincide. It is
+correctness by construction against a device where they do not, and nothing
+here demonstrates it.
+
 ### What the second instability still owes, and why it is not a bare probe, 2026-10-14
 
 The first instability has `probe-the-blend-instability`: EGL and GL and nothing
