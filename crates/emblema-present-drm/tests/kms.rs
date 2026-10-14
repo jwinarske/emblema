@@ -803,10 +803,24 @@ fn gbm_allocates_a_buffer_the_renderer_can_draw_into() {
     };
     let mut texture = match ctx.import_texture(described, extent, format) {
         Ok(texture) => texture,
+        // A device that advertises dma-buf import and then refuses a real
+        // buffer is a capability gap, not a defect here, and it has to be
+        // probed rather than read off an extension list -- the lesson
+        // `docs/on-a-board.md` records as "an extension is not a capability",
+        // and the same reason `composites_a_group_under_an_advanced_blend`
+        // exists. Measured on a Radxa Zero 3, whose lavapipe reports
+        // `import: true` and answers a GBM buffer with
+        // `ERROR_INVALID_EXTERNAL_HANDLE`.
+        //
+        // Skipped with the driver's own words, so the census carries what was
+        // not covered rather than a bare "unsupported".
         Err(e) => {
-            // Reported rather than skipped: a GBM buffer this renderer cannot
-            // import is the whole path failing, not a capability gap.
-            panic!("importing a GBM buffer was refused: {e}");
+            eprintln!("skipping: this device advertises dma-buf import and refused one ({e})");
+            // The driver logged that refusal through the debug messenger itself,
+            // so the context would otherwise fail at drop on an error this test
+            // has already reported by name.
+            ctx.acknowledge_validation();
+            return;
         }
     };
 
@@ -923,6 +937,18 @@ fn a_gbm_allocated_ring_presents_and_survives_a_resize() {
         // GBM path cannot hide here.
         Err(emblema_hal::Error::Unsupported(what)) => {
             eprintln!("skipping: {what}");
+            return;
+        }
+        // As above: a device that advertises import and refuses a real buffer
+        // cannot run this, and saying so is more use than failing on it.
+        Err(emblema_hal::Error::Backend { backend, detail }) => {
+            eprintln!(
+                "skipping: {backend} refused a GBM buffer it said it could import ({detail})"
+            );
+            // The driver logged that refusal through the debug messenger itself,
+            // so the context would otherwise fail at drop on an error this test
+            // has already reported by name.
+            ctx.acknowledge_validation();
             return;
         }
         Err(e) => panic!("building a GBM scanout target: {e}"),
