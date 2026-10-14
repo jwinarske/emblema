@@ -119,6 +119,14 @@ pub fn run_with_env(extra: &[String], env: &[(&str, String)]) -> Outcome {
         command.env(key, value);
     }
     command.arg("test").arg("--workspace");
+    // `gbm` is off by default, because `drmkit-gbm` declares a higher
+    // `rust-version` than this workspace publishes and the MSRV lane holds that
+    // promise at 1.85. The toolchain this gate runs under is pinned at 1.94.1,
+    // so it can turn the feature on -- and must, for the reason `gate.rs`
+    // already gives about its own matrix: a run that never turns a feature on
+    // cannot notice that turning it on does nothing. Without this the GBM
+    // scanout path compiles nowhere and its test runs nowhere.
+    command.arg("--features").arg("emblema-present-drm/gbm");
     // Every target runs even after one fails, because this is a census: a run
     // that stops at the first failing binary reports the skips of the targets
     // it reached and says nothing about the rest, which is the same partial

@@ -720,6 +720,12 @@ fn a_storm_of_resizes_neither_leaks_nor_breaks_the_commit() {
 
 /// GBM allocates a scanout buffer and the renderer draws into it.
 ///
+/// Behind the `gbm` feature, which is off by default: `drmkit-gbm` declares a
+/// higher `rust-version` than this workspace does, and the MSRV a published
+/// crate states is a promise to its callers rather than a detail. The feature
+/// is what a caller who wants this path opts into, along with the newer
+/// toolchain it needs.
+///
 /// The path this crate named from the start and could not take: where a device
 /// cannot allocate its own scanout buffers, something else allocates and the
 /// renderer imports. Both halves are exercised here against a real card --
@@ -736,6 +742,7 @@ fn a_storm_of_resizes_neither_leaks_nor_breaks_the_commit() {
 /// was mis-stated, or an import bound to the wrong memory, still yields a
 /// texture and a framebuffer handle.
 #[test]
+#[cfg(feature = "gbm")]
 fn gbm_allocates_a_buffer_the_renderer_can_draw_into() {
     use emblema_present_drm::gbm::GbmAllocator;
 

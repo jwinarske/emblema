@@ -4169,6 +4169,28 @@ substituted a layout the display never advertised, which is a real and
 different thing, and fails where the display refuses a format and modifier it
 does advertise.
 
+**And the dependency is behind a feature, for a reason the ban list did not
+catch.** `drmkit-gbm` declares `rust-version = 1.94.1`; this workspace publishes
+`rust-version = "1.85"`, and CI holds that promise with
+`rustup run 1.85 cargo check --workspace --all-targets --locked`. Adding the
+dependency outright fails it:
+
+```
+error: rustc 1.85.1 is not supported by the following package:
+  drmkit-gbm@0.1.1 requires rustc 1.94.1
+```
+
+A dependency has **two** published promises to satisfy here, not one. The ban
+list was checked first and passed; the MSRV was not, and it is the one that
+failed -- the version was visible in `cargo info` the whole time. So `gbm` is an
+optional feature: the default build keeps 1.85, and a caller who wants the path
+opts into it along with the newer toolchain it needs.
+
+`cargo xtask verify` turns the feature on, because the toolchain it runs under is
+pinned at 1.94.1 and because a feature the gate never enables is a feature
+nothing tests -- which is what `gate.rs` already says about its own matrix.
+Without that line the path would compile nowhere and its test would run nowhere.
+
 **Still absent:** the ring. This proves a GBM buffer can be allocated, imported
 and scanned out; `DrmScanoutTarget` still refuses where the renderer cannot
 allocate, because its slots hold a texture and a framebuffer and a GBM ring's

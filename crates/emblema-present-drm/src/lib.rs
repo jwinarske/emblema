@@ -119,6 +119,7 @@
 //! which on a Pi 5 is the one that works.
 
 pub mod device;
+#[cfg(feature = "gbm")]
 pub mod gbm;
 pub mod kms;
 pub mod output;

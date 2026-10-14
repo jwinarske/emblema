@@ -23,7 +23,7 @@ drm = { version = "0.15.0", default-features = false }
 # why `GbmDevice::from_fd` exists. Opens libgbm at run time, so this stays a
 # pure-Rust build with no pkg-config and no C toolchain, which `deny.toml`
 # requires of every dependency.
-drmkit-gbm = { version = "0.1.1", default-features = false }
+drmkit-gbm = { version = "0.1.1", default-features = false, optional = true }
 emblema-core = { workspace = true }
 emblema-hal = { workspace = true }
 emblema-present = { workspace = true }
@@ -45,3 +45,9 @@ ash = { workspace = true }
 # The `IN_FORMATS` parser reads the kernel's bytes at offsets it computes
 # itself, which is the shape a generator explores better than a table.
 proptest = { workspace = true }
+
+[features]
+# GBM-allocated scanout. Off by default because `drmkit-gbm` declares a
+# higher `rust-version` than this workspace does, and the MSRV this crate
+# publishes is a promise to its callers rather than a detail.
+gbm = ["dep:drmkit-gbm"]
