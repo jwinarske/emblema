@@ -879,3 +879,153 @@ fn gbm_allocates_a_buffer_the_renderer_can_draw_into() {
 
     ctx.destroy_texture(texture);
 }
+
+/// A GBM-allocated ring presents, and survives a resize.
+///
+/// The path `DrmScanoutTarget::new` has refused into since it was written. The
+/// previous test proved one GBM buffer can be allocated, imported and handed to
+/// the display; this proves a *ring* of them works as a target — acquire, draw,
+/// present, repeatedly, which is where the slot's ownership of its buffer
+/// matters.
+///
+/// The resize is half the point. `reconfigure` releases the ring and builds it
+/// again, and a GBM ring has to rebuild through GBM: dispatching to the
+/// renderer-allocated path would ask a device that cannot allocate scanout
+/// buffers to do exactly that, and the failure would arrive at the `present`
+/// after the call that caused it. That is the shape of the defect writing the
+/// resize storm found in the first place, so it is checked rather than assumed.
+///
+/// Run on any card, including one whose renderer *can* allocate. Comparing the
+/// two paths on one machine is how one of them being wrong gets noticed.
+#[test]
+#[cfg(feature = "gbm")]
+fn a_gbm_allocated_ring_presents_and_survives_a_resize() {
+    use emblema_hal_vulkan::VulkanHal;
+    use emblema_present::PresentTarget;
+    use emblema_present_drm::DrmScanoutTarget;
+
+    const DEPTH: usize = 3;
+
+    let (Some((output, _card)), Some(mut ctx)) = (output(), context()) else {
+        return;
+    };
+    let settled = output.mode().extent;
+    let other = output
+        .modes()
+        .into_iter()
+        .map(|mode| mode.extent)
+        .find(|extent| *extent != settled);
+
+    let mut target = match DrmScanoutTarget::<VulkanHal, _>::with_gbm(&mut ctx, output, DEPTH) {
+        Ok(target) => target,
+        // Only `Unsupported` skips: no card behind the output, or a renderer
+        // that cannot import. Every other error still fails, so a defect in the
+        // GBM path cannot hide here.
+        Err(emblema_hal::Error::Unsupported(what)) => {
+            eprintln!("skipping: {what}");
+            return;
+        }
+        Err(e) => panic!("building a GBM scanout target: {e}"),
+    };
+    assert_eq!(target.ring_depth(), DEPTH, "the ring was not built in full");
+    // On a device that can allocate its own scanout buffers -- this workstation
+    // can -- the two paths present and resize identically, so everything below
+    // would pass on a target that quietly took the renderer-allocated one. This
+    // is the one assertion that says which path is under test. What it still
+    // cannot say is which builder filled the slots; the run that distinguishes
+    // that is a device where `new` refuses, which is a board and not here.
+    assert!(
+        target.allocates_through_gbm(),
+        "with_gbm produced a target that does not allocate through GBM"
+    );
+    eprintln!("gbm ring of {DEPTH} at {settled:?}");
+
+    // A macro rather than a closure: the closure needed the target's full type
+    // written out to infer, and the second parameter of `DrmScanoutTarget` is
+    // the output's, which this test never names.
+    macro_rules! present_four {
+        ($what:expr) => {
+            for frame in 0..4u32 {
+                let image = target.acquire(&mut ctx).expect("acquire");
+                let mut batch = Batch::new();
+                let t = frame as f32 / 4.0;
+                batch
+                    .push(
+                        &FULL,
+                        &QUAD,
+                        Material::solid([t, 0.5, 1.0 - t, 1.0]),
+                        BlendMode::Src,
+                    )
+                    .expect("push");
+                let fence = ctx
+                    .submit_batch_deferred(image, &batch, PassDescriptor::clear([0.0; 4]))
+                    .expect("deferred submission");
+                target.set_frame_fence(fence).expect("attach the fence");
+                target
+                    .present(&mut ctx)
+                    .unwrap_or_else(|e| panic!("{}, frame {frame}: {e}", $what));
+            }
+        };
+    }
+
+    present_four!("at the settled mode");
+    assert_eq!(
+        target.output().framebuffer_count(),
+        DEPTH,
+        "the controller is holding more framebuffers than the ring has"
+    );
+
+    let Some(other) = other else {
+        eprintln!("skipping the resize: this connector offers one extent");
+        return;
+    };
+    eprintln!("resizing to {other:?}");
+    target
+        .reconfigure(&mut ctx, other)
+        .unwrap_or_else(|e| panic!("reconfiguring a GBM ring to {other:?}: {e}"));
+    assert_eq!(
+        target.extent(),
+        other,
+        "the target did not take the new extent"
+    );
+    assert_eq!(
+        target.ring_depth(),
+        DEPTH,
+        "the ring was not rebuilt in full"
+    );
+
+    // The present after the resize is the one that caught the original defect:
+    // `reconfigure` returned `Ok` and the next commit came back `ENOSPC`.
+    present_four!("after the resize");
+    assert_eq!(
+        target.output().framebuffer_count(),
+        DEPTH,
+        "framebuffers from the earlier size are still held"
+    );
+
+    // Back to where it started, which does two jobs. It exercises the GBM
+    // dispatch in the shrinking direction as well as the growing one, and it
+    // drains: `reconfigure` releases the ring, and releasing waits each slot's
+    // fence. Without it the last frames submitted at the larger mode are still
+    // executing when this returns, and the validation layer reports a pipeline
+    // and a render pass destroyed while a command buffer still refers to them.
+    // Measured, which is how this line came to be here.
+    target
+        .reconfigure(&mut ctx, settled)
+        .unwrap_or_else(|e| panic!("reconfiguring back to {settled:?}: {e}"));
+    assert_eq!(target.extent(), settled, "the target did not shrink back");
+    assert_eq!(
+        target.ring_depth(),
+        DEPTH,
+        "the ring was not rebuilt in full"
+    );
+
+    // `PresentTarget::destroy`, as every other target test in this file ends.
+    // It waits each slot's fence, releases the framebuffers and destroys the
+    // textures -- and on this path it drops the GBM allocations last, after
+    // both the view the renderer held and the one the display held are gone.
+    // Without it the ring's three imported images and their memory outlive the
+    // device, which the validation layer reports at `vkDestroyDevice`. That is
+    // how the ordering above was confirmed rather than assumed.
+    target.destroy(&mut ctx);
+}
