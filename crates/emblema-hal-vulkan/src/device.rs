@@ -792,6 +792,15 @@ impl VulkanContext {
         self.validation_log.is_clean()
     }
 
+    /// Forget what the layer has reported, having dealt with it.
+    ///
+    /// See [`ValidationLog::acknowledge`]: this is for an error the driver
+    /// reported about itself and the caller has handled and named, not for
+    /// quieting one.
+    pub fn acknowledge_validation(&self) {
+        self.validation_log.acknowledge();
+    }
+
     /// A handle on the log that outlives this context.
     ///
     /// Every other accessor here reads the log *through* the context, which

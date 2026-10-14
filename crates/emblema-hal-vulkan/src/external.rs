@@ -336,18 +336,32 @@ impl VulkanContext {
     #[cfg(unix)]
     pub fn import_texture(
         &mut self,
-        image: emblema_hal::ExternalImageDesc,
+        mut image: emblema_hal::ExternalImageDesc,
         extent: Extent2D,
         format: PixelFormat,
     ) -> Result<VulkanTexture> {
-        use std::os::fd::{AsRawFd as _, IntoRawFd as _};
+        use std::os::fd::IntoRawFd as _;
 
         if !self.capabilities().dma_buf.import {
             return Err(Error::Unsupported("dma-buf import"));
         }
-        if !self.capabilities().dma_buf.modifiers {
+        // A linear buffer can be imported without the modifier extension, by
+        // creating the image with LINEAR tiling instead of stating a layout.
+        // That matters more than it looks: the devices that actually need this
+        // path are the ones that cannot allocate scanout buffers, and on a
+        // Radxa Zero 3 that device is a lavapipe with no
+        // `VK_EXT_image_drm_format_modifier` at all -- so requiring the
+        // extension made the GBM path unreachable on the hardware it exists
+        // for. Measured there.
+        //
+        // The catch is that plain LINEAR cannot *state* a stride: Vulkan
+        // computes its own row pitch, and if the allocator chose a different
+        // one the import is silently wrong. So the layout is read back below
+        // and the import refused where it disagrees.
+        let plain_linear = !self.capabilities().dma_buf.modifiers;
+        if plain_linear && image.modifier != Modifier::LINEAR {
             return Err(Error::Unsupported(
-                "importing a dma-buf requires explicit format modifiers",
+                "importing a tiled dma-buf requires explicit format modifiers",
             ));
         }
         if image.modifier == Modifier::INVALID {
@@ -358,7 +372,10 @@ impl VulkanContext {
                 "importing a dma-buf whose modifier is INVALID",
             ));
         }
-        let Some(plane) = image.planes.first() else {
+        // Copied out rather than borrowed, because the descriptors are released
+        // below and that needs `image.planes` by value.
+        let Some((first_offset, first_stride)) = image.planes.first().map(|p| (p.offset, p.stride))
+        else {
             return Err(Error::Unsupported("importing a dma-buf with no planes"));
         };
         // Every plane the modifier declares must be described, and the count
@@ -400,6 +417,25 @@ impl VulkanContext {
                     .row_pitch(u64::from(p.stride))
             })
             .collect();
+
+        // Ownership of every descriptor is released here, before anything is
+        // created, rather than after a successful import.
+        //
+        // The specification says a failed import does not transfer ownership,
+        // so the obvious shape is to keep the `OwnedFd`s and release them once
+        // `vkAllocateMemory` has succeeded. That aborts in practice. Measured on
+        // a Radxa Zero 3's lavapipe: a *failed* import left the descriptor
+        // closed, and dropping the `OwnedFd` on the error path killed the
+        // process with "IO Safety violation: owned file descriptor already
+        // closed". Leaking one descriptor down a path that is already returning
+        // an error is the lesser bug, and it cannot abort.
+        let descriptors: Vec<std::os::fd::RawFd> = std::mem::take(&mut image.planes)
+            .into_iter()
+            .map(|p| p.fd.into_raw_fd())
+            .collect();
+        let Some(first) = descriptors.first().copied() else {
+            return Err(Error::Unsupported("importing a dma-buf with no planes"));
+        };
         let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
             .drm_format_modifier(image.modifier.0)
             .plane_layouts(&layouts);
@@ -417,17 +453,49 @@ impl VulkanContext {
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .tiling(if plain_linear {
+                vk::ImageTiling::LINEAR
+            } else {
+                vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
+            })
             .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut explicit)
             .push_next(&mut external);
+        let info = if plain_linear {
+            info
+        } else {
+            info.push_next(&mut explicit)
+        };
 
         // SAFETY: the chained structures outlive the call, and every object is
         // destroyed on the failure paths below.
         let vk_image = unsafe { device.create_image(&info, None) }
             .map_err(|e| backend_err("create_image (imported)", e))?;
+
+        // On the plain-LINEAR path the stride was never stated, so check that
+        // the one Vulkan chose is the one the buffer actually has. A disagreement
+        // here is not a near miss: every row after the first would be read from
+        // the wrong offset, and the picture would look like a shear rather than
+        // like an error.
+        if plain_linear {
+            let subresource =
+                vk::ImageSubresource::default().aspect_mask(vk::ImageAspectFlags::COLOR);
+            // SAFETY: a LINEAR image's layout is queried this way.
+            let chosen = unsafe { device.get_image_subresource_layout(vk_image, subresource) };
+            if chosen.row_pitch != u64::from(first_stride) || first_offset != 0 {
+                unsafe { device.destroy_image(vk_image, None) };
+                return Err(Error::Backend {
+                    backend: "vulkan",
+                    detail: format!(
+                        "a linear import cannot state a layout, and this device would read \
+                         the buffer at stride {} offset 0 where it was allocated at stride {} \
+                         offset {}",
+                        chosen.row_pitch, first_stride, first_offset
+                    ),
+                });
+            }
+        }
 
         // What the descriptor permits, rather than a property search: an
         // imported allocation's memory type is decided by the buffer, and
@@ -439,7 +507,7 @@ impl VulkanContext {
         if let Err(e) = unsafe {
             loader.get_memory_fd_properties(
                 vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                plane.fd.as_raw_fd(),
+                first,
                 &mut fd_properties,
             )
         } {
@@ -462,7 +530,7 @@ impl VulkanContext {
         // `OwnedFd` only once the call has succeeded.
         let mut import = vk::ImportMemoryFdInfoKHR::default()
             .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .fd(plane.fd.as_raw_fd());
+            .fd(first);
         let allocate = vk::MemoryAllocateInfo::default()
             .allocation_size(requirements.size)
             .memory_type_index(memory_type)
@@ -476,16 +544,6 @@ impl VulkanContext {
                 return Err(backend_err("allocate_memory (imported)", e));
             }
         };
-        // Owned by Vulkan from here, so that one `OwnedFd` must not close it.
-        // The others are duplicates onto the same allocation and are closed
-        // when `image` drops, which is correct: Vulkan took one reference and
-        // the rest were only ever a way to describe offsets.
-        let mut planes = image.planes.into_iter();
-        if let Some(first) = planes.next() {
-            let _ = first.fd.into_raw_fd();
-        }
-        drop(planes);
-
         if let Err(e) = unsafe { device.bind_image_memory(vk_image, memory, 0) } {
             unsafe {
                 device.free_memory(memory, None);

@@ -4120,6 +4120,87 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### Export describes every plane now, 2026-10-14
+
+The gap the import found is closed. `export_texture` described plane zero only,
+so importing this device's own export was refused --
+`ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` -- and the round trip had
+to be tested at a forced LINEAR.
+
+**The plane count is a property of the format *and* the modifier**, not the
+format alone: the same `ARGB8888` is one plane linear and two under AMD's DCC,
+where the second holds the metadata. `VkDrmFormatModifierPropertiesEXT` carries
+it and the modifier query here had been discarding it, which is why export
+described half a layout for as long as it did.
+
+Export now asks for the count and walks `MEMORY_PLANE_0..n_EXT`, handing out one
+descriptor per plane -- duplicates onto the one allocation, since the planes live
+at offsets within a single dma-buf. Import requires the count to match what the
+modifier declares, and says so in its own words rather than letting Vulkan refuse
+opaquely.
+
+**Measured at the layout the device chooses for itself:** modifier
+`0x20000000056bb03`, described in **two** planes, imported, drawn into, every
+texel correct. Reverting export to plane zero fails it with `this modifier
+declares 2 memory plane(s) and 1 were described`.
+
+The test pins no modifier on purpose: a device that prefers linear runs the same
+path with one plane, which is the case that must keep working.
+
+### The board that needs the GBM path cannot use it, 2026-10-14
+
+The run this workstation structurally could not do. A Radxa Zero 3 is where
+`DrmScanoutTarget::new` refuses, so `with_gbm` is the only path -- which makes it
+the only place the dispatch and the builder are under test at all. Its own census
+says so:
+
+```
+skipping: this device cannot allocate its own scanout buffers; use
+          DrmScanoutTarget::with_gbm, behind the `gbm` feature
+```
+
+**And the GBM path cannot run there either.** Three devices, none able to import
+a GBM buffer:
+
+| device | what it says |
+|---|---|
+| PanVK, with the opt-in | `dma_buf.import` is **false** -- refuses at the door |
+| lavapipe, Mesa 24.2 | `import: true`, then `ERROR_INVALID_EXTERNAL_HANDLE` |
+| Rockchip (display) | cannot allocate; it is why the path exists |
+
+So lavapipe **advertises dma-buf import and refuses a real buffer** -- this
+document's standing lesson arriving again: an extension is not a capability, and
+trying it is the only way to know. The tests probe rather than trust the flag,
+and skip with the driver's own words.
+
+**Two defects found by running it, one of them mine.** The first run aborted:
+
+```
+fatal runtime error: IO Safety violation: owned file descriptor already closed
+```
+
+`gdb` on the board put it in `import_texture`, dropping the descriptor list on an
+error path. The cause is that **lavapipe closes the descriptor on a *failed*
+import**, which the specification does not allow -- a failed import does not
+transfer ownership -- so the `OwnedFd` closed it again and `std` aborted. The fix
+is mine either way: ownership of every descriptor is released *before*
+`vkAllocateMemory` rather than after it succeeds, so neither outcome can
+double-close. A leaked descriptor down a path already returning an error is the
+lesser bug, and it cannot abort.
+
+The second: the driver logs its own refusal through the debug messenger, from
+`lvp_device.c`, so a test that skipped correctly still failed when its context
+went out of scope. `ValidationLog::acknowledge` exists for that, and its
+documentation says what it is not -- anything cleared has to have been reported
+where a reader sees it, which here is the skip message quoting the driver.
+Otherwise the error is merely hidden, which is what the drop-time check prevents.
+
+**Result:** `kms.rs` is **nine of nine** on that board, with the GBM path named
+in the census as unavailable rather than silently absent. What remains unproven
+is the thing the board was run for -- that `with_gbm` allocates and presents on a
+device that cannot allocate for itself -- because no Vulkan device on this board
+imports. That needs a board whose renderer does, and this fleet has not got one.
+
 ### The GBM ring presents, and what this machine cannot tell about it, 2026-10-14
 
 `DrmScanoutTarget::with_gbm` builds a ring whose buffers GBM allocates. Each
@@ -4281,7 +4362,8 @@ LINEAR has one plane -- but on a device that does, the descriptor handed to
 > now, and import requires the count to match. See *Export describes every
 > plane now* above. The round trip no longer has to be forced to LINEAR.
 
-So the round trip is tested at **LINEAR**, which is what GBM returns on every
+The round trip is now tested at whatever layout the device prefers, and
+separately at a forced **LINEAR**, which is what GBM returns on every
 board here and therefore the case the GBM path needs. The test draws into the
 imported image and reads **every** texel back, which is not fastidiousness: the
 first version checked `pixels[..4]`, and doubling `row_pitch` on import passed

@@ -60,6 +60,25 @@ impl ValidationLog {
     pub fn is_clean(&self) -> bool {
         self.errors().is_empty()
     }
+
+    /// Forget what has been reported so far, having dealt with it.
+    ///
+    /// For the one case the drop-time check cannot distinguish: an error the
+    /// *driver* reported about itself, through the same messenger the layer
+    /// uses, which the caller has already handled. Lavapipe on a Radxa Zero 3
+    /// answers a dma-buf import with `VK_ERROR_INVALID_EXTERNAL_HANDLE` and
+    /// logs it from `lvp_device.c`, so a test that correctly skips on that
+    /// refusal would still fail when its context went out of scope.
+    ///
+    /// Not a way to quiet a failing test. Anything cleared here has to have
+    /// been reported somewhere the reader will see it -- a skip message naming
+    /// the driver's own words -- or the error has simply been hidden, which is
+    /// what the check exists to prevent.
+    pub fn acknowledge(&self) {
+        if let Ok(mut guard) = self.messages.lock() {
+            guard.clear();
+        }
+    }
 }
 
 /// The messenger callback.
