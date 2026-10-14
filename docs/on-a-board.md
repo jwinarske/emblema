@@ -4147,6 +4147,41 @@ declares 2 memory plane(s) and 1 were described`.
 The test pins no modifier on purpose: a device that prefers linear runs the same
 path with one plane, which is the case that must keep working.
 
+### And the SA8155P cannot answer it either, 2026-10-14
+
+Looking for a board whose renderer *imports*, since the Radxa's does not. The
+SA8155P is reachable over `adb`, runs glibc rather than Android, and has a
+vendor Vulkan driver rather than Mesa.
+
+It gets further than the Radxa and still cannot answer the question. The
+`emblema-hal-vulkan` export suite there is **five of eight**, and what fails is
+not import:
+
+```
+submit: create_graphics_pipelines: ERROR_UNKNOWN
+```
+
+**The driver cannot create this renderer's graphics pipelines at all**, so no
+test that draws can run -- including `an_exported_image_can_still_be_rendered_into`,
+which predates all of the GBM work and touches neither import nor allocation. So
+this is the board's state rather than anything the import changed.
+
+What does work there is the half that does not draw. It exports, and it picks
+UBWC when offered the choice: `0x0500000000000001`, described in one plane. The
+modifier plumbing is sound on a vendor stack; the pipeline is not.
+
+One hint recorded without a conclusion: `vkCreateDevice` prints
+`Unknown struct with type 0x30 provided to vkCreateDevice`, so this 1.1-era
+driver does not recognize something in the chain handed to it. Whether that is
+the same cause as `ERROR_UNKNOWN` from pipeline creation is not established here,
+and the two could be unrelated.
+
+**So the fleet still cannot prove `with_gbm` end to end.** Three boards, three
+different reasons: the Pi family allocates for itself so the path is not the only
+one there, the Radxa needs the path and has no device that imports, and the
+SA8155P imports nothing because it draws nothing. The proof needs a board whose
+renderer both imports *and* draws, and this bench has not got one.
+
 ### The board that needs the GBM path cannot use it, 2026-10-14
 
 The run this workstation structurally could not do. A Radxa Zero 3 is where
