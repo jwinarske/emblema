@@ -4120,6 +4120,42 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### What the second instability still owes, and why it is not a bare probe, 2026-10-14
+
+The first instability has `probe-the-blend-instability`: EGL and GL and nothing
+else. The second has only `ablate-the-frame-loop`, which goes through this
+renderer. The symmetric thing to want is a bare probe for the second as well.
+**That is the wrong artifact**, and the reason is worth writing down before
+someone spends a day on it.
+
+**The miscompiled thing is one of this renderer's shaders.** The mechanism is
+ACO's optimized variant -- `nooptvariant`, `mono` and `usellvm` each clear it,
+no DCC option touches it. So a program with no emblema code in it cannot
+reproduce it except by carrying the same shader, which makes "renderer-free"
+meaningless here. That is not a defence of the renderer and does not need to be:
+a miscompile of a valid shader is the compiler's defect whoever wrote the
+shader.
+
+What upstream would need is therefore the **shader plus a minimal draw that
+miscompiles it**, not a renderer-free loop. Which needs the variant identified,
+and that is where it stops for now.
+
+**Dumping the variant is not reachable from here.** `AMD_DEBUG=help` lists `vs`
+and `ps` as "Print vertex shaders" and "Print pixel shaders", but setting them
+produces no output against this machine's stock Mesa 26.2.4. The help dump
+prints three separate blocks whose bit values collide -- `cache_stats` and `ps`
+are both `0x10` -- so those flags belong to some variable other than
+`AMD_DEBUG`, and which one was not worked out. Until that is known, or a Mesa
+built for shader printing is on hand, the variant cannot be read out and the
+shader cannot be named.
+
+**And the bare probe, if built anyway, is not a small addition.** The second
+instability needs a **single-sample** subject interleaved with **multisampled**
+other frames, so the layer target's sample count differs between the subject and
+the frames around it. `probe-the-blend-instability` builds one set of targets
+from one `Ingredients` and renders it repeatedly; expressing this needs two sets
+and a loop that alternates. Worth knowing the shape before estimating it.
+
 ### The corpus does not need the render-twice instrument, 2026-10-14
 
 Asked for symmetry, since the catalog now has it on both backends, and the
