@@ -3907,7 +3907,7 @@ greps for it.
 
 The bisect above names four ingredients and says plainly that it is "still not
 a mechanism -- it is the smallest scene that does it". Two measurements it did
-not take get most of the way there, and both are ones this document has learnt
+not take get most of the way there, and both are ones this document has learned
 to take first: read the **value** rather than the delta, and ask **which
 pixels** differ rather than how many bytes.
 
@@ -4132,7 +4132,7 @@ someone spends a day on it.
 ACO's optimized variant -- `nooptvariant`, `mono` and `usellvm` each clear it,
 no DCC option touches it. So a program with no emblema code in it cannot
 reproduce it except by carrying the same shader, which makes "renderer-free"
-meaningless here. That is not a defence of the renderer and does not need to be:
+meaningless here. That is not a defense of the renderer and does not need to be:
 a miscompile of a valid shader is the compiler's defect whoever wrote the
 shader.
 

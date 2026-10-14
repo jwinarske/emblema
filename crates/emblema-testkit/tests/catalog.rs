@@ -1017,7 +1017,7 @@ fn reversing_a_gradient_reverses_the_picture() {
     // Upstream keeps each axis-aligned gradient in both directions, and its
     // `VerifyNonOptimizedGradient` beside them with the endpoints pulled inside
     // the shape so that whatever fast route the others may take, that one must
-    // not. The stops are bunched at one end -- nought, a tenth, and one -- so
+    // not. The stops are bunched at one end -- zero, a tenth, and one -- so
     // the picture is lopsided and a reversal is not a symmetry.
     //
     // What this catches is a fast path keyed on the axis that forgot the

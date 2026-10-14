@@ -360,7 +360,7 @@ fn arc_sweep(canvas: &mut Canvas, extent: Extent2D, knob: f32, _time: f32) {
     let sweep = knob * std::f32::consts::TAU;
 
     // The track a progress ring is drawn on. It also means a sweep of zero
-    // still shows something, which is what the ring would look like at nought
+    // still shows something, which is what the ring would look like at zero
     // percent -- and is why the scene is worth looking at across its whole
     // range rather than only at the ends.
     let mut track = PathBuilder::new();
