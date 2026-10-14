@@ -4272,12 +4272,14 @@ exported 1 plane(s), modifier 0x20000000056bb03
 That modifier is AMD DCC, which has **two** memory planes. `export_texture`
 queries `MEMORY_PLANE_0_EXT` only and returns `vec![one plane]`, so an image
 RADV allocated for sharing is exported with half its layout described. **This is
-pre-existing and not the import's fault**, and it is latent rather than observed
-because no board on this bench scans out a non-linear modifier and LINEAR has one
-plane -- but on a device that does, the descriptor handed to `import_dmabuf`
-would be incomplete. Import refuses a multi-plane descriptor in as many words
-rather than taking the first plane, because a picture built from plane zero of
-two looks nearly right.
+pre-existing and not the import's fault**, and it was latent rather than
+observed because no board on this bench scans out a non-linear modifier and
+LINEAR has one plane -- but on a device that does, the descriptor handed to
+`import_dmabuf` would be incomplete.
+
+> **Closed the same day.** Export describes every plane the modifier declares
+> now, and import requires the count to match. See *Export describes every
+> plane now* above. The round trip no longer has to be forced to LINEAR.
 
 So the round trip is tested at **LINEAR**, which is what GBM returns on every
 board here and therefore the case the GBM path needs. The test draws into the
