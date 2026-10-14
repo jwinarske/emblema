@@ -626,10 +626,50 @@ fn a_single_sample_scene_is_disturbed_by_multisampled_frames() {
         eprintln!("skipping: this context declined the scene");
         return;
     };
-    assert_eq!(
-        alone, 0,
-        "the subject is unstable by itself, so this is not a frame-loop defect"
-    );
+    if alone != 0 {
+        // The subject unstable on its own means this file's own premise is gone:
+        // whatever `others` then does cannot be read as a frame-loop defect. But
+        // failing here and skipping here are both wrong without knowing *whose*
+        // instability it is, so ask the software reference, which is the only
+        // thing on hand that can tell them apart.
+        //
+        // This fires on `radeonsi` and is the second instability, which
+        // `docs/on-a-board.md` attributes to ACO's optimized shader variant:
+        // `AMD_DEBUG=nooptvariant`, `mono` and `usellvm` each clear it and no DCC
+        // option touches it. It is a race, so its rate is not stable even on one
+        // machine -- this went from passing a gate run to failing six of six with
+        // no change to the tree, and disabling Mesa's shader cache does not move
+        // it.
+        match Validated::new(DevicePreference::Software) {
+            Ok(mut reference) => match repeat::<VulkanHal>(&mut reference, &subject, &[]) {
+                Some(0) => {
+                    eprintln!(
+                        "skipping: the subject is unstable by itself by {alone} level(s) on \
+                         {}, where the software reference is exact -- so this device cannot \
+                         measure the frame-loop defect this test is about. \
+                         AMD_DEBUG=nooptvariant clears it; see docs/on-a-board.md",
+                        gles.capabilities().device_name
+                    );
+                    return;
+                }
+                // The reference is unstable too, or declined. Either way nothing
+                // here has shown this belongs to a driver, so it does not get to
+                // skip: a renderer regression would look exactly like this.
+                other => panic!(
+                    "the subject is unstable by itself by {alone} level(s), and the software \
+                     reference {} -- so this is not the driver defect this file knows about",
+                    match other {
+                        Some(worst) => format!("is unstable by {worst} too"),
+                        None => "declined the scene".to_string(),
+                    }
+                ),
+            },
+            Err(e) => panic!(
+                "the subject is unstable by itself by {alone} level(s) and there is no \
+                 software reference here to tell a driver defect from a renderer one ({e})"
+            ),
+        }
+    }
 
     let worst = repeat::<GlesHal>(&mut gles, &subject, &others)
         .expect("the scene was accepted a moment ago");

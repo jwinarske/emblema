@@ -4120,6 +4120,46 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The second instability turned the gate red with no change to the tree, 2026-10-13
+
+Worth recording as an operational fact and not only a driver one: this defect
+can take `main` red on this workstation between two runs, with nothing
+committed in between.
+
+`a_single_sample_scene_is_disturbed_by_multisampled_frames` failed **six of six**
+on an unmodified `main`, having passed a full gate run shortly before. What
+failed was the test's own control -- the subject rendered twice with nothing
+between it must be exact, or whatever `others` then does cannot be read as a
+frame-loop defect at all -- and it read 1.
+
+**It is the second instability.** `AMD_DEBUG=nooptvariant` passes three of
+three, which matches the entry below. **Mesa's shader cache is not the
+mechanism**: that was the first guess here, on the reasoning that hundreds of
+renders had warmed it and the bad variant was now loading promptly rather than
+winning a race. `MESA_SHADER_CACHE_DISABLE=true` still fails **four of four**, so
+the guess was wrong and is recorded as wrong.
+
+**And the rate is not stable even on one machine with one binary.** Six of six
+failing, then later three of three passing, nothing perturbed between them. The
+probe's six-in-eight was already a rate; this is sharper, because across these
+runs there was nothing to vary but time. It is the strongest evidence yet for
+reading this as a race against the background compile, and the weakest possible
+ground for trusting any single run of anything that touches it.
+
+**So the control now attributes before it decides.** On a non-zero reading it
+asks the software reference and splits three ways:
+
+| the software reference | what happens |
+|---|---|
+| exact on the same subject | **skip**, naming the device, the level count and the knob that clears it |
+| unstable too | **fail** -- nothing has shown this belongs to a driver |
+| not available | **fail** -- there is nothing here to attribute with |
+
+The two failing arms are the load-bearing ones. A renderer regression that made
+subjects unstable on their own would look exactly like this defect from inside
+the test, so a skip on a non-zero reading alone would fail open on the one thing
+the control exists to catch. All three arms were forced and watched to fire.
+
 ### Half the gap closed, and the other half named, 2026-10-13
 
 The entry below found two catalog scenes nothing compared, and the reason: on
