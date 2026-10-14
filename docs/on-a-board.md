@@ -4120,6 +4120,37 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The same question of Vulkan, and what the answer does not cover, 2026-10-13
+
+The render-twice instrument below found two catalog scenes on `radeonsi`, one of
+them 104 levels out. It was GLES only, which left Vulkan unasked rather than
+answered. Asked now, of every Vulkan device this machine offers:
+
+| device | rendered twice | unsupported | differ |
+|---|---|---|---|
+| RADV `RAPHAEL_MENDOCINO` | 397 | 41 | **0** |
+| `llvmpipe` (lavapipe), LLVM 22.1.8 | 438 | 0 | **0** |
+
+**What this does not establish, and the temptation is to read it as if it did.**
+RADV cannot render the 41 advanced-blend scenes -- it has no
+`VK_EXT_blend_operation_advanced` -- and those 41 are exactly where the GLES
+defect lives. So RADV being clean over 397 scenes says nothing about whether it
+would show the defect on the scenes that matter: it was never asked. This is
+**not** evidence that the defect is GL-specific rather than something the
+hardware does under an advanced blend, and the devices here cannot separate
+those two, because the only hardware device that can advanced-blend at all is
+`radeonsi` through GLES.
+
+**What it does establish** is the half that was already suspected and now has
+its best control: lavapipe renders all 438 twice identically, **including every
+advanced-blend scene**. So the renderer is not the cause, and the defect is
+`radeonsi`'s.
+
+No exclusion list on the Vulkan side, unlike the GLES one -- nothing is known to
+differ there, so anything that does is news and fails. Its count guard is
+structural, `compared + unsupported == catalog().len()`, rather than a number of
+comparisons a device owes: that was the mistake the sibling test shipped with
+once, and CI caught it.
 ### The second instability turned the gate red with no change to the tree, 2026-10-13
 
 Worth recording as an operational fact and not only a driver one: this defect
