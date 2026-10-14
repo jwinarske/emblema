@@ -2496,3 +2496,71 @@ fn scenes_the_vulkan_device_cannot_render_are_compared_against_software() {
         failures.join(", ")
     );
 }
+
+/// The same question as the GLES test above, asked of Vulkan.
+///
+/// That one renders every catalog scene twice through one context and found two
+/// scenes on `radeonsi` that differ, one by 104 levels. The instrument was GLES
+/// only, which left the other backend unasked rather than answered.
+///
+/// Asked of every Vulkan device this machine offers, because the interesting
+/// comparison is between them: a hardware device and a software one disagreeing
+/// here would say where to look.
+///
+/// No exclusion list, unlike the GLES test. Nothing is known to differ, so
+/// anything that does is news and should fail. Exact, for the reason given
+/// there: two renders of one scene on one device have no legitimate reason to
+/// differ by a level.
+#[test]
+fn every_catalog_scene_renders_the_same_twice_on_vulkan() {
+    let mut devices = 0usize;
+    let mut differing = Vec::new();
+    for preference in [DevicePreference::Auto, DevicePreference::Software] {
+        let Ok(mut ctx) = Validated::new(preference) else {
+            eprintln!("skipping {preference:?}: no such Vulkan device");
+            continue;
+        };
+        devices += 1;
+        let name = ctx.capabilities().device_name.clone();
+        let mut compared = 0usize;
+        let mut unsupported = 0usize;
+        for scene in catalog() {
+            if !scene.supported_by(ctx.capabilities()) {
+                unsupported += 1;
+                continue;
+            }
+            let first = render::<VulkanHal>(&mut ctx, &scene);
+            let again = render::<VulkanHal>(&mut ctx, &scene);
+            compared += 1;
+            if first.pixels == again.pixels {
+                continue;
+            }
+            let (worst, count) = compare(&first, &again)
+                .map(|d| (d.max_delta, d.differing))
+                .unwrap_or((u8::MAX, 0));
+            differing.push(format!(
+                "{name}: {} by {worst} level(s) over {count} byte(s)",
+                scene.name
+            ));
+        }
+        // Structural, so it holds on any device: every scene was either
+        // compared or declined. Not a count of how many a device owes, which is
+        // the mistake the sibling test above shipped with once.
+        assert_eq!(
+            compared + unsupported,
+            catalog().len(),
+            "{name}: the walk did not account for every catalog scene"
+        );
+        eprintln!("{name}: rendered {compared} twice, {unsupported} unsupported");
+    }
+
+    if devices == 0 {
+        eprintln!("skipping: no Vulkan device");
+        return;
+    }
+    assert!(
+        differing.is_empty(),
+        "these scenes rendered differently the second time on the same Vulkan device: {}",
+        differing.join(", ")
+    );
+}
