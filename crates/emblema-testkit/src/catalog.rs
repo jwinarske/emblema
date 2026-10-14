@@ -442,7 +442,7 @@ fn sweep_many_colors(tile: TileMode) -> Fill {
 /// took it for the rectangle and not for its rounded neighbor would show the
 /// difference here and nowhere else.
 ///
-/// The three stops are bunched at one end -- nought, a tenth, and one -- so an
+/// The three stops are bunched at one end -- zero, a tenth, and one -- so an
 /// implementation that spaced them evenly would be obvious rather than subtle.
 fn fast_gradient(start: [f32; 2], end: [f32; 2], tile: TileMode) -> Vec<Item> {
     let fill = |()| Fill::LinearGradient {
@@ -6507,7 +6507,7 @@ fn vertices() -> Vec<Scene> {
             // Upstream's is four `DrawVertices` calls with
             // `texture_coordinates` set to the positions. Here the coordinates
             // are those positions over the square's extent, since the program
-            // ramps across nought to one rather than across a hundred pixels --
+            // ramps across zero to one rather than across a hundred pixels --
             // the same statement in the units the fixture reads.
             //
             // This scene is why `docs/non-parity.md` section 14 is gone. It had

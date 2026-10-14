@@ -507,7 +507,26 @@ fn the_tree_is_written_in_american_english() {
     // doubled consonant is the difference, so neither is a substring of the
     // American spelling. "judgement" and "analogue" are whole words, since
     // "judgment" and "analog" do not contain them.
-    const BRITISH: [&str; 28] = [
+    //
+    // The list is the *families* rather than the words this project happened to
+    // get wrong: -our, -ise and -isation, -re, the doubled -lled, -ogue, the
+    // -ce nouns, and the one-offs. A word earns its place by belonging to a
+    // family, which is what makes the check hold for prose nobody has written
+    // yet -- a list grown one correction at a time is green until the next word
+    // outside it arrives.
+    //
+    // Three of them cannot be stems, for the reason "analyse" cannot: the
+    // British noun and the American noun are the same word. "analysis",
+    // "emphasis" and "realism" are all spelled that way here, so the verb forms
+    // are spelled out instead -- and spelled out in both inflections, since
+    // "analysing" does not contain "analyse". "organis" was a stem and is not
+    // one now: "organism" is not a misspelling.
+    //
+    // And one belongs to a family and still cannot be searched for: "kerb" is
+    // inside "checkerboard", which three files use for the pattern it names. A
+    // substring search has no way to tell them apart, so the word is left out
+    // rather than exempted file by file.
+    const BRITISH: [&str; 99] = [
         "colour",
         "neighbour",
         "centre",
@@ -515,7 +534,9 @@ fn the_tree_is_written_in_american_english() {
         "recognis",
         "normalis",
         "optimis",
-        "organis",
+        "organise",
+        "organising",
+        "organisation",
         "serialis",
         "visualis",
         "initialis",
@@ -536,6 +557,75 @@ fn the_tree_is_written_in_american_english() {
         "signall",
         "judgement",
         "analogue",
+        "flavour",
+        "labour",
+        "rumour",
+        "vapour",
+        "armour",
+        "harbour",
+        "endeavour",
+        "rigour",
+        "vigour",
+        "odour",
+        "realise",
+        "realising",
+        "realisation",
+        "minimis",
+        "maximis",
+        "specialis",
+        "standardis",
+        "utilis",
+        "apologis",
+        "criticis",
+        "authoris",
+        "synchronis",
+        "customis",
+        "finalis",
+        "generalis",
+        "modernis",
+        "emphasise",
+        "emphasising",
+        "characteris",
+        "parameteris",
+        "rasteris",
+        "digitis",
+        "analysing",
+        "metre",
+        "litre",
+        "fibre",
+        "calibre",
+        "theatre",
+        "lustre",
+        "manoeuvre",
+        "defence",
+        "offence",
+        "pretence",
+        "practis",
+        "fuelled",
+        "totalled",
+        "levelled",
+        "channelled",
+        "dialled",
+        "dialogue",
+        "amongst",
+        "learnt",
+        "spelt",
+        "burnt",
+        "dreamt",
+        "aluminium",
+        "storey",
+        "enquire",
+        "sceptic",
+        "mould",
+        "plough",
+        "draught",
+        "tyre",
+        "nought",
+        "ageing",
+        "acknowledgement",
+        "cheque",
+        "programme",
+        "towards",
     ];
     // Everything tracked that a reader or a caller sees. The two untracked
     // files are excluded by not being here.
