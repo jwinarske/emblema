@@ -4235,6 +4235,43 @@ which ones qualify. `no_fixed_scene_reaches_the_condition_the_frame_loop_skips`
 records the narrow version separately, over 512 fixed scenes, so the gap between
 the two statements stays visible.
 
+**Which raises whether the generated property is a latent flake, and it is not.**
+If a mask blur is not necessary, a generated scene that is multisampled and
+reaches an advanced blend without one is outside the predicate and inside the
+first two clauses of the condition -- so the question is whether the generator
+makes them and gets away with it. Both halves measured, 2026-10-13:
+
+| | |
+|---|---|
+| generated scenes counted | 600 |
+| multisampled **and** reaching an advanced blend | 144 |
+| of those, carrying **no** mask blur -- outside the predicate | **91** |
+| `a_generated_scene_survives_other_frames`, 1100 cases over four independent seeds | **clean** |
+
+`PROPTEST_CASES` is what raises that, and it **overrides** the `cases: 48` in the
+file's own `proptest_config` rather than losing to it -- worth knowing before
+reading a sweep, since a literal in the source is the sort of thing that looks
+like it wins. Checked by the clock rather than assumed: 48 cases take 16.9s
+here, 0.351s each, and the 300-case rounds took 105.1s and 107.1s, which is
+299.5 cases. Each process reseeds from entropy, so separate runs are separate
+samples, which is the axis that matters here: a single run at any case count is
+one seed, and one seed cannot show a property is clean.
+
+So about one generated scene in seven sits in the gap between the predicate and
+the condition, and the property does not fail on them. **The blur clause is not
+what keeps it passing** -- the geometry is. The defect needs an edge partly
+covering samples *inside* the layer, which the probe builds on purpose and this
+generator produces rarely, and that is the real protection.
+
+Recorded because the obvious repair is wrong. Widening the predicate to drop the
+blur clause would exclude about a seventh more generated scenes and buy nothing,
+which is the same trade in the other direction -- an exclusion fitted to a
+mechanism rather than to a measurement.
+`the_predicate_is_narrower_than_the_condition_it_names` keeps the count honest by
+asserting the gap is **not empty**: if the strategy ever stops producing those
+scenes, nothing here exercises the gap any more and this note becomes unfounded,
+so it fails rather than passing quietly.
+
 Both scenes are named in the new test and left out, with everything else exact --
 the trade `frame_loop.rs` already makes, for the reason it gives: a bound raised
 until the suite passes is a bound fitted to the defect.

@@ -718,3 +718,68 @@ fn the_multisample_leak_predicate_names_its_own_case() {
         "if the first predicate covered it there would be no second one"
     );
 }
+
+/// How much of the generator's output the exclusion predicate actually covers.
+///
+/// `reaches_the_gles_instability` requires a mask blur, and the mask blur is
+/// **not necessary** for the defect: `probe-the-blend-instability`'s
+/// `shape-no-blur` still reports fifteen levels, at 87 bytes against the full
+/// scene's 317. So the predicate is narrower than the condition, and what keeps
+/// `a_generated_scene_survives_other_frames` passing is not that clause alone.
+///
+/// This counts, rather than argues. A scene that is multisampled and reaches an
+/// advanced blend but carries no mask blur is **outside** the predicate and
+/// inside the condition's first two clauses -- so if those were sufficient, the
+/// property would be failing on them routinely. It is not, which means the
+/// geometry is doing the work: the defect needs an edge partly covering samples
+/// *inside* the layer, which the probe builds deliberately and this generator
+/// produces rarely.
+///
+/// Printed rather than bounded. The number is a property of the strategy and
+/// would move with any change to it; what matters is that it is not zero, since
+/// a zero would mean the predicate's narrowness is untested here and this whole
+/// note is unfounded.
+#[test]
+fn the_predicate_is_narrower_than_the_condition_it_names() {
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = scene("counted");
+    let mut multisampled_and_advanced = 0usize;
+    let mut outside_the_predicate = 0usize;
+    let total = 600usize;
+    for _ in 0..total {
+        let tree = strategy.new_tree(&mut runner).expect("a scene");
+        let scene = tree.current();
+        let advanced = scene.items.iter().any(reaches_advanced);
+        if scene.samples > 1 && advanced {
+            multisampled_and_advanced += 1;
+            if !reaches_the_gles_instability(&scene) {
+                outside_the_predicate += 1;
+            }
+        }
+    }
+    eprintln!(
+        "of {total} generated scenes, {multisampled_and_advanced} are multisampled with an \
+         advanced blend, and {outside_the_predicate} of those carry no mask blur -- so the \
+         predicate does not claim them"
+    );
+    assert!(
+        outside_the_predicate > 0,
+        "the generator produced no multisampled advanced-blend scene without a mask blur, so \
+         nothing here exercises the gap between the predicate and the condition and the note \
+         above is unfounded"
+    );
+}
+
+/// The advanced-blend half of the predicate, reachable from the counter above.
+fn reaches_advanced(node: &Node) -> bool {
+    match node {
+        Node::Draw(item) => item.blend.is_advanced(),
+        Node::Layer {
+            layer, children, ..
+        } => layer.blend.is_advanced() || children.iter().any(reaches_advanced),
+        _ => false,
+    }
+}
