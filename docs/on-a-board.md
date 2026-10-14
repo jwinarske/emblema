@@ -4120,6 +4120,30 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### The corpus does not need the render-twice instrument, 2026-10-14
+
+Asked for symmetry, since the catalog now has it on both backends, and the
+answer is no -- with a reason rather than a passing test.
+
+**The corpus cannot reach the condition.** Of its 74 scenes, **10 are
+multisampled and none of those reaches an advanced blend.** The defect needs
+both, so there is nothing there for the instrument to find, and a test over the
+corpus would pass forever while asserting nothing about it.
+
+Measured anyway, as a check on that reasoning rather than instead of it: every
+corpus scene rendered twice in one context is identical on all three devices
+here -- `radeonsi` through GLES 74 of 74, RADV 68 of 68, lavapipe 74 of 74.
+
+**And the corpus is not short of a reference**, which is what made the catalog
+case worth closing. Every corpus scene is already compared on the default device
+against the software reference, with a per-scene tolerance; the 41 catalog scenes
+in the entry below had no comparison at all. Adding a render-twice test here
+would buy a green line, not coverage.
+
+Recorded so the symmetry argument does not get made again from the shape of the
+test list. If a multisampled advanced-blend scene is ever added to the corpus,
+this entry is the thing that stops being true.
+
 ### The same question of Vulkan, and what the answer does not cover, 2026-10-13
 
 The render-twice instrument below found two catalog scenes on `radeonsi`, one of
