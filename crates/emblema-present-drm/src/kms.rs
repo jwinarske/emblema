@@ -369,6 +369,10 @@ impl ScanoutOutput for KmsOutput {
         &self.formats
     }
 
+    fn device_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        Some(std::os::fd::AsFd::as_fd(&self.device))
+    }
+
     fn import_dmabuf(&mut self, buffer: DmaBufPlanes) -> Result<FbHandle> {
         // Each plane's fd becomes a GEM handle. Ownership of the fd transfers
         // here, and the import does not consume it — the fd is closed when the

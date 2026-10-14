@@ -4120,6 +4120,61 @@ not. So whatever DCC-MSAA state this depends on is not reset by allocating a new
 target, and nothing here has established what it is or why one frame per process
 gets it. The knob is identified; the mechanism behind the knob is not.
 
+### GBM allocates and the renderer draws into it, 2026-10-14
+
+The path is closed. `drmkit-gbm` 0.1.1 from the registry, at
+`default-features = false` so `drmkit-core` stays out -- it would bring a second
+`drm` surface this crate already has its own view of, which is what
+`GbmDevice::from_fd` was asked for. libgbm is opened at run time, so this adds
+no build dependency and `deny.toml` is unaffected: the workspace's own
+dependency test still passes with the crate in the graph.
+
+**The seam is one defaulted method.** `ScanoutOutput::device_fd()` returns an
+`Option<BorrowedFd>`, `None` by default -- the truth for a stand-in output, which
+has no card and therefore no GBM path -- and `KmsOutput` returns its device's.
+`std` types rather than this crate's or `drm`'s, so implementing the trait
+outside the workspace stays possible.
+
+**Measured on `card0`:**
+
+| | |
+|---|---|
+| GBM allocated | 1024x768, `AR24`, modifier `0x0` |
+| the renderer | imported it and drew into **every** texel |
+| the display | took the same allocation as a framebuffer |
+
+Two descriptors onto one allocation, because ownership of a descriptor
+transfers to whoever imports it and `gbm_bo_get_fd` hands out a new one per
+call. The modifier is read back rather than assumed, since a driver may answer
+a constrained request with a layout outside the list.
+
+**And the check that matters is the kernel's, not the pixels'.** This is the
+part worth keeping. Rendering into the imported image and reading it back
+**cannot** catch a stride stated wrongly: the draw and the readback both go
+through the layout this code declared, so the error cancels and every texel
+comes back perfect. Measured -- doubling the stride in `describe()` passes the
+pixel check over a 1024x768 buffer.
+
+What catches it is `drmModeAddFB2`, which validates a stride against the
+buffer's size and refuses:
+
+```
+add_planar_framebuffer: Invalid argument (os error 22)
+```
+
+So the display half of that test **asserts** rather than skips. It had been
+written to skip on any failure, which is the fail-open: the one independent
+check in the test was being swallowed. It now skips only where the driver
+substituted a layout the display never advertised, which is a real and
+different thing, and fails where the display refuses a format and modifier it
+does advertise.
+
+**Still absent:** the ring. This proves a GBM buffer can be allocated, imported
+and scanned out; `DrmScanoutTarget` still refuses where the renderer cannot
+allocate, because its slots hold a texture and a framebuffer and a GBM ring's
+slots must also own the `GbmBuffer` -- dropping that while either refers to the
+memory is the one way to use this wrongly.
+
 ### The GBM path needed an import, and export turns out to be single-plane, 2026-10-14
 
 Adopting `drmkit-gbm` looked like a dependency decision. It is not: the

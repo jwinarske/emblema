@@ -717,3 +717,158 @@ fn a_storm_of_resizes_neither_leaks_nor_breaks_the_commit() {
     );
     target.destroy(&mut ctx);
 }
+
+/// GBM allocates a scanout buffer and the renderer draws into it.
+///
+/// The path this crate named from the start and could not take: where a device
+/// cannot allocate its own scanout buffers, something else allocates and the
+/// renderer imports. Both halves are exercised here against a real card --
+/// `drmkit-gbm` allocating on the display's own descriptor, and
+/// `import_texture` making it a render target -- because either alone proves
+/// nothing about the other.
+///
+/// The display is served too, from a second descriptor onto the same
+/// allocation. That is the arrangement a ring needs: the renderer and the
+/// display each hold their own descriptor, and `gbm_bo_get_fd` hands out a new
+/// one per call.
+///
+/// Checked by the pixels rather than by the handles. An allocation whose stride
+/// was mis-stated, or an import bound to the wrong memory, still yields a
+/// texture and a framebuffer handle.
+#[test]
+fn gbm_allocates_a_buffer_the_renderer_can_draw_into() {
+    use emblema_present_drm::gbm::GbmAllocator;
+
+    let Some((mut output, _guard)) = output() else {
+        return;
+    };
+    let Ok(mut ctx) = Validated::new(DevicePreference::Auto) else {
+        eprintln!("skipping: no Vulkan device");
+        return;
+    };
+    if !ctx.capabilities().dma_buf.import {
+        eprintln!("skipping: this device cannot import a dma-buf");
+        return;
+    }
+    let Some(fd) = output.device_fd() else {
+        eprintln!("skipping: this output has no DRM device to allocate on");
+        return;
+    };
+    let allocator = match GbmAllocator::open(fd) {
+        Ok(allocator) => allocator,
+        Err(e) => {
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+
+    let formats = output.supported_formats().to_vec();
+    let Some(set) = formats.iter().find(|s| {
+        s.fourcc == emblema_hal::Fourcc::XRGB8888 || s.fourcc == emblema_hal::Fourcc::ARGB8888
+    }) else {
+        eprintln!("skipping: this display offers no eight-bit format");
+        return;
+    };
+    let extent = output.mode().extent;
+
+    let allocated = match allocator.allocate(extent, set.fourcc, &set.modifiers) {
+        Ok(allocated) => allocated,
+        Err(e) => {
+            eprintln!("skipping: GBM would not allocate for this display ({e})");
+            return;
+        }
+    };
+    eprintln!(
+        "gbm allocated {}x{} as {} at modifier {:#x}",
+        extent.width,
+        extent.height,
+        allocated.fourcc(),
+        allocated.modifier().0
+    );
+
+    // The renderer's descriptor.
+    let described = allocated.describe().expect("a descriptor for the renderer");
+    let format = match allocated.fourcc() {
+        f if f == emblema_hal::Fourcc::ARGB8888 || f == emblema_hal::Fourcc::XRGB8888 => {
+            PixelFormat::Bgra8Unorm
+        }
+        other => panic!("unexpected format {other}"),
+    };
+    let mut texture = match ctx.import_texture(described, extent, format) {
+        Ok(texture) => texture,
+        Err(e) => {
+            // Reported rather than skipped: a GBM buffer this renderer cannot
+            // import is the whole path failing, not a capability gap.
+            panic!("importing a GBM buffer was refused: {e}");
+        }
+    };
+
+    let mut batch = Batch::new();
+    batch
+        .push(
+            &[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]],
+            &[0, 1, 2, 0, 2, 3],
+            Material::solid([0.0, 0.0, 1.0, 1.0]),
+            BlendMode::Src,
+        )
+        .expect("push");
+    ctx.submit_batch(
+        &mut texture,
+        &batch,
+        PassDescriptor::clear([0.0, 0.0, 0.0, 1.0]),
+    )
+    .expect("submit into the GBM buffer");
+
+    let pixels = ctx.read_texture(&mut texture).expect("readback");
+    let wrong = pixels
+        .chunks_exact(4)
+        .filter(|texel| texel[0] != 255 || texel[1] != 0 || texel[2] != 0)
+        .count();
+    assert_eq!(
+        wrong,
+        0,
+        "{wrong} of {} texels in the GBM buffer are not the blue that was drawn; first is {:?}",
+        pixels.len() / 4,
+        &pixels[..4]
+    );
+
+    // And the display's own descriptor onto the same allocation.
+    let for_display = allocated.describe().expect("a second descriptor");
+    // Whether this display ever offered what came back. A driver may answer a
+    // constrained request with a layout outside the list -- measured on two
+    // boards -- and a display refusing a layout it never advertised is not a
+    // defect.
+    let advertised = formats
+        .iter()
+        .any(|s| s.fourcc == allocated.fourcc() && s.modifiers.contains(&allocated.modifier()));
+    match output.import_dmabuf(DmaBufPlanes {
+        planes: for_display.planes,
+        fourcc: for_display.fourcc,
+        modifier: for_display.modifier,
+        extent,
+    }) {
+        Ok(fb) => {
+            eprintln!("the display took the same allocation as a framebuffer");
+            output.release_framebuffer(fb);
+        }
+        Err(e) if !advertised => eprintln!(
+            "skipping the display half: it does not advertise {} at {:#x} ({e})",
+            allocated.fourcc(),
+            allocated.modifier().0
+        ),
+        // Asserted rather than skipped, and this is the load-bearing half. The
+        // kernel validates a stride against the buffer's size, so it is the one
+        // check here independent of the descriptor this test wrote: rendering
+        // into the imported image and reading it back uses that same layout
+        // both ways, so a stride stated wrongly cancels out and the pixels come
+        // back perfect. Measured -- doubling the stride passes the readback and
+        // fails here with `add_planar_framebuffer: Invalid argument`.
+        Err(e) => panic!(
+            "the display refused a buffer at {} and {:#x}, both of which it advertises: {e}",
+            allocated.fourcc(),
+            allocated.modifier().0
+        ),
+    }
+
+    ctx.destroy_texture(texture);
+}

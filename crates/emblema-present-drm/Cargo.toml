@@ -16,6 +16,14 @@ workspace = true
 
 [dependencies]
 drm = { version = "0.15.0", default-features = false }
+# GBM allocation for the path this crate has named since it was written: where
+# the renderer cannot allocate its own scanout buffers, GBM allocates and the
+# renderer imports. `default-features = false` drops `drmkit-core`, which would
+# bring a second `drm` surface this crate already has its own view of -- and is
+# why `GbmDevice::from_fd` exists. Opens libgbm at run time, so this stays a
+# pure-Rust build with no pkg-config and no C toolchain, which `deny.toml`
+# requires of every dependency.
+drmkit-gbm = { version = "0.1.1", default-features = false }
 emblema-core = { workspace = true }
 emblema-hal = { workspace = true }
 emblema-present = { workspace = true }

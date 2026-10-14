@@ -123,6 +123,22 @@ pub trait ScanoutOutput {
     fn supported_formats(&self) -> &[FormatModifierSet];
 
     /// Turn an exported buffer into a framebuffer.
+    /// The DRM device this output is driven through, where there is one.
+    ///
+    /// Needed by the GBM path and nothing else: GBM allocates on the display's
+    /// device, because the point of that path is a buffer the display can scan
+    /// out on a SoC where the GPU would choose a layout it cannot.
+    ///
+    /// Defaulted to `None`, which is the truth for a stand-in: an output backed
+    /// by a recording rather than a card has no descriptor to offer, and the
+    /// caller then has no GBM path available. A borrowed descriptor rather than
+    /// an owned one, and `std` types rather than this crate's or `drm`'s, so
+    /// that implementing this trait outside the workspace stays possible and
+    /// the seam stays swappable.
+    fn device_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        None
+    }
+
     fn import_dmabuf(&mut self, buffer: DmaBufPlanes) -> Result<FbHandle>;
 
     /// Release a framebuffer.
