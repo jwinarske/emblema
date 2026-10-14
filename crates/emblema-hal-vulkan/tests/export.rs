@@ -111,16 +111,34 @@ fn an_exported_image_carries_a_descriptor_and_a_real_layout() {
     let exported = ctx.export_texture(&texture).expect("export");
     assert_eq!(exported.fourcc, chosen.fourcc);
     assert_eq!(exported.modifier, modifier);
-    assert_eq!(exported.planes.len(), 1, "expected a single-plane image");
+    // As many planes as the modifier has, which is not always one: this device
+    // picks an AMD DCC layout whose metadata is a second plane. This read
+    // `== 1` until export learned to describe them all, and that assertion was
+    // recording what export could do rather than what the image is.
+    assert!(
+        !exported.planes.is_empty(),
+        "an exported image was described with no planes"
+    );
+    eprintln!("{modifier} described in {} plane(s)", exported.planes.len());
 
     // A stride of zero, or one narrower than the image, would produce a
-    // framebuffer the display controller reads garbage from.
+    // framebuffer the display controller reads garbage from. Plane zero holds
+    // the pixels, so it is the one with a row to be too narrow for; a metadata
+    // plane's stride is the driver's business and has no such floor.
     let plane = &exported.planes[0];
     assert!(
         plane.stride >= 64 * 4,
         "stride {} is too small for a 64-pixel row",
         plane.stride
     );
+    // Every plane's descriptor, not just the first: a second plane described
+    // with a closed or invalid one fails at the importer and nowhere earlier.
+    for (index, plane) in exported.planes.iter().enumerate() {
+        plane
+            .fd
+            .try_clone()
+            .unwrap_or_else(|e| panic!("plane {index}'s descriptor is not an open file: {e}"));
+    }
 
     // The descriptor must be a real, open file: that is the whole point, and an
     // invalid one would fail only much later, at import on the display side.
@@ -352,6 +370,108 @@ fn an_exported_dma_buf_can_be_imported_and_rendered_into() {
             .count(),
         pixels.len() / 4,
         wrong.join(", ")
+    );
+
+    let errors: Vec<_> = ctx
+        .validation_messages()
+        .into_iter()
+        .filter(|m| m.severity == emblema_hal_vulkan::ValidationSeverity::Error)
+        .collect();
+    assert!(errors.is_empty(), "validation errors: {errors:?}");
+
+    ctx.destroy_texture(imported);
+    ctx.destroy_texture(source);
+}
+
+/// The round trip at the layout the device chooses for itself.
+///
+/// The test above forces LINEAR, and had to: left to choose, RADV picks an AMD
+/// DCC modifier with **two** memory planes, and export described only plane
+/// zero -- so importing this device's own export was refused with
+/// `ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`. Export now describes
+/// every plane the modifier declares and import requires the count to match.
+///
+/// This is the case that matters on a device whose preferred layout is not
+/// linear, which is most of them: a single-plane description of a two-plane
+/// buffer is not a near miss, it is half a layout, and a display told the same
+/// thing scans out the wrong bytes.
+///
+/// Deliberately *not* pinned to a modifier. The point is whatever the driver
+/// prefers, so this reports what it got and passes on one plane as readily as
+/// on two -- a device that prefers linear exercises the same code path with
+/// `planes == 1`.
+#[test]
+fn the_round_trip_works_at_the_layout_the_device_prefers() {
+    let Some(mut ctx) = context() else { return };
+    if !exportable(&ctx) {
+        return;
+    }
+    if !ctx.capabilities().dma_buf.import {
+        eprintln!("skipping: this device cannot import a dma-buf");
+        return;
+    }
+    let render = ctx.capabilities().render_formats.clone();
+    let Some(set) = render
+        .iter()
+        .find(|s| s.fourcc == emblema_hal::Fourcc::ARGB8888)
+    else {
+        eprintln!("skipping: no eight-bit format to negotiate with");
+        return;
+    };
+
+    let extent = Extent2D::new(64, 64);
+    // Every modifier it offers, in its own preference order: the driver picks.
+    let source = ctx
+        .create_exportable_texture(extent, PixelFormat::Bgra8Unorm, &set.modifiers)
+        .expect("exportable texture");
+    let described = ctx.export_texture(&source).expect("export");
+    eprintln!(
+        "the device chose modifier {:#x}, described in {} plane(s)",
+        described.modifier.0,
+        described.planes.len()
+    );
+    assert!(
+        !described.planes.is_empty(),
+        "an exported image was described with no planes at all"
+    );
+
+    let mut imported = match ctx.import_texture(described, extent, PixelFormat::Bgra8Unorm) {
+        Ok(texture) => texture,
+        Err(e) => {
+            ctx.destroy_texture(source);
+            panic!("importing this device's own preferred layout was refused: {e}");
+        }
+    };
+
+    let mut batch = emblema_hal::Batch::new();
+    batch
+        .push(
+            &[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]],
+            &[0, 1, 2, 0, 2, 3],
+            Material::solid([0.0, 0.0, 1.0, 1.0]),
+            BlendMode::Src,
+        )
+        .expect("push");
+    ctx.submit_batch(
+        &mut imported,
+        &batch,
+        PassDescriptor::clear([0.0, 0.0, 0.0, 1.0]),
+    )
+    .expect("submit into the imported image");
+
+    let pixels = ctx.read_texture(&mut imported).expect("readback");
+    // Bgra8Unorm stores blue in byte zero. Every texel, for the reason the test
+    // above gives: a stride stated wrongly leaves pixel zero correct.
+    let wrong = pixels
+        .chunks_exact(4)
+        .filter(|texel| *texel != [255u8, 0, 0, 255])
+        .count();
+    assert_eq!(
+        wrong,
+        0,
+        "{wrong} of {} texels are not the color drawn; first is {:?}",
+        pixels.len() / 4,
+        &pixels[..4]
     );
 
     let errors: Vec<_> = ctx

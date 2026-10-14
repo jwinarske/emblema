@@ -149,6 +149,52 @@ pub fn query_format_modifiers(
     Some(FormatModifierSet::new(fourcc, modifiers))
 }
 
+/// How many memory planes a format has at a given modifier.
+///
+/// Not a property of the format alone: AMD's DCC modifiers put the metadata in
+/// a second plane, so the same `ARGB8888` is one plane linear and two tiled.
+/// `VkDrmFormatModifierPropertiesEXT` carries this and the modifier query above
+/// discarded it, which is why export described only plane zero for as long as it
+/// did.
+fn plane_count(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    format: PixelFormat,
+    modifier: Modifier,
+) -> Option<u32> {
+    let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
+    let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+    // SAFETY: the physical device outlives the call, and the chain is a
+    // properties query with no preconditions.
+    unsafe {
+        instance.get_physical_device_format_properties2(
+            physical_device,
+            vk_format(format),
+            &mut properties,
+        );
+    }
+    let count = list.drm_format_modifier_count as usize;
+    if count == 0 {
+        return None;
+    }
+    let mut entries = vec![vk::DrmFormatModifierPropertiesEXT::default(); count];
+    list.p_drm_format_modifier_properties = entries.as_mut_ptr();
+    let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+    // SAFETY: the buffer is sized by the count the first call reported.
+    unsafe {
+        instance.get_physical_device_format_properties2(
+            physical_device,
+            vk_format(format),
+            &mut properties,
+        );
+    }
+    entries
+        .iter()
+        .take(count)
+        .find(|e| e.drm_format_modifier == modifier.0)
+        .map(|e| e.drm_format_modifier_plane_count)
+}
+
 impl VulkanContext {
     /// Allocate an image that can be exported as a dma-buf.
     ///
@@ -312,14 +358,30 @@ impl VulkanContext {
                 "importing a dma-buf whose modifier is INVALID",
             ));
         }
-        let [plane] = &image.planes[..] else {
-            // Refused rather than partly handled. Every format this renderer
-            // scans out is single-plane, and an importer that took the first
-            // plane of several would produce a picture that looks nearly right.
-            return Err(Error::Unsupported(
-                "importing a dma-buf with more than one plane",
-            ));
+        let Some(plane) = image.planes.first() else {
+            return Err(Error::Unsupported("importing a dma-buf with no planes"));
         };
+        // Every plane the modifier declares must be described, and the count
+        // has to match: Vulkan refuses an explicit modifier whose plane count
+        // disagrees with the layouts handed in, which is where this used to
+        // fail against this device's own export.
+        let declared = plane_count(
+            self.raw_instance(),
+            self.raw_physical_device(),
+            format,
+            image.modifier,
+        )
+        .unwrap_or(1)
+        .max(1) as usize;
+        if image.planes.len() != declared {
+            return Err(Error::Backend {
+                backend: "vulkan",
+                detail: format!(
+                    "this modifier declares {declared} memory plane(s) and {} were described",
+                    image.planes.len()
+                ),
+            });
+        }
         if !self.capabilities().can_allocate(extent) {
             return Err(Error::LimitExceeded {
                 what: "texture dimension",
@@ -329,9 +391,15 @@ impl VulkanContext {
         }
 
         let device = self.raw_device().clone();
-        let layouts = [vk::SubresourceLayout::default()
-            .offset(u64::from(plane.offset))
-            .row_pitch(u64::from(plane.stride))];
+        let layouts: Vec<vk::SubresourceLayout> = image
+            .planes
+            .iter()
+            .map(|p| {
+                vk::SubresourceLayout::default()
+                    .offset(u64::from(p.offset))
+                    .row_pitch(u64::from(p.stride))
+            })
+            .collect();
         let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
             .drm_format_modifier(image.modifier.0)
             .plane_layouts(&layouts);
@@ -408,8 +476,15 @@ impl VulkanContext {
                 return Err(backend_err("allocate_memory (imported)", e));
             }
         };
-        // Owned by Vulkan from here, so the `OwnedFd` must not close it.
-        let _ = image.planes.into_iter().next().map(|p| p.fd.into_raw_fd());
+        // Owned by Vulkan from here, so that one `OwnedFd` must not close it.
+        // The others are duplicates onto the same allocation and are closed
+        // when `image` drops, which is correct: Vulkan took one reference and
+        // the rest were only ever a way to describe offsets.
+        let mut planes = image.planes.into_iter();
+        if let Some(first) = planes.next() {
+            let _ = first.fd.into_raw_fd();
+        }
+        drop(planes);
 
         if let Err(e) = unsafe { device.bind_image_memory(vk_image, memory, 0) } {
             unsafe {
@@ -509,20 +584,68 @@ impl VulkanContext {
         // SAFETY: the driver returned a fresh, owned descriptor.
         let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) };
 
-        let subresource =
-            vk::ImageSubresource::default().aspect_mask(vk::ImageAspectFlags::MEMORY_PLANE_0_EXT);
-        // SAFETY: a modifier image's plane layout is queried this way.
-        let layout = unsafe {
-            self.raw_device()
-                .get_image_subresource_layout(texture.image, subresource)
+        // Every plane the modifier declares, not just the first. A DCC
+        // modifier puts its metadata in a second plane, and describing only
+        // plane zero hands over half a layout -- an importer then refuses with
+        // ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT, and a display
+        // told the same thing would scan out the wrong bytes.
+        let planes = plane_count(
+            self.raw_instance(),
+            self.raw_physical_device(),
+            texture.format,
+            modifier,
+        )
+        .unwrap_or(1)
+        .max(1);
+        let aspects = [
+            vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+            vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
+            vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
+            vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
+        ];
+        let Some(aspects) = aspects.get(..planes as usize) else {
+            return Err(Error::Backend {
+                backend: "vulkan",
+                detail: format!(
+                    "this modifier declares {planes} memory planes, past the four \
+                                 a dma-buf describes"
+                ),
+            });
         };
 
-        Ok(emblema_hal::ExternalImageDesc {
-            planes: vec![emblema_hal::DmaBufPlane {
+        let mut described = Vec::with_capacity(aspects.len());
+        for (index, aspect) in aspects.iter().enumerate() {
+            let subresource = vk::ImageSubresource::default().aspect_mask(*aspect);
+            // SAFETY: a modifier image's plane layout is queried this way, and
+            // the aspect is one the modifier declares.
+            let layout = unsafe {
+                self.raw_device()
+                    .get_image_subresource_layout(texture.image, subresource)
+            };
+            // One descriptor per plane, all onto the same allocation: the
+            // planes live at offsets within one dma-buf, and an importer takes
+            // ownership of each descriptor it is handed. The first is the one
+            // the driver returned; the rest are duplicates of it.
+            let fd = if index == 0 {
+                fd.try_clone().map_err(|e| Error::Backend {
+                    backend: "vulkan",
+                    detail: format!("duplicating the exported descriptor: {e}"),
+                })?
+            } else {
+                fd.try_clone().map_err(|e| Error::Backend {
+                    backend: "vulkan",
+                    detail: format!("duplicating the exported descriptor for plane {index}: {e}"),
+                })?
+            };
+            described.push(emblema_hal::DmaBufPlane {
                 fd,
                 offset: layout.offset as u32,
                 stride: layout.row_pitch as u32,
-            }],
+            });
+        }
+
+        Ok(emblema_hal::ExternalImageDesc {
+            planes: described,
             fourcc,
             modifier,
         })
