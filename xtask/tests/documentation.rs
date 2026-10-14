@@ -485,9 +485,16 @@ fn the_tree_is_written_in_american_english() {
     //
     // Checked by spelling rather than by a dictionary, because the list of
     // words this project actually uses is short and a dictionary would need one
-    // anyway. None of these is a substring of an American word, which is what
-    // makes an unanchored search the right one -- "recolours" has to be found
-    // as surely as "colours".
+    // anyway. The search is unanchored, which is what makes it the right one --
+    // "recolours" has to be found as surely as "colours" -- and what makes an
+    // entry that is inside an American word a false failure.
+    //
+    // The list is the *families* rather than the words this project happened to
+    // get wrong: -our, -ise and -isation, -re, the doubled -lled, -ogue, the
+    // -ce nouns, and the one-offs. A word earns its place by belonging to a
+    // family, which is what makes the check hold for prose nobody has written
+    // yet -- a list grown one correction at a time is green until the next word
+    // outside it arrives.
     //
     // Stems rather than whole words, and that is a fix rather than a tidy-up.
     // The list held "recognise" and "normalise", which are not substrings of
@@ -497,79 +504,33 @@ fn the_tree_is_written_in_american_english() {
     // "optimisation", a "Honouring", and "grey" in two spellings of the same
     // identifier. Each was in the tree while this test was green.
     //
-    // "analyse" stays a whole word on purpose: "analys" is a substring of
-    // "analysis", which is spelled that way on both sides of the Atlantic. The
-    // same reading turned up "licence", which is the noun in British English
-    // and "license" in American for both parts of speech, and four test names
-    // spelled in the wrong one.
+    // Porting the check to tessella and tessella_emblema is what found the two
+    // false positives below. Both were in those trees, so neither is a
+    // hypothetical this file is being made safe against.
+
+    // The -ise verbs, as stems, each searched with the three endings a British
+    // verb takes: `-ise` (which covers `-ised` and `-ises` too), `-ising` and
+    // `-isation`. Not the bare stem, because the bare stem is inside the
+    // American `-ism` and `-ist` nouns -- "criticism", "optimism", "organism",
+    // "realism", "modernism", "apologist" -- and tessella's `plan.md` says
+    // "criticism", which `criticis` as a stem called British.
     //
-    // "travell" and "signall" are stems on the same grounds as the rest: the
-    // doubled consonant is the difference, so neither is a substring of the
-    // American spelling. "judgement" and "analogue" are whole words, since
-    // "judgment" and "analog" do not contain them.
-    //
-    // The list is the *families* rather than the words this project happened to
-    // get wrong: -our, -ise and -isation, -re, the doubled -lled, -ogue, the
-    // -ce nouns, and the one-offs. A word earns its place by belonging to a
-    // family, which is what makes the check hold for prose nobody has written
-    // yet -- a list grown one correction at a time is green until the next word
-    // outside it arrives.
-    //
-    // Three of them cannot be stems, for the reason "analyse" cannot: the
-    // British noun and the American noun are the same word. "analysis",
-    // "emphasis" and "realism" are all spelled that way here, so the verb forms
-    // are spelled out instead -- and spelled out in both inflections, since
-    // "analysing" does not contain "analyse". "organis" was a stem and is not
-    // one now: "organism" is not a misspelling.
-    //
-    // And one belongs to a family and still cannot be searched for: "kerb" is
-    // inside "checkerboard", which three files use for the pattern it names. A
-    // substring search has no way to tell them apart, so the word is left out
-    // rather than exempted file by file.
-    const BRITISH: [&str; 99] = [
-        "colour",
-        "neighbour",
-        "centre",
-        "behaviour",
+    // This is the same argument "analyse", "realise", "emphasise" and
+    // "organise" were already spelled out for, read once instead of four
+    // times: "analys" is inside "analysis", and its three endings give
+    // "analyse" and "analysing" without it.
+    const ISE: [&str; 31] = [
         "recognis",
         "normalis",
-        "optimis",
-        "organise",
-        "organising",
-        "organisation",
+        "organis",
         "serialis",
         "visualis",
         "initialis",
         "prioritis",
         "summaris",
         "quantis",
-        "analyse",
-        "favour",
-        "honour",
-        "grey",
-        "whilst",
-        "licence",
-        "catalogue",
-        "modelled",
-        "labelled",
-        "cancelled",
-        "travell",
-        "signall",
-        "judgement",
-        "analogue",
-        "flavour",
-        "labour",
-        "rumour",
-        "vapour",
-        "armour",
-        "harbour",
-        "endeavour",
-        "rigour",
-        "vigour",
-        "odour",
-        "realise",
-        "realising",
-        "realisation",
+        "analys",
+        "realis",
         "minimis",
         "maximis",
         "specialis",
@@ -583,13 +544,49 @@ fn the_tree_is_written_in_american_english() {
         "finalis",
         "generalis",
         "modernis",
-        "emphasise",
-        "emphasising",
+        "emphasis",
         "characteris",
         "parameteris",
         "rasteris",
         "digitis",
-        "analysing",
+        "optimis",
+        "practis",
+    ];
+    // Everything else, searched as written. Stems where the doubled consonant
+    // or the ending is the whole difference, so one entry catches every
+    // inflected form: "travell" finds "travelled" and "travelling", neither of
+    // which contains the American spelling. Whole words where the American
+    // form is shorter and so cannot contain them -- "judgement", "analogue"
+    // and "catalogue" are not inside "judgment", "analog" or "catalog".
+    //
+    // Two words belong to a family and still cannot be searched for. "kerb" is
+    // inside **checkerboard**, which three files here use for the pattern it
+    // names, and "programme" is inside **programmer** and **programmed** --
+    // tessella_emblema counts `unprogrammed` batches, and the stem failed on a
+    // correctly spelled identifier. Both are left out rather than exempted file
+    // by file, because a substring search has no way to tell them apart.
+    //
+    // "grey" has the same shape -- it is inside "greyhound" -- and stays,
+    // because the color appears in this tree and the dog does not.
+    const BRITISH: [&str; 61] = [
+        // -our
+        "colour",
+        "neighbour",
+        "behaviour",
+        "favour",
+        "honour",
+        "flavour",
+        "labour",
+        "rumour",
+        "vapour",
+        "armour",
+        "harbour",
+        "endeavour",
+        "rigour",
+        "vigour",
+        "odour",
+        // -re
+        "centre",
         "metre",
         "litre",
         "fibre",
@@ -597,17 +594,32 @@ fn the_tree_is_written_in_american_english() {
         "theatre",
         "lustre",
         "manoeuvre",
+        // -ce nouns
+        "licence",
         "defence",
         "offence",
         "pretence",
-        "practis",
+        // the doubled -lled
+        "modelled",
+        "labelled",
+        "cancelled",
+        "travell",
+        "signall",
         "fuelled",
         "totalled",
         "levelled",
         "channelled",
         "dialled",
+        // -ogue
+        "catalogue",
+        "analogue",
         "dialogue",
+        // one-offs
+        "grey",
+        "whilst",
         "amongst",
+        "judgement",
+        "acknowledgement",
         "learnt",
         "spelt",
         "burnt",
@@ -622,11 +634,16 @@ fn the_tree_is_written_in_american_english() {
         "tyre",
         "nought",
         "ageing",
-        "acknowledgement",
         "cheque",
-        "programme",
         "towards",
     ];
+    // Expanded once rather than per file: 154 terms against the tree.
+    let mut terms: Vec<String> = BRITISH.iter().map(|word| (*word).to_string()).collect();
+    for stem in ISE {
+        terms.push(format!("{stem}e"));
+        terms.push(format!("{stem}ing"));
+        terms.push(format!("{stem}ation"));
+    }
     // Everything tracked that a reader or a caller sees. The two untracked
     // files are excluded by not being here.
     let roots = ["crates", "xtask", "docs", "playground", "tests", ".github"];
@@ -641,7 +658,7 @@ fn the_tree_is_written_in_american_english() {
             continue;
         };
         let lower = text.to_lowercase();
-        for word in BRITISH {
+        for word in &terms {
             if lower.contains(word) {
                 found.push(format!("{}: {word}", path.display()));
             }
@@ -679,7 +696,7 @@ fn the_tree_is_written_in_american_english() {
                     continue;
                 };
                 let lower = text.to_lowercase();
-                for word in BRITISH {
+                for word in &terms {
                     if lower.contains(word) {
                         found.push(format!("{}: {word}", path.display()));
                     }
