@@ -247,3 +247,120 @@ fn exported_descriptors_are_distinct_and_do_not_leak() {
     }
     assert_eq!(previous.len(), 32);
 }
+
+/// A dma-buf this device exported can be imported back and rendered into.
+///
+/// The round trip is the test, and it is the half the DRM path needs where a
+/// device cannot allocate its own scanout buffers: something else allocates,
+/// this imports, and the renderer draws into an image it did not make. Doing it
+/// against this device's own export is what makes the test runnable anywhere
+/// that exports at all -- a GBM allocation would prove the same thing and needs
+/// a card.
+///
+/// The imported image is checked by drawing into it and reading it back, not by
+/// its handle being non-null: an import that bound the wrong memory type or
+/// mis-stated the plane's stride still returns a texture, and only the pixels
+/// say otherwise.
+#[test]
+fn an_exported_dma_buf_can_be_imported_and_rendered_into() {
+    let Some(mut ctx) = context() else { return };
+    if !exportable(&ctx) {
+        return;
+    }
+    if !ctx.capabilities().dma_buf.import {
+        eprintln!("skipping: this device cannot import a dma-buf");
+        return;
+    }
+    let render = ctx.capabilities().render_formats.clone();
+    let Some(set) = render
+        .iter()
+        .find(|s| s.fourcc == emblema_hal::Fourcc::ARGB8888)
+    else {
+        eprintln!("skipping: no eight-bit format to negotiate with");
+        return;
+    };
+
+    // LINEAR deliberately, not the device's preference. Left to choose, RADV
+    // picks an AMD DCC modifier -- measured, `0x20000000056bb03` -- which has
+    // two memory planes, and both this crate's export and its import handle one.
+    // See `docs/on-a-board.md`: that is a real gap, and it is not this test's
+    // subject. LINEAR is also what GBM hands back on every board on this bench,
+    // so it is the case the GBM path actually needs.
+    if !set.modifiers.contains(&emblema_hal::Modifier::LINEAR) {
+        eprintln!("skipping: this device will not render into a linear layout");
+        return;
+    }
+    let extent = Extent2D::new(32, 32);
+    let source = ctx
+        .create_exportable_texture(
+            extent,
+            PixelFormat::Bgra8Unorm,
+            &[emblema_hal::Modifier::LINEAR],
+        )
+        .expect("exportable texture");
+    let described = ctx.export_texture(&source).expect("export");
+    eprintln!(
+        "exported {} plane(s), modifier {:#x}",
+        described.planes.len(),
+        described.modifier.0
+    );
+
+    let mut imported = match ctx.import_texture(described, extent, PixelFormat::Bgra8Unorm) {
+        Ok(texture) => texture,
+        Err(e) => {
+            // Said rather than swallowed: a device that exports but refuses its
+            // own export is a finding, not a capability gap.
+            ctx.destroy_texture(source);
+            panic!("importing this device's own export was refused: {e}");
+        }
+    };
+
+    let mut batch = emblema_hal::Batch::new();
+    batch
+        .push(
+            &[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]],
+            &[0, 1, 2, 0, 2, 3],
+            Material::solid([0.0, 1.0, 0.0, 1.0]),
+            BlendMode::Src,
+        )
+        .expect("push");
+    ctx.submit_batch(
+        &mut imported,
+        &batch,
+        PassDescriptor::clear([0.0, 0.0, 0.0, 1.0]),
+    )
+    .expect("submit into the imported image");
+
+    let pixels = ctx.read_texture(&mut imported).expect("readback");
+    // Every pixel, not the first one. The draw covers the whole target, so a
+    // stride or offset stated wrongly on import moves later rows while leaving
+    // pixel zero perfectly green -- measured: doubling `row_pitch` passes a
+    // check on `pixels[..4]` and fails this one.
+    let wrong = pixels
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(_, texel)| *texel != [0u8, 255, 0, 255])
+        .map(|(i, texel)| format!("{}: {texel:?}", i))
+        .take(4)
+        .collect::<Vec<_>>();
+    assert!(
+        wrong.is_empty(),
+        "{} of {} texels are not the color drawn; first few: {}",
+        pixels
+            .chunks_exact(4)
+            .filter(|t| *t != [0u8, 255, 0, 255])
+            .count(),
+        pixels.len() / 4,
+        wrong.join(", ")
+    );
+
+    let errors: Vec<_> = ctx
+        .validation_messages()
+        .into_iter()
+        .filter(|m| m.severity == emblema_hal_vulkan::ValidationSeverity::Error)
+        .collect();
+    assert!(errors.is_empty(), "validation errors: {errors:?}");
+
+    ctx.destroy_texture(imported);
+    ctx.destroy_texture(source);
+}

@@ -273,6 +273,168 @@ impl VulkanContext {
         })
     }
 
+    /// Import a dma-buf as an image the renderer can draw into.
+    ///
+    /// The mirror of [`Self::create_exportable_texture`], and the half the DRM
+    /// path needs where this device cannot allocate its own scanout buffers:
+    /// GBM allocates, this imports, and the renderer draws into something it
+    /// did not make.
+    ///
+    /// Three things differ from allocating. The modifier is *explicit* rather
+    /// than a list, because the buffer already has a layout and the driver is
+    /// being told it rather than asked. The memory is imported rather than
+    /// allocated, so the memory type comes from what the descriptor itself
+    /// permits intersected with what the image requires, not from a property
+    /// search. And the allocation is dedicated for the same reason the export
+    /// side is: a dma-buf is a whole allocation.
+    #[cfg(unix)]
+    pub fn import_texture(
+        &mut self,
+        image: emblema_hal::ExternalImageDesc,
+        extent: Extent2D,
+        format: PixelFormat,
+    ) -> Result<VulkanTexture> {
+        use std::os::fd::{AsRawFd as _, IntoRawFd as _};
+
+        if !self.capabilities().dma_buf.import {
+            return Err(Error::Unsupported("dma-buf import"));
+        }
+        if !self.capabilities().dma_buf.modifiers {
+            return Err(Error::Unsupported(
+                "importing a dma-buf requires explicit format modifiers",
+            ));
+        }
+        if image.modifier == Modifier::INVALID {
+            // A buffer whose layout nobody stated cannot be imported with an
+            // explicit modifier, and guessing is how an importer ends up
+            // reading tiled memory as linear.
+            return Err(Error::Unsupported(
+                "importing a dma-buf whose modifier is INVALID",
+            ));
+        }
+        let [plane] = &image.planes[..] else {
+            // Refused rather than partly handled. Every format this renderer
+            // scans out is single-plane, and an importer that took the first
+            // plane of several would produce a picture that looks nearly right.
+            return Err(Error::Unsupported(
+                "importing a dma-buf with more than one plane",
+            ));
+        };
+        if !self.capabilities().can_allocate(extent) {
+            return Err(Error::LimitExceeded {
+                what: "texture dimension",
+                requested: extent.width.max(extent.height) as u64,
+                limit: self.capabilities().max_texture_size as u64,
+            });
+        }
+
+        let device = self.raw_device().clone();
+        let layouts = [vk::SubresourceLayout::default()
+            .offset(u64::from(plane.offset))
+            .row_pitch(u64::from(plane.stride))];
+        let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+            .drm_format_modifier(image.modifier.0)
+            .plane_layouts(&layouts);
+        let mut external = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk_format(format))
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut explicit)
+            .push_next(&mut external);
+
+        // SAFETY: the chained structures outlive the call, and every object is
+        // destroyed on the failure paths below.
+        let vk_image = unsafe { device.create_image(&info, None) }
+            .map_err(|e| backend_err("create_image (imported)", e))?;
+
+        // What the descriptor permits, rather than a property search: an
+        // imported allocation's memory type is decided by the buffer, and
+        // asking for DEVICE_LOCAL here would be asking the wrong question.
+        let loader = ash::khr::external_memory_fd::Device::new(self.raw_instance(), &device);
+        let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
+        // SAFETY: the descriptor is open and is a dma-buf, which is the handle
+        // type named.
+        if let Err(e) = unsafe {
+            loader.get_memory_fd_properties(
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                plane.fd.as_raw_fd(),
+                &mut fd_properties,
+            )
+        } {
+            unsafe { device.destroy_image(vk_image, None) };
+            return Err(backend_err("get_memory_fd_properties", e));
+        }
+        let requirements = unsafe { device.get_image_memory_requirements(vk_image) };
+        let permitted = requirements.memory_type_bits & fd_properties.memory_type_bits;
+        let Some(memory_type) = (0..32).find(|i| permitted & (1 << i) != 0) else {
+            unsafe { device.destroy_image(vk_image, None) };
+            return Err(Error::Backend {
+                backend: "vulkan",
+                detail: "no memory type is accepted by both the image and the dma-buf".into(),
+            });
+        };
+
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(vk_image);
+        // Vulkan takes the descriptor on success and leaves it alone on
+        // failure, so it is handed over by raw value here and released from
+        // `OwnedFd` only once the call has succeeded.
+        let mut import = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(plane.fd.as_raw_fd());
+        let allocate = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type)
+            .push_next(&mut dedicated)
+            .push_next(&mut import);
+
+        let memory = match unsafe { device.allocate_memory(&allocate, None) } {
+            Ok(memory) => memory,
+            Err(e) => {
+                unsafe { device.destroy_image(vk_image, None) };
+                return Err(backend_err("allocate_memory (imported)", e));
+            }
+        };
+        // Owned by Vulkan from here, so the `OwnedFd` must not close it.
+        let _ = image.planes.into_iter().next().map(|p| p.fd.into_raw_fd());
+
+        if let Err(e) = unsafe { device.bind_image_memory(vk_image, memory, 0) } {
+            unsafe {
+                device.free_memory(memory, None);
+                device.destroy_image(vk_image, None);
+            }
+            return Err(backend_err("bind_image_memory (imported)", e));
+        }
+
+        Ok(VulkanTexture {
+            image: vk_image,
+            memory: TextureMemory::Dedicated(memory),
+            extent,
+            format,
+            layout: std::cell::Cell::new(vk::ImageLayout::UNDEFINED),
+            mip_levels: 1,
+            usage: TextureUsage {
+                render_target: true,
+                transfer: true,
+                scanout: true,
+                ..TextureUsage::default()
+            },
+        })
+    }
+
     /// The layout the driver actually chose for an exportable image.
     pub fn texture_modifier(&self, texture: &VulkanTexture) -> Result<Modifier> {
         if !texture.usage.scanout {

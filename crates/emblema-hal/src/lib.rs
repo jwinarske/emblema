@@ -250,6 +250,33 @@ pub trait HalContext {
         Err(Error::Unsupported("dma-buf export"))
     }
 
+    /// Import a dma-buf as a texture the renderer can draw into.
+    ///
+    /// The other half of what [`ExternalImageDesc`] was reserved for. Where
+    /// [`DmaBufSupport::can_allocate_scanout`] is false the renderer cannot
+    /// make its own scanout buffers, and the DRM path allocates them through
+    /// GBM and hands them here instead -- which is the only route to scanout on
+    /// a split render/display SoC, where the display controller and the GPU
+    /// disagree about layout.
+    ///
+    /// `image` carries the descriptors, and ownership of them transfers: on
+    /// success the backend owns them, and on failure they are closed. `extent`
+    /// and `format` are the renderer's view of the same buffer, because
+    /// [`ExternalImageDesc`] carries a `fourcc` and this trait speaks
+    /// [`PixelFormat`].
+    ///
+    /// Returns [`Error::Unsupported`] where [`DmaBufSupport::import`] is false,
+    /// which is capability gating in the same sense as the two methods above.
+    #[cfg(unix)]
+    fn import_texture(
+        &mut self,
+        _image: ExternalImageDesc,
+        _extent: Extent2D,
+        _format: PixelFormat,
+    ) -> Result<<Self::Hal as Hal>::Texture> {
+        Err(Error::Unsupported("dma-buf import"))
+    }
+
     /// Submit a batch without waiting, returning something that signals when
     /// the GPU has finished.
     ///
