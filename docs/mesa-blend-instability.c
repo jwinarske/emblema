@@ -2,25 +2,19 @@
 //
 // A GLES frame that radeonsi renders differently the second time.
 //
-// This is the artifact for a Mesa bug report: nothing but EGL and GLES, no
-// build system, no library beyond libEGL and libGLESv2, and no part of the
-// project it came out of. The tree it sits in never compiles it -- that tree is
-// pure Rust and says so -- and this file is here beside the document that
-// explains the defect.
+// This is the artifact for a Mesa bug report, and it is self-contained: nothing
+// but EGL and GLES, no build system, no library beyond libEGL and libGLESv2, no
+// generated code, and no part of the project it came out of. The tree it sits
+// in never compiles it -- that tree is pure Rust and says so -- and this file is
+// here beside the document that explains the defect.
 //
-//   probe-the-layer-composite -- --vertex > solid.vert
-//   probe-the-layer-composite -- --shader > solid.frag
 //   cc -O2 -o blend-instability docs/mesa-blend-instability.c -lEGL -lGLESv2
-//   ./blend-instability                 # twelve runs, as found
-//   ./blend-instability --small         # the control: a short fragment program
+//   ./blend-instability                          # twelve runs
+//   ./blend-instability --generated a.vert a.frag  # the renderer's own shaders
 //
-// RUNS=n sets how many times to ask, EQUATION=<hex> changes the composite's
+// RUNS=n sets how many times to ask, TAPS=n the blur's half-width, ROUNDS=n how
+// many times the disturbing frames run, EQUATION=<hex> the composite's
 // equation, and AT=x,y prints that pixel from both renderings.
-//
-// The two shader files are what the renderer compiles, printed from it so this
-// program needs no Rust at the far end; the blend qualifier is not in them,
-// because this program inserts it the way the renderer does. A report carries
-// all three files.
 //
 // # What it does
 //
@@ -35,6 +29,11 @@
 // GL_DIFFERENCE_KHR, then the four passes again -- and the second rendering of
 // the frame differs from the first.
 //
+// The two shaders below are fifty lines together. They are not the renderer's,
+// and they draw the renderer's frame to the byte: with `TAPS=5` the picture
+// hash this prints is the same one the generated 964-line fragment program
+// produces, which `--generated` runs for comparison.
+//
 // # What it reads here
 //
 // Mesa 26.2.4, radeonsi on a Raphael/Mendocino iGPU, twelve runs of twelve:
@@ -46,37 +45,36 @@
 // first rendering is the exact one and the re-rendering is wrong. Every control
 // reads 0 of 12:
 //
-//   ./blend-instability --small                            a short program
 //   radeonsi_inline_uniforms=false ./blend-instability     uniform inlining off
 //   AMD_DEBUG=nooptvariant ./blend-instability             no optimized variant
 //   EQUATION=0x929E ./blend-instability                    GL_DIFFERENCE_KHR
 //   LIBGL_ALWAYS_SOFTWARE=1 ./blend-instability            llvmpipe
 //
-// It is also dose-dependent, which is what ROUNDS is for: the three other
-// frames run eight times between the subject's two renders by default, and the
-// hit rate follows how many times they ran --
+// # Two things this program cannot see
 //
-//   ROUNDS=1   2 to 6 of 12      what the renderer itself does
+// **The eight-bit floor.** The error is one level, so a frame whose arithmetic
+// puts it below half a quantum reads as zero here with the miscompile still in
+// place. `TAPS` is where that shows: eleven to seventeen iterations of the blur
+// loop report it and nothing outside that range does, while `AMD_DEBUG=ps,nir`
+// shows the same specializations compiled either way --
+// `opt.inline_uniforms = 1 (0x3, 0x0, 0x0, 0x0)` among them -- and the renderer
+// this was reduced from reproduces at every blur deviation from 2.5 to 5.5. So
+// a zero from this program means "not visible in this frame", not "not
+// miscompiled", and that holds for every control above as much as for TAPS.
+//
+// **The dose.** ROUNDS is how many times the three disturbing frames run
+// between the two renderings. One is the default and is what the renderer does,
+// and with the shaders above that is already twelve of twelve. Under
+// `--generated` it is not, and the rate follows the dose:
+//
+//   ROUNDS=1   2 to 8 of 12
 //   ROUNDS=2   9 of 12
 //   ROUNDS=4   8 to 12 of 12
-//   ROUNDS=8   12 of 12          three times in a row
+//   ROUNDS=8   12 of 12
 //
-// so the state they leave accumulates rather than arriving all at once. The
-// default is the saturated end, because an artifact that reproduces every time
-// is worth more than one that matches the renderer's own dose.
-//
-// # What it is not
-//
-// Not the arrangement on its own. `--small` runs the same four passes with the
-// thirty-line fragment program below in place of solid.frag -- same paint
-// block, same varyings, same sampler, same draws -- and reads 0 of 12 over a
-// frame that is the same picture. So what the defect needs is the body of that
-// shader, which is 966 lines with Mesa's own KHR_blend_equation_advanced
-// lowering appended to it by the driver.
-//
-// Not every equation, either. Of the eleven separable modes on the composite
-// only GL_OVERLAY_KHR and GL_HARDLIGHT_KHR reproduce, which are one equation
-// with its operands swapped. EQUATION=<hex> overrides it.
+// so whatever those frames leave behind accumulates rather than arriving all at
+// once -- and how much of it a frame needs before the error clears the floor
+// depends on the frame, which is the paragraph above again.
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -118,11 +116,38 @@
 static const float WHOLE[12] = {0.5f, 0.0f, 0.0f,  0.0f, 0.0f, -0.5f,
                                 0.0f, 0.0f, 0.5f,  0.5f, 1.0f, 0.0f};
 
-// The same three materials in thirty lines, as the control on the shader. The
-// interface is the generated shader's -- the same block, the same instance
-// name, the same varyings and sampler -- so the only thing that changes with
-// `--small` is the body the driver compiles and appends its lowering to.
-static const char *const SMALL_FS =
+// The vertex stage: a position, a texture coordinate and a color per vertex,
+// the three varyings the fragment stage reads -- named as the generated program
+// names them, because ES 3.00 matches a varying across stages by name -- and the
+// clip-space convention
+// the renderer's own generated vertex program uses -- y negated and z mapped
+// from GL's range to Vulkan's, which is what makes the two interchangeable
+// here.
+static const char *const VERTEX = "#version 300 es\n"
+                                  "precision highp float;\n"
+                                  "layout(location = 0) in vec3 in_position;\n"
+                                  "layout(location = 1) in vec2 in_uv;\n"
+                                  "layout(location = 2) in vec4 in_color;\n"
+                                  "smooth out vec3 _vs2fs_location0;\n"
+                                  "smooth out vec2 _vs2fs_location1;\n"
+                                  "smooth out vec4 _vs2fs_location2;\n"
+                                  "void main() {\n"
+                                  "    gl_Position = vec4(in_position.xy, 0.0, in_position.z);\n"
+                                  "    _vs2fs_location0 = in_position;\n"
+                                  "    _vs2fs_location1 = in_uv;\n"
+                                  "    _vs2fs_location2 = in_color;\n"
+                                  "    gl_Position.yz = vec2(-gl_Position.y, gl_Position.z * 2.0 - gl_Position.w);\n"
+                                  "}\n";
+
+// The fragment stage: the three materials this frame draws, over the paint
+// block the C below fills in. `%d` is the blur's half-width, which `TAPS` sets
+// -- it is a literal in the shader rather than a uniform because the point of
+// the knob is to change what the compiler sees.
+//
+// The block, its instance name, the varyings and the sampler are named as the
+// renderer's generated program names them, so `--generated` can swap one
+// program for the other with nothing else moving.
+static const char *const FRAGMENT =
     "#version 300 es\n"
     "precision highp float;\n"
     "precision highp int;\n"
@@ -162,7 +187,7 @@ static const char *const SMALL_FS =
     "        float sigma = max(p.params.z, 1e-6);\n"
     "        vec4 sum = vec4(0.0);\n"
     "        float total = 0.0;\n"
-    "        for (int i = -4; i <= 4; i++) {\n"
+    "        for (int i = -%d; i <= %d; i++) {\n"
     "            float w = exp(-0.5 * float(i * i) / (sigma * sigma));\n"
     "            sum += texture(_group_0_binding_0_fs, uv + step * float(i)) * w;\n"
     "            total += w;\n"
@@ -762,6 +787,22 @@ static GLuint placeholder_texture(void) {
     return texture;
 }
 
+// FNV-1a over a rendering, so a shader edit can be shown to have left the
+// picture alone.
+//
+// Shrinking the fragment program is how a report gets a minimal one, and most
+// of what can be cut is unreachable for these three materials rather than
+// unused by the compiler -- the kind a draw takes is a uniform, so every arm is
+// live until the driver specializes it. A cut that keeps this number keeps the
+// frame, and then the only thing that moved is what the compiler was given.
+static unsigned long long picture(const unsigned char *pixels) {
+    unsigned long long hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < (size_t)SIDE * SIDE * 4; i++) {
+        hash = (hash ^ pixels[i]) * 1099511628211ULL;
+    }
+    return hash;
+}
+
 // Where two renderings differ, and how. A one-sided difference in one channel
 // is a different claim from a wobble: rounding scatters both ways.
 static int report(const unsigned char *first, const unsigned char *again,
@@ -820,17 +861,24 @@ static int report(const unsigned char *first, const unsigned char *again,
 }
 
 int main(int argc, char **argv) {
-    int small = 0;
-    const char *vertex_path = "solid.vert";
-    const char *fragment_path = "solid.frag";
-    int positional = 0;
+    // `--generated <vertex> <fragment>` reads the renderer's own pair from
+    // files instead of using the two above. It is how the two programs are
+    // compared, and the probe this was reduced from prints them.
+    const char *vertex_path = NULL;
+    const char *fragment_path = NULL;
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--small") == 0) {
-            small = 1;
-        } else if (positional++ == 0) {
-            vertex_path = argv[i];
+        if (strcmp(argv[i], "--generated") == 0) {
+            if (argc - i < 3) {
+                fprintf(stderr, "--generated takes a vertex and a fragment "
+                                "path\n");
+                return 1;
+            }
+            vertex_path = argv[i + 1];
+            fragment_path = argv[i + 2];
+            i += 2;
         } else {
-            fragment_path = argv[i];
+            fprintf(stderr, "unknown argument %s\n", argv[i]);
+            return 1;
         }
     }
 
@@ -840,22 +888,43 @@ int main(int argc, char **argv) {
         runs = 1;
     }
     // How many times the three other frames run between the subject's two
-    // renders. One is what the renderer does, and eight is the default here
-    // because the state they leave accumulates and eight is where it
-    // saturates. No ingredient changes with it: every control still reads zero
-    // of twelve at eight.
+    // renders. One is what the renderer does and is enough with the shaders
+    // above; the generated pair needs more, and the header says what that
+    // measured.
     const char *rounds_env = getenv("ROUNDS");
-    int rounds = rounds_env ? atoi(rounds_env) : 8;
+    int rounds = rounds_env ? atoi(rounds_env) : 1;
     if (rounds < 1) {
         rounds = 1;
     }
     const char *equation_env = getenv("EQUATION");
     GLenum equation =
         equation_env ? (GLenum)strtoul(equation_env, NULL, 0) : GL_OVERLAY_KHR;
+    // The blur's half-width, which decides the loop's trip count. Five is what
+    // the frame this was reduced from computes from its own deviation, and the
+    // header says what the knob is for: it moves the error across the eight-bit
+    // floor without changing what the driver compiles.
+    const char *taps_env = getenv("TAPS");
+    int taps = taps_env ? atoi(taps_env) : 5;
+    if (taps < 1) {
+        taps = 1;
+    }
 
-    char *vertex_source = read_file(vertex_path, NULL);
-    char *fragment_source = small ? NULL : read_file(fragment_path, NULL);
-    const char *fragment = small ? SMALL_FS : fragment_source;
+    char *built = NULL;
+    const char *vertex_source = VERTEX;
+    const char *fragment = NULL;
+    if (fragment_path) {
+        vertex_source = read_file(vertex_path, NULL);
+        fragment = read_file(fragment_path, NULL);
+    } else {
+        // The tap count is a literal in the shader rather than a uniform, so it
+        // is substituted here.
+        size_t room = strlen(FRAGMENT) + 32;
+        built = malloc(room);
+        if (!built || snprintf(built, room, FRAGMENT, taps, taps) < 0) {
+            return 1;
+        }
+        fragment = built;
+    }
     // Both forms, as the renderer builds both: the qualified one for the draws
     // under an advanced equation and the plain one for everything else.
     char *blend_fragment = qualified(fragment);
@@ -926,7 +995,11 @@ int main(int argc, char **argv) {
         if (run == 0) {
             printf("renderer: %s\n", glGetString(GL_RENDERER));
             printf("version:  %s\n", glGetString(GL_VERSION));
-            printf("fragment: %s\n\n", small ? "the short program" : fragment_path);
+            if (fragment_path) {
+                printf("shaders:  %s and %s\n", vertex_path, fragment_path);
+            } else {
+                printf("shaders:  the fifty lines above, %d taps\n", taps);
+            }
         }
 
         struct program program = {0};
@@ -956,6 +1029,9 @@ int main(int argc, char **argv) {
         }
         render(&program, placeholder, barrier, &subject_frame, again);
 
+        if (run == 0) {
+            printf("picture:  %016llx\n\n", picture(first));
+        }
         printf("run %2d: ", run + 1);
         if (report(first, again, runs == 1) > 0) {
             hits++;
