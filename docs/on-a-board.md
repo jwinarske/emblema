@@ -4544,6 +4544,15 @@ So four explanations are ruled out, and they were the plausible ones:
 | too few draws for the inline-uniforms heuristic | 120 other frames reproduces nothing |
 | the composite taking the equation but not the inside draw | `shape-same-equation` tried |
 | the probe not declaring `blend_support_all_equations` | it declares it in five places, so Mesa does append its lowering here |
+| the frame being too small | `SIDE` raised to 128, the reducer's own size, and to 256: zero at both |
+| the probe's shaders never getting the variant | it compiles eight, and **two carry `inline_uniforms = 1`** |
+
+The last of those is the one that would have explained all the others, and it
+does not: the probe reaches an inline-uniforms variant and still does not
+reproduce. What is not yet read is the inlined *value*. The entry above got the
+blend mode out of it by sweeping modes and watching the number move; the
+`SHADER KEY` dump prints only the flag, so reading the value here needs the NIR
+rather than the key, and that is where this stops.
 
 **And a note on an argument of mine that was half right.** The entry above
 established the miscompiled code is Mesa's own lowering rather than one of this
