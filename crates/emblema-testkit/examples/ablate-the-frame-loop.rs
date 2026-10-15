@@ -23,6 +23,11 @@
 //! cargo run -p emblema-testkit --example ablate-the-frame-loop
 //! ```
 //!
+//! `SUBJECT_MODE` and `OTHERS_MODE` name the advanced equation each side
+//! blends with -- `overlay`, `hardlight`, `difference` and the rest -- which
+//! is how the miscompile was narrowed to one of them. `MAP=1` draws the
+//! differing pixels and `AT=x,y` prints one from both renders.
+//!
 //! One process renders every variant, each in a context of its own, because
 //! the thing being measured is what one frame leaves for the next -- a shared
 //! context would read the variant before it as much as the variant.
@@ -141,6 +146,33 @@ const VARIANTS: &[(&str, Shape_, &str)] = &[
     ),
 ];
 
+/// Which advanced equation a side blends with, from the environment.
+///
+/// The case was found with `Overlay` on the subject and `Difference` on the
+/// other frames, and those are the defaults. They are selectable because the
+/// subject's equation turned out to be the whole of what the miscompile is
+/// about: of the eleven advanced modes, only `overlay` and `hardlight`
+/// reproduce, and those two are one equation with its operands swapped. The
+/// other frames' equation does not matter -- every one of the eleven
+/// reproduces there -- so what they owe is an advanced blend and not a
+/// particular one. See `docs/on-a-board.md`.
+fn mode_from(var: &str, fallback: BlendMode) -> BlendMode {
+    match std::env::var(var).unwrap_or_default().as_str() {
+        "multiply" => BlendMode::Multiply,
+        "screen" => BlendMode::Screen,
+        "overlay" => BlendMode::Overlay,
+        "darken" => BlendMode::Darken,
+        "lighten" => BlendMode::Lighten,
+        "colordodge" => BlendMode::ColorDodge,
+        "colorburn" => BlendMode::ColorBurn,
+        "hardlight" => BlendMode::HardLight,
+        "softlight" => BlendMode::SoftLight,
+        "difference" => BlendMode::Difference,
+        "exclusion" => BlendMode::Exclusion,
+        _ => fallback,
+    }
+}
+
 const SIDE: u32 = 128;
 
 /// The subject: a fill, then a layer holding two draws.
@@ -149,7 +181,7 @@ const SIDE: u32 = 128;
 /// are is not the point -- that the layer overlaps the fill under it is.
 fn subject(what: Shape_) -> Scene {
     let advanced = if what.subject_advanced {
-        BlendMode::Overlay
+        mode_from("SUBJECT_MODE", BlendMode::Overlay)
     } else {
         BlendMode::SrcOver
     };
@@ -207,7 +239,7 @@ fn subject(what: Shape_) -> Scene {
 /// clips, do -- so the list is kept whole and what varies is the ingredients.
 fn others(what: Shape_) -> Vec<Scene> {
     let advanced = if what.others_advanced {
-        BlendMode::Difference
+        mode_from("OTHERS_MODE", BlendMode::Difference)
     } else {
         BlendMode::SrcOver
     };
