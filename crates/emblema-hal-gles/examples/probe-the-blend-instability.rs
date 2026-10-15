@@ -33,6 +33,8 @@
     clippy::too_many_arguments
 )]
 
+mod bare;
+
 use glow::HasContext;
 
 /// The target's side, in pixels. Small, because the readback is compared byte
@@ -1171,87 +1173,6 @@ fn frame(
     }
 }
 
-/// `EGL_PLATFORM_SURFACELESS_MESA`. The target and its first control are both
-/// Mesa drivers and reach the display this way.
-const PLATFORM_SURFACELESS: khronos_egl::Enum = 0x31DD;
-
-/// `EGL_PLATFORM_GBM_KHR`, which the two vendor stacks need: a GC7000UL and an
-/// Adreno ship `libgbm` and advertise the GBM platform while having no
-/// surfaceless *platform* at all. Four drivers is the whole point of this
-/// probe, so it reaches a display both ways.
-const PLATFORM_GBM: khronos_egl::Enum = 0x31D7;
-
-/// `libgbm`, opened at run time rather than linked, so this cross-builds to a
-/// board without the library on the build host. Two symbols are all a display
-/// needs; surfaces belong to a presentation path and this renders into
-/// framebuffer objects.
-struct Gbm {
-    _library: libloading::Library,
-    device: *mut std::ffi::c_void,
-    destroy: unsafe extern "C" fn(*mut std::ffi::c_void),
-    _node: std::fs::File,
-}
-
-impl Gbm {
-    /// The first render node that yields a device, or `None`.
-    fn open() -> Option<Self> {
-        let nodes: Vec<String> = match std::env::var("EMBLEMA_GBM_NODE") {
-            Ok(named) => vec![named],
-            Err(_) => {
-                let mut found: Vec<String> = std::fs::read_dir("/dev/dri")
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|n| n.starts_with("renderD"))
-                    .map(|n| format!("/dev/dri/{n}"))
-                    .collect();
-                found.sort();
-                found
-            }
-        };
-        // SAFETY: the symbols below are `libgbm`'s documented C entry points,
-        // and the library outlives the device it creates.
-        unsafe {
-            let library = libloading::Library::new("libgbm.so.1").ok()?;
-            let create: libloading::Symbol<
-                unsafe extern "C" fn(std::os::fd::RawFd) -> *mut std::ffi::c_void,
-            > = library.get(b"gbm_create_device\0").ok()?;
-            let destroy: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void)> =
-                library.get(b"gbm_device_destroy\0").ok()?;
-            let destroy = *destroy;
-            for node in nodes {
-                let Ok(file) = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&node)
-                else {
-                    continue;
-                };
-                let device = create(std::os::fd::AsRawFd::as_raw_fd(&file));
-                if !device.is_null() {
-                    println!("gbm device: {node}");
-                    return Some(Self {
-                        _library: library,
-                        device,
-                        destroy,
-                        _node: file,
-                    });
-                }
-            }
-            None
-        }
-    }
-}
-
-impl Drop for Gbm {
-    fn drop(&mut self) {
-        // SAFETY: the device came from `gbm_create_device` and is destroyed
-        // once.
-        unsafe { (self.destroy)(self.device) };
-    }
-}
-
 fn main() {
     let wanted = std::env::args().nth(1);
     if wanted.as_deref() == Some("--list") {
@@ -1262,128 +1183,29 @@ fn main() {
         return;
     }
 
-    // SAFETY: the EGL library, display and context outlive every call below,
-    // and the context is current on this thread for all of the GL.
+    // The display, the context and the blend barrier, which the other bare
+    // probe reaches the same way. See `bare/mod.rs`.
+    let Some(bare) = bare::Bare::open() else {
+        return;
+    };
+    let gl = &bare.gl;
+    let blend_barrier = bare.blend_barrier;
+
+    // SAFETY: the context is current on this thread for every call below, and
+    // every object is created, used and deleted here.
     unsafe {
-        let egl = khronos_egl::DynamicInstance::<khronos_egl::EGL1_5>::load_required()
-            .expect("loading libEGL");
-        let client_extensions = egl
-            .query_string(None, khronos_egl::EXTENSIONS)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // Surfaceless where it exists, GBM otherwise. Held in scope either
-        // way: the device has to outlive the display taken from it.
-        let mut gbm = None;
-        let display = if client_extensions.contains("EGL_MESA_platform_surfaceless") {
-            println!("platform: surfaceless");
-            egl.get_platform_display(
-                PLATFORM_SURFACELESS,
-                khronos_egl::DEFAULT_DISPLAY,
-                &[khronos_egl::ATTRIB_NONE],
-            )
-            .expect("get_platform_display")
-        } else if client_extensions.contains("EGL_KHR_platform_gbm")
-            || client_extensions.contains("EGL_MESA_platform_gbm")
-        {
-            println!("platform: gbm");
-            let device = Gbm::open().expect("a GBM device from a render node");
-            let native = device.device;
-            gbm = Some(device);
-            egl.get_platform_display(PLATFORM_GBM, native, &[khronos_egl::ATTRIB_NONE])
-                .expect("get_platform_display (gbm)")
-        } else {
-            println!("skipping: neither the surfaceless nor the GBM platform");
-            return;
-        };
-        egl.initialize(display).expect("initialize");
-        egl.bind_api(khronos_egl::OPENGL_ES_API).expect("bind_api");
-        let config = egl
-            .choose_first_config(
-                display,
-                &[
-                    khronos_egl::SURFACE_TYPE,
-                    // The two platforms offer different surface types, and
-                    // asking GBM for a pbuffer matches no config at all --
-                    // which reads as "this driver has no ES3 RGBA8" and is
-                    // nothing of the kind.
-                    if gbm.is_some() {
-                        khronos_egl::WINDOW_BIT
-                    } else {
-                        khronos_egl::PBUFFER_BIT
-                    },
-                    khronos_egl::RENDERABLE_TYPE,
-                    khronos_egl::OPENGL_ES3_BIT,
-                    khronos_egl::RED_SIZE,
-                    8,
-                    khronos_egl::GREEN_SIZE,
-                    8,
-                    khronos_egl::BLUE_SIZE,
-                    8,
-                    khronos_egl::ALPHA_SIZE,
-                    8,
-                    khronos_egl::NONE,
-                ],
-            )
-            .expect("choose_first_config")
-            .expect("an ES3 RGBA8 config");
-        let context = egl
-            .create_context(
-                display,
-                config,
-                None,
-                &[
-                    khronos_egl::CONTEXT_MAJOR_VERSION,
-                    3,
-                    khronos_egl::CONTEXT_MINOR_VERSION,
-                    0,
-                    khronos_egl::NONE,
-                ],
-            )
-            .expect("create_context");
-        egl.make_current(display, None, None, Some(context))
-            .expect("make_current");
-
-        let gl = glow::Context::from_loader_function(|name| {
-            egl.get_proc_address(name)
-                .map_or(std::ptr::null(), |p| p as *const std::ffi::c_void)
-        });
-
-        println!("renderer: {}", gl.get_parameter_string(glow::RENDERER));
-        println!("version:  {}", gl.get_parameter_string(glow::VERSION));
-        let extensions = gl.get_parameter_string(glow::EXTENSIONS);
-        let advanced = extensions.contains("GL_KHR_blend_equation_advanced");
-        let coherent = extensions.contains("GL_KHR_blend_equation_advanced_coherent");
-        if !advanced {
-            println!("skipping: no GL_KHR_blend_equation_advanced");
-            return;
-        }
-        println!("advanced blending: yes, coherent: {coherent}");
-
-        // Without the coherent variant, overlapping draws under an advanced
-        // equation need this between them.
-        let blend_barrier: Option<extern "C" fn()> = if coherent {
-            None
-        } else {
-            egl.get_proc_address("glBlendBarrierKHR")
-                .map(|p| std::mem::transmute::<_, extern "C" fn()>(p))
-        };
-        if !coherent && blend_barrier.is_none() {
-            println!("skipping: non-coherent advanced blending and no glBlendBarrierKHR");
-            return;
-        }
-
         // ES 3 core wants a vertex array bound even for a draw with no
         // attributes.
         let vao = gl.create_vertex_array().expect("create_vertex_array");
         gl.bind_vertex_array(Some(vao));
 
         let programs = Programs {
-            solid_plain: program(&gl, SOLID, false),
-            solid_blend: program(&gl, SOLID, true),
-            blur_plain: program(&gl, BLUR, false),
-            blur_blend: program(&gl, BLUR, true),
-            sample_plain: program(&gl, SAMPLE, false),
-            sample_blend: program(&gl, SAMPLE, true),
+            solid_plain: program(gl, SOLID, false),
+            solid_blend: program(gl, SOLID, true),
+            blur_plain: program(gl, BLUR, false),
+            blur_blend: program(gl, BLUR, true),
+            sample_plain: program(gl, SAMPLE, false),
+            sample_blend: program(gl, SAMPLE, true),
         };
 
         let chosen: Vec<_> = match wanted {
@@ -1397,7 +1219,7 @@ fn main() {
 
         // Something for an inside draw to sample: a texture filled once and
         // never touched again, standing in for a blurred coverage.
-        let cov = target(&gl, 1, false);
+        let cov = target(gl, 1, false);
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(cov.framebuffer));
         gl.disable(glow::BLEND);
         let (cr, cg, cb) = coverage_fill();
@@ -1407,9 +1229,9 @@ fn main() {
 
         println!();
         for (name, what, _) in chosen {
-            let layer = target(&gl, what.samples, what.stencil);
-            let resolved = target(&gl, 1, what.stencil);
-            let output = target(&gl, 1, what.stencil);
+            let layer = target(gl, what.samples, what.stencil);
+            let resolved = target(gl, 1, what.stencil);
+            let output = target(gl, 1, what.stencil);
 
             // `RUNS` renders more than twice and reports each frame against
             // the first and the one before it, with the center pixel. Two
@@ -1468,21 +1290,21 @@ fn main() {
                             gl.delete_renderbuffer(rb);
                         }
                     }
-                    *layer = target(&gl, what.samples, what.stencil);
-                    *resolved = target(&gl, 1, what.stencil);
-                    *output = target(&gl, 1, what.stencil);
+                    *layer = target(gl, what.samples, what.stencil);
+                    *resolved = target(gl, 1, what.stencil);
+                    *output = target(gl, 1, what.stencil);
                 }
                 if what.fresh & 1 != 0 {
-                    *layer = target(&gl, what.samples, what.stencil);
+                    *layer = target(gl, what.samples, what.stencil);
                 }
                 if what.fresh & 2 != 0 {
-                    *resolved = target(&gl, 1, what.stencil);
+                    *resolved = target(gl, 1, what.stencil);
                 }
                 if what.fresh & 4 != 0 {
-                    *output = target(&gl, 1, what.stencil);
+                    *output = target(gl, 1, what.stencil);
                 }
                 frame(
-                    &gl,
+                    gl,
                     &programs,
                     *what,
                     layer,
@@ -1519,25 +1341,16 @@ fn main() {
                     samples: 4,
                     ..*what
                 };
-                let mut subject_layer = target(&gl, 1, what.stencil);
-                let mut subject_resolved = target(&gl, 1, what.stencil);
-                let mut subject_output = target(&gl, 1, what.stencil);
-                let mut other_layer = target(&gl, 4, what.stencil);
-                let mut other_resolved = target(&gl, 1, what.stencil);
-                let mut other_output = target(&gl, 1, what.stencil);
+                let mut subject_layer = target(gl, 1, what.stencil);
+                let mut subject_resolved = target(gl, 1, what.stencil);
+                let mut subject_output = target(gl, 1, what.stencil);
+                let mut other_layer = target(gl, 4, what.stencil);
+                let mut other_resolved = target(gl, 1, what.stencil);
+                let mut other_output = target(gl, 1, what.stencil);
 
                 let draw =
                     |ingredients: Ingredients, l: &mut Target, r: &mut Target, o: &mut Target| {
-                        frame(
-                            &gl,
-                            &programs,
-                            ingredients,
-                            l,
-                            r,
-                            o,
-                            blend_barrier,
-                            coverage,
-                        )
+                        frame(gl, &programs, ingredients, l, r, o, blend_barrier, coverage)
                     };
 
                 let before = draw(
@@ -1681,10 +1494,5 @@ fn main() {
             gl.delete_framebuffer(resolved.framebuffer);
             gl.delete_framebuffer(output.framebuffer);
         }
-
-        egl.destroy_context(display, context)
-            .expect("destroy_context");
-        egl.terminate(display).expect("terminate");
-        drop(gbm);
     }
 }

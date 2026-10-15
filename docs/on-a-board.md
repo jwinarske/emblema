@@ -4522,6 +4522,90 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### A bare reproduction, and the shader is the ingredient, 2026-10-15
+
+`probe-the-layer-composite` reproduces the second instability with no renderer
+in it: EGL, GL, and the renderer's fragment program as a string. The entry
+below said this was not in hand and named what it would take -- a layer
+composite rather than the first instability's three-target shape. That is what
+it took.
+
+**The arrangement came off the recording rather than out of a reading of the
+code.** `record_scene` on the shrunk subject -- printing each pass's descriptor
+and each draw's material, which is ten lines in an example and was thrown away
+again -- says it is *four* single-sample passes, which is the thing
+`probe-the-blend-instability` could never express:
+
+| pass | what |
+|---|---|
+| 0 | the layer's content: two solid draws over a transparent clear |
+| 1 | the first half of the layer blur, sampling pass 0, `Src` |
+| 2 | the second half, sampling pass 1, `Src` |
+| 3 | the frame: a solid draw, then pass 2 composited as an image under `GL_OVERLAY_KHR` at alpha 0.68 |
+
+So `subject-no-layer-blur` reading zero of twelve was never about softness: the
+blur is two whole passes, and taking it out takes them out. The old probe put
+its nine taps *inside* the composite, which is one pass where this is three.
+
+**Twelve runs a variant, beside the renderer's own table:**
+
+| variant | renderer | bare |
+|---|---:|---:|
+| as-found | 10 of 12 | **11 of 12** |
+| `subject-multisampled` | 0 | **0** |
+| `no-layer-blur` | 0 | **0** |
+| `subject-no-advanced` | 0 | **0** |
+| `others-single-sample` | 0 | **0** |
+| `others-no-advanced` | 0 | **0** |
+
+Every ingredient agrees, and so does the damage. At the worst-differing pixel:
+
+| | first render | second render |
+|---|---|---|
+| `radeonsi` | `[136, 87, 44]` | **`[136, 86, 44]`** |
+| `llvmpipe`, four runs | `[136, 87, 44]` | `[136, 87, 44]` |
+
+The same two values the renderer reads, to the byte, and the same signature:
+**fifteen bytes differ, all of them lower, all of them green**. The first render
+is the exact one.
+
+**The same mechanism, from the same two knobs.** `radeonsi_inline_uniforms=false`
+and `AMD_DEBUG=nooptvariant` each take it to **0 of 12**. And the equation sweep
+comes out where the renderer's did -- all eleven separable modes on the
+composite, four runs each:
+
+| equation | hits |
+|---|---:|
+| `overlay` | 3 of 4 |
+| `hardlight` | 3 of 4 |
+| the other nine | 0 |
+
+One equation with its operands swapped, as before. The other frames' equation
+does not matter: `overlay`, `multiply` and `exclusion` there all reproduce,
+which is what "they owe an advanced blend and not a particular one" means.
+
+**And the control that attributes it.** `as-found` differs from the old probe in
+two things at once -- the renderer's shader and the renderer's four passes -- so
+on its own it cannot say which. `small-shader` changes exactly one: the same four
+passes, the same paint block, the same varyings and sampler, with a thirty-line
+fragment program in place of the generated one. **0 of 12.** So it is the
+**shader body**, not the arrangement, and the open question from the entry below
+is answered.
+
+That control is honest about one thing: the short program draws a slightly
+different picture, nine taps at a fixed spread against the tap count the
+deviation implies, so it holds the GL stream fixed rather than the pixels. It
+reads `[137, 87, 44]` where the renderer's shader reads `[136, 87, 44]` -- a
+frame of the same picture, and not a blank one, which is what would have made
+the zero meaningless.
+
+**What is left before this is filed.** The fragment program reaches the probe as
+text from `emblema-shaders`, which is why `--shader` prints it: what upstream
+needs is that source and a draw that miscompiles it, and a C translation of this
+file is the remaining step. The hit rate also wanders between sessions -- the
+renderer's reducer read 11 of 12 today against the 10 recorded below -- so a
+report should name twelve runs rather than one.
+
 ### Which of the subject's two blends carries it: the layer's, 2026-10-15
 
 The subject has two advanced blends, and every ablation so far has moved them
