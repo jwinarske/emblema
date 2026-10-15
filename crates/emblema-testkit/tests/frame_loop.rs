@@ -242,6 +242,16 @@ fn reaches_the_gles_instability(scene: &Scene) -> bool {
 /// Both sides, unlike [`reaches_the_gles_instability`], because the state that
 /// does it is left by the frames *around* the subject and no predicate reading
 /// the subject alone can see them.
+///
+/// **A bare reproduction of this one exists too**, and it took longer because
+/// the shape is four passes rather than three: `probe-the-layer-composite`,
+/// which renders the subject's content, both halves of its layer blur and the
+/// composite by hand, in EGL and GL, with this renderer's fragment program
+/// carried in as a string. It reads eleven hits of twelve on `radeonsi` and
+/// zero on `llvmpipe`, and its ablation is the table above row for row. The one
+/// thing it adds: with a thirty-line fragment program in place of the generated
+/// one, the same four passes read **zero of twelve** -- so what the defect needs
+/// is the *shader body*, not the arrangement.
 fn reaches_the_multisample_leak(subject: &Scene, others: &[Scene]) -> bool {
     fn layer_blur(node: &Node) -> bool {
         match node {
