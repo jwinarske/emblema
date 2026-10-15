@@ -43,6 +43,30 @@ const SIDE: i32 = 32;
 /// two blend modes to.
 const MULTIPLY_KHR: u32 = 0x9294;
 const DIFFERENCE_KHR: u32 = 0x929E;
+/// Which advanced equation the composite uses, default `GL_DIFFERENCE_KHR`.
+///
+/// `EQUATION=overlay` selects `GL_OVERLAY_KHR`, which is the one the second
+/// instability needs and which this probe never used: it was built for the
+/// first, where Multiply and Difference are enough. An env knob rather than an
+/// `Ingredients` field, as `FAR`, `BLUR` and `COV` are, so the thirty-one const
+/// variants stay as they are.
+fn composite_equation() -> u32 {
+    match std::env::var("EQUATION").as_deref() {
+        Ok("overlay") => OVERLAY_KHR,
+        Ok("multiply") => MULTIPLY_KHR,
+        _ => DIFFERENCE_KHR,
+    }
+}
+
+/// `GL_OVERLAY_KHR`, which is the one equation the second instability needs.
+///
+/// Measured in the renderer's own reducer: of the eleven advanced modes, only
+/// overlay and hardlight reproduce it, and those two are one equation with its
+/// operands swapped. Multiply and Difference above are what this probe was
+/// built with, for the *first* instability, and neither of them reaches the
+/// second -- which is why a bare reproduction of it looked impossible from
+/// here for as long as it did.
+const OVERLAY_KHR: u32 = 0x9296;
 
 /// What a variant leaves in.
 #[derive(Clone, Copy)]
@@ -1012,7 +1036,7 @@ fn frame(
                 gl.blend_equation(glow::FUNC_ADD);
             }
             gl.blend_equation(if what.same_equation {
-                DIFFERENCE_KHR
+                composite_equation()
             } else {
                 MULTIPLY_KHR
             });
@@ -1097,7 +1121,7 @@ fn frame(
             if what.reset_equation {
                 gl.blend_equation(glow::FUNC_ADD);
             }
-            gl.blend_equation(DIFFERENCE_KHR);
+            gl.blend_equation(composite_equation());
             if let Some(barrier) = blend_barrier {
                 barrier();
             }
@@ -1468,6 +1492,95 @@ fn main() {
                     coverage,
                 )
             };
+
+            // `OTHERS=n` renders the subject, then n frames of a *different*
+            // shape, then the subject again -- which is the second
+            // instability's arrangement and not the first's. The first is one
+            // frame repeated; this one is a single-sample subject disturbed by
+            // multisampled frames around it, so it needs two sets of targets
+            // and two `Ingredients`, which is why the loop below could never
+            // express it.
+            //
+            // The equation matters and the sample counts matter. The subject
+            // draws under `GL_OVERLAY_KHR`; the other frames draw
+            // multisampled under whatever this variant uses, because the
+            // renderer's reducer showed they owe an advanced blend rather than
+            // a particular one.
+            let others: usize = std::env::var("OTHERS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            if others > 0 {
+                let subject = Ingredients {
+                    samples: 1,
+                    ..*what
+                };
+                let disturber = Ingredients {
+                    samples: 4,
+                    ..*what
+                };
+                let mut subject_layer = target(&gl, 1, what.stencil);
+                let mut subject_resolved = target(&gl, 1, what.stencil);
+                let mut subject_output = target(&gl, 1, what.stencil);
+                let mut other_layer = target(&gl, 4, what.stencil);
+                let mut other_resolved = target(&gl, 1, what.stencil);
+                let mut other_output = target(&gl, 1, what.stencil);
+
+                let draw =
+                    |ingredients: Ingredients, l: &mut Target, r: &mut Target, o: &mut Target| {
+                        frame(
+                            &gl,
+                            &programs,
+                            ingredients,
+                            l,
+                            r,
+                            o,
+                            blend_barrier,
+                            coverage,
+                        )
+                    };
+
+                let before = draw(
+                    subject,
+                    &mut subject_layer,
+                    &mut subject_resolved,
+                    &mut subject_output,
+                );
+                for _ in 0..others {
+                    let _ = draw(
+                        disturber,
+                        &mut other_layer,
+                        &mut other_resolved,
+                        &mut other_output,
+                    );
+                }
+                let after = draw(
+                    subject,
+                    &mut subject_layer,
+                    &mut subject_resolved,
+                    &mut subject_output,
+                );
+
+                let worst = before
+                    .iter()
+                    .zip(after.iter())
+                    .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+                    .max()
+                    .unwrap_or(0);
+                let differing = before
+                    .iter()
+                    .zip(after.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                println!(
+                    "{name:24} subject after {others} multisampled frame(s): \
+                     worst {worst:3} level(s), {differing:5} byte(s) differ | \
+                     {label} {} -> {}",
+                    center(&before),
+                    center(&after)
+                );
+                continue;
+            }
 
             let first = render(&mut layer, &mut resolved, &mut output);
             if runs > 2 {
