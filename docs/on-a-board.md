@@ -4432,14 +4432,35 @@ What upstream would need is therefore the **shader plus a minimal draw that
 miscompiles it**, not a renderer-free loop. Which needs the variant identified,
 and that is where it stops for now.
 
-**Dumping the variant is not reachable from here.** `AMD_DEBUG=help` lists `vs`
-and `ps` as "Print vertex shaders" and "Print pixel shaders", but setting them
-produces no output against this machine's stock Mesa 26.2.4. The help dump
-prints three separate blocks whose bit values collide -- `cache_stats` and `ps`
-are both `0x10` -- so those flags belong to some variable other than
-`AMD_DEBUG`, and which one was not worked out. Until that is known, or a Mesa
-built for shader printing is on hand, the variant cannot be read out and the
-shader cannot be named.
+**Dumping the variant is reachable after all**, and the paragraph that stood
+here was wrong. It said `AMD_DEBUG=ps` produced nothing so the flag must belong
+to some other variable. The flag belongs to `AMD_DEBUG`; it is a *stage
+selector* and says nothing about what to print. Paired with `nir` or `asm` it
+works on this machine's stock Mesa 26.2.4:
+
+| | lines captured |
+|---|---|
+| `AMD_DEBUG=ps` | **0** |
+| `AMD_DEBUG=ps,nir` | 31 matching |
+| `AMD_DEBUG=ps,asm` | 127 matching |
+
+`MESA_SHADER_CACHE_DISABLE=true` beside it, since a shader served from the cache
+is never compiled and so never printed. The colliding bit values in the help
+dump were a red herring: two tables are printed, and the flag names do not
+collide across them.
+
+**Which puts a number on the search.** `ablate-the-frame-loop` under
+`ps,asm` compiles **72** pixel shaders; under `ps,asm,nooptvariant` it compiles
+**55**. Stable across runs. So **seventeen optimized variants** exist in the
+configuration that reproduces and not in the one that does not, and one of them
+is the miscompile. There are only **five** distinct `SHADER KEY` values and the
+same five appear in both runs, so the key does not distinguish a variant from
+its unoptimized twin -- narrowing inside the seventeen needs something other
+than the key.
+
+That is as far as this goes for now: the instrument works, the candidate set is
+seventeen rather than unbounded, and naming the one shader is the next step
+rather than a blocked one.
 
 **And the bare probe, if built anyway, is not a small addition.** The second
 instability needs a **single-sample** subject interleaved with **multisampled**
