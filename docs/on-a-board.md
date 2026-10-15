@@ -4549,10 +4549,35 @@ So four explanations are ruled out, and they were the plausible ones:
 
 The last of those is the one that would have explained all the others, and it
 does not: the probe reaches an inline-uniforms variant and still does not
-reproduce. What is not yet read is the inlined *value*. The entry above got the
-blend mode out of it by sweeping modes and watching the number move; the
-`SHADER KEY` dump prints only the flag, so reading the value here needs the NIR
-rather than the key, and that is where this stops.
+reproduce.
+
+**And the value is in the key after all**, so this does not stop here. The dump
+prints it in parentheses beside the flag -- `opt.inline_uniforms = 1 (0x3, 0x0,
+0x0, 0x0)` -- which is how the entry above read the blend mode out of the
+renderer's variants without sweeping anything. Under `OTHERS=3 EQUATION=overlay`
+the probe's four inlined variants carry:
+
+| inlined | which mode |
+|---|---|
+| `(0x1, 0x0, 0x0, 0x0)` x2 | Multiply |
+| `(0x1, 0x3f800000, 0x0, 0x0)` x2 | Multiply, and a float 1.0 beside it |
+| `(0x3, 0x0, 0x0, 0x0)` x2 | **Overlay** |
+| `(0x3, 0x3f800000, 0x0, 0x0)` | Overlay, and the float |
+
+So the probe compiles the Overlay inline-uniforms variant -- the same
+specialization the renderer miscompiles -- and reads **zero levels in every
+shape**. The variant is not sufficient, and the hypothesis is dead by its own
+value rather than by its flag.
+
+**What that leaves.** The renderer's shader inlines *one* uniform
+(`num_inlinable_uniforms: 1`, Mesa's own blend mode); the probe's inlines two in
+half its variants, and its shader is a few lines where the renderer's is 7,172
+of NIR. So the difference left to test is the **shader body**, not the
+arrangement and not the variant -- and the experiment that settles it is the
+renderer's own `SOLID_FS_GLSL`, qualifier injected, compiled into a program with
+no renderer around it and drawn through this arrangement. If that reproduces,
+the artifact upstream needs is that shader plus that draw; if it does not, the
+arrangement owes something neither probe has expressed.
 
 **And a note on an argument of mine that was half right.** The entry above
 established the miscompiled code is Mesa's own lowering rather than one of this
