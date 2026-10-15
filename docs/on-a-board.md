@@ -4522,6 +4522,67 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### The reproducer in C, and the state accumulates, 2026-10-15
+
+`docs/mesa-blend-instability.c` is the entry below's remaining step: the same
+frame loop in EGL and GLES with no Rust in it, reading the two generated shaders
+from files the probe prints. Nothing in this tree compiles it -- the tree is pure
+Rust and says so -- and it builds with
+
+    probe-the-layer-composite -- --vertex > solid.vert
+    probe-the-layer-composite -- --shader > solid.frag
+    cc -O2 -o blend-instability docs/mesa-blend-instability.c -lEGL -lGLESv2
+
+**Twelve of twelve, three times in a row**, with the signature unchanged: worst
+one level, fifteen of 65,536 bytes differing, every one lower and every one
+green, and `[136, 87, 44]` then `[136, 86, 44]` at (6,85) where `llvmpipe` reads
+`[136, 87, 44]` twice. Every control reads **0 of 12**:
+
+| control | |
+|---|---|
+| `--small` | the thirty-line fragment program, same four passes |
+| `radeonsi_inline_uniforms=false` | uniform inlining off |
+| `AMD_DEBUG=nooptvariant` | no optimized variant |
+| `EQUATION=0x929E` | `GL_DIFFERENCE_KHR` on the composite |
+| `LIBGL_ALWAYS_SOFTWARE=1` | llvmpipe |
+
+**And it is dose-dependent, which is new.** The three other frames run eight
+times between the subject's two renders by default, and the hit rate follows how
+many times they ran:
+
+| rounds | hits of twelve |
+|---|---:|
+| 1 -- what the renderer itself does | 2 to 6 |
+| 2 | 9 |
+| 4 | 8 to 12 |
+| 8 | **12**, three times over |
+
+So the state the multisampled advanced-blend frames leave **accumulates** rather
+than arriving all at once. Nothing else moves with it: every control above still
+reads zero at eight rounds. That is the first thing known about the state itself,
+which the entry below had to leave at "not established".
+
+**One thing is unexplained, and is worth writing down rather than smoothing
+over.** At one round the C reads two to six of twelve where the Rust probe reads
+twelve of twelve, measured back to back in the same minute. The GL streams were
+compared call for call and three candidates were ruled out: the host build's
+speed (a `--release` probe still reads 12 of 12), an extra program bind per pass,
+and the framebuffer-completeness queries the probe makes and the C had not. The
+C needs about eight times the dose for the same rate, and why is not known. It
+does not affect any conclusion here -- both reproduce, both carry the same
+signature, every control agrees in both -- but a reader comparing the two numbers
+should know it is a real difference and not a transcription error.
+
+**The hand-filled paint block is checked rather than trusted.** The C fills the
+shader's uniform block by hand, so a block whose layout moved would leave it
+building, running and quietly not reproducing. `the_reproducer.rs` holds its
+`#define`s against `material::layout` and `material::kind`, holds the two
+generated names it looks up against `SOLID_FS_GLSL`, and pins which end inserts
+the blend qualifier. Four tests, each mutation-checked.
+
+What is left is filing it, which is not something this machine should do on its
+own.
+
 ### A bare reproduction, and the shader is the ingredient, 2026-10-15
 
 `probe-the-layer-composite` reproduces the second instability with no renderer
@@ -4602,7 +4663,7 @@ the zero meaningless.
 **What is left before this is filed.** The fragment program reaches the probe as
 text from `emblema-shaders`, which is why `--shader` prints it: what upstream
 needs is that source and a draw that miscompiles it, and a C translation of this
-file is the remaining step. The hit rate also wanders between sessions -- the
+file is the remaining step -- done, in the entry above. The hit rate also wanders between sessions -- the
 renderer's reducer read 11 of 12 today against the 10 recorded below -- so a
 report should name twelve runs rather than one.
 
