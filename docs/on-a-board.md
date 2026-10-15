@@ -4412,6 +4412,116 @@ image requirements and its dma-buf's permitted types coincide. It is
 correctness by construction against a device where they do not, and nothing
 here demonstrates it.
 
+### The variant is the hard-light arm of Mesa's own blend lowering, 2026-10-14
+
+The entry below left the search seventeen wide and said the key could not
+narrow it. The key can: what was compared was the **source hash**, and the
+whole `SHADER KEY` carries five more fields.
+
+| | distinct source hashes | distinct whole keys |
+|---|---|---|
+| `ps,asm` | 5 | **12** |
+| `ps,asm,nooptvariant` | 5 | **7** |
+
+The five extra keys are the optimized variants, and they are of two kinds:
+
+| source | shader | what makes it a variant | compiles |
+|---|---|---|---|
+| `0x10acddac` | GLSL9 | `opt.prefer_mono = 1` | 7 |
+| `0x65650582` | GLSL10 | `opt.inline_uniforms = 1 (0x3)` | 8 |
+| `0x65650582` | GLSL10 | `opt.inline_uniforms = 1 (0xa)` | 7 |
+
+**A knob separates the two kinds, and it is not an `AMD_DEBUG` one.**
+`radeonsi_inline_uniforms` is a driconf option and Mesa reads driconf options
+from the environment, so `radeonsi_inline_uniforms=false` turns off uniform
+inlining alone and leaves `prefer_mono` compiling. With it:
+
+| | `as-found` nonzero |
+|---|---|
+| *(nothing)* | **15 of 16** |
+| `radeonsi_inline_uniforms=false` | **0 of 16** |
+
+Eight `prefer_mono` variants are still compiled in that run. So the miscompile
+is an **inline-uniforms variant of GLSL10**, and GLSL9's monolithic variant is
+not it -- which is seventeen down to one shader and one optimization.
+
+**And GLSL10 is not one of this renderer's shaders in the way the entry below
+assumed.** GLSL9 and GLSL10 are the *same* source: `with_advanced_blend` takes
+the fragment source and injects two lines, `#extension
+GL_KHR_blend_equation_advanced : require` and
+`layout(blend_support_all_equations) out;`. What the second one gains, from the
+NIR:
+
+| | GLSL9 | GLSL10 |
+|---|---|---|
+| default uniform block | `vec4[1]` | **`vec4[2]`** |
+| `num_inlinable_uniforms` | — | **1, at dword 4** |
+| `advanced_blend_modes` | — | **`0x0000fffe`** |
+| `uses_sample_shading` | — | true |
+| NIR | 6,362 lines | **7,172 lines** |
+
+The extra eight hundred lines are the blend equations: load dword 4, `ine 0`,
+un-premultiply the source and the destination -- the destination arrives as an
+`image_load`, which is the framebuffer fetch -- then a chain of `ieq` against 1
+through 13 selecting an equation, then re-premultiply. None of that is ours.
+It is **Mesa's lowering of `KHR_blend_equation_advanced`**, appended to our
+fragment shader, reading Mesa's own blend-mode uniform; and the variant that
+miscompiles is the one where ACO has that uniform's value inlined.
+
+**That the uniform is the blend mode is measured rather than read off.**
+Swapping the subject's `Overlay` for `Exclusion` moved the inlined value from
+`0x3` to `0xb` and left the other frames' `0xa` where it was -- which is the
+`KHR` equation order, Multiply 1 through Overlay 3, Difference 10,
+Exclusion 11.
+
+**It is one equation, not advanced blending.** `SUBJECT_MODE` and
+`OTHERS_MODE` on `ablate-the-frame-loop` sweep the eleven advanced modes, at
+twelve runs each:
+
+| mode | on the subject | on the other frames |
+|---|---|---|
+| multiply | 0 | 11 |
+| screen | 0 | 8 |
+| **overlay** | **9** | 10 |
+| darken | 0 | 10 |
+| lighten | 0 | 10 |
+| colordodge | 0 | 9 |
+| colorburn | 0 | 9 |
+| **hardlight** | **12** | 10 |
+| softlight | 0 | 11 |
+| difference | 0 | 10 |
+| exclusion | 0 | 9 |
+
+Only `overlay` and `hardlight` reproduce, and those two are **one equation with
+its operands swapped** -- `overlay(Cs, Cb)` is `hardlight(Cb, Cs)`, and the
+lowering writes them with one helper. The other frames reproduce under every
+one of the eleven, so what they owe is *an* advanced blend and not a particular
+one.
+
+**Which render is wrong, and by how much.** The difference is 28 bytes of
+65,536, every one of them **green**, every one of them one-sided: the second
+render is a level **lower**. At (13,27) the first render reads
+`[136, 87, 44, 255]` and the second `[136, 86, 44, 255]`. Four configurations
+that do not compile the variant -- `radeonsi_inline_uniforms=false`,
+`nooptvariant`, `usellvm`, and llvmpipe -- all read 87 twice. So the optimized
+variant is the one that is wrong, and the defect is a one-level green error in
+the hard-light arm.
+
+**What that changes about the bare probe.** The entry below argues a
+renderer-free probe is the wrong artifact because "the miscompiled thing is one
+of this renderer's shaders". It is not: the miscompiled code is Mesa's, and a
+fragment shader of three lines carrying
+`layout(blend_support_all_equations)` and an `Overlay` draw carries the same
+lowering. The *shape* the probe needs is unchanged -- a single-sample subject
+rendered twice with multisampled advanced-blend frames between -- but what it
+has to carry is no longer a copy of ours.
+
+**And a mitigation exists, unused.** `radeonsi_inline_uniforms=false` is a
+driconf option, so a drirc entry naming this application would turn the variant
+off for it and nothing else. Not done, and not recommended from here: the
+reading above is one machine, one Mesa (26.2.4), and the defect belongs
+upstream rather than in a quirk list.
+
 ### What the second instability still owes, and why it is not a bare probe, 2026-10-14
 
 The first instability has `probe-the-blend-instability`: EGL and GL and nothing
@@ -4420,7 +4530,11 @@ renderer. The symmetric thing to want is a bare probe for the second as well.
 **That is the wrong artifact**, and the reason is worth writing down before
 someone spends a day on it.
 
-**The miscompiled thing is one of this renderer's shaders.** The mechanism is
+**The miscompiled thing is one of this renderer's shaders** -- wrong, and the
+entry above says what it is instead: the code is Mesa's own lowering of
+`KHR_blend_equation_advanced`, appended to our fragment shader when the blend
+qualifier is injected. The paragraph is kept as it stood because the reasoning
+it carries is still the reasoning, and only its premise moved. The mechanism is
 ACO's optimized variant -- `nooptvariant`, `mono` and `usellvm` each clear it,
 no DCC option touches it. So a program with no emblema code in it cannot
 reproduce it except by carrying the same shader, which makes "renderer-free"
@@ -4458,9 +4572,10 @@ same five appear in both runs, so the key does not distinguish a variant from
 its unoptimized twin -- narrowing inside the seventeen needs something other
 than the key.
 
-That is as far as this goes for now: the instrument works, the candidate set is
-seventeen rather than unbounded, and naming the one shader is the next step
-rather than a blocked one.
+That was as far as it went that day. The entry above takes it the rest of the
+way: the whole key separates a variant from its twin where the source hash does
+not, one driconf knob suppresses the instability without touching the other
+kind of variant, and the shader is named.
 
 **And the bare probe, if built anyway, is not a small addition.** The second
 instability needs a **single-sample** subject interleaved with **multisampled**
