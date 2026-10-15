@@ -5,22 +5,36 @@
 //! time. `ablate-the-frame-loop` reduced it to five necessary ingredients, and
 //! `probe-the-blend-instability` -- the first instability's bare probe -- cannot
 //! express it: it reads zero in every shape, with the right equation, the right
-//! arrangement and the right inlined variant. What that left is the renderer's
-//! *shader*, which is `SOLID_FS_GLSL` with Mesa's own
-//! `KHR_blend_equation_advanced` lowering appended to it, and the renderer's
-//! *pass structure*, which is four passes rather than three.
+//! arrangement and the right inlined variant. What that was taken to leave was
+//! the renderer's *shader* and the renderer's *pass structure* -- and the pass
+//! structure is the half that was right. It is four passes rather than three,
+//! and the shader turns out not to matter at all; the correction is below.
 //!
 //! So this is the frame loop hand-written against EGL and GL, with the
 //! renderer's own program compiled into it and its paint block filled in by
 //! hand. Nothing from this renderer runs: the shader source is a string, and
 //! every pass, target, buffer and draw below is written out.
 //!
-//! It reproduces. Eleven hits of twelve on `radeonsi` against zero on
+//! It reproduces. Eleven or twelve hits of twelve on `radeonsi` against zero on
 //! `llvmpipe`, the same two pixel values the renderer reads at its worst pixel,
-//! and the renderer's ablation table row for row. And `small-shader` -- the same
-//! four passes with a thirty-line fragment program instead of the generated one
-//! -- reads zero of twelve, which is what says the **shader body** is the
-//! ingredient rather than the arrangement.
+//! and the renderer's ablation table row for row.
+//!
+//! **And the shader body is not the ingredient**, which is a correction: the
+//! first reading of this said it was, on the strength of a thirty-line program
+//! that read zero. That program also shortened the blur's loop, and shortening
+//! the loop is what moved the number -- `short-shader` reproduces twelve of
+//! twelve and draws the generated program's frame to the byte. What the loop
+//! moves is whether a one-level error clears the eight-bit floor:
+//! `AMD_DEBUG=ps,nir` shows the same specializations compiled either way, the
+//! renderer reproduces at every deviation from 2.5 to 5.5, and `nine-taps`
+//! reproduces here as well once the deviation matches the count. Only
+//! `clipped-kernel` -- the two moved apart, which is what the first measurement
+//! did -- reads zero.
+//!
+//! So a zero from this probe means "not visible in this frame", not "not
+//! miscompiled", and every variant below has to be read that way. The five
+//! ablations above stand because they read zero in the renderer's frame too,
+//! which is a different frame; see `docs/on-a-board.md`.
 //!
 //! # What the renderer does, measured rather than guessed
 //!
@@ -52,7 +66,8 @@
 //! subject's is the one that matters, and of the eleven only `overlay` and
 //! `hardlight` reproduce there. `RUNS=n` repeats the whole loop, because the
 //! defect is intermittent: eleven hits of twelve here, ten in the renderer.
-//! `MAP=1` draws the differing pixels and `AT=x,y` prints one from both renders.
+//! `MAP=1` draws the differing pixels and `AT=x,y` prints one from both
+//! renders.
 //!
 //! A variant prints the worst per-channel difference between the subject's two
 //! renders. Zero is stable.
@@ -119,19 +134,19 @@ const TINT_MODULATE: f32 = 13.0;
 /// out.
 const WHOLE: [f32; 12] = [0.5, 0.0, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.5, 0.5, 1.0, 0.0];
 
-/// The same three materials in thirty lines, as the control on the shader.
+/// The same three materials in thirty lines.
 ///
-/// `as-found` differs from `probe-the-blend-instability` in two things at once:
-/// the renderer's fragment program and the renderer's four passes. This variant
-/// changes exactly one of them. The interface is the generated shader's --
-/// the same block, the same instance name, the same varyings and the same
-/// sampler -- so the only thing that moves is the body the driver compiles and
-/// the lowering is appended to.
+/// `TAPS` is substituted into the blur's loop, and it has to be: this program
+/// read zero at nine iterations and was taken for a control on the *shader*,
+/// which it is not. At eleven it reproduces, draws the generated shader's frame
+/// to the byte, and says the opposite -- the body is not the ingredient. What
+/// nine iterations moves is whether the one-level error clears the eight-bit
+/// floor in this frame; `AMD_DEBUG=ps,nir` shows the same specializations
+/// compiled either way. See `docs/on-a-board.md`.
 ///
-/// It draws a slightly different picture: nine taps at a fixed spread rather
-/// than the tap count the deviation implies, and no color filter or dither path
-/// at all. That is what "a short program" means, and the question it answers is
-/// whether a short one in this arrangement reproduces.
+/// The interface is the generated shader's -- the same block, the same instance
+/// name, the same varyings and the same sampler -- so the only thing that moves
+/// between the two is the body.
 const SMALL_FS: &str = r#"#version 300 es
 
 precision highp float;
@@ -177,7 +192,7 @@ void main() {
         float sigma = max(p.params.z, 1e-6);
         vec4 sum = vec4(0.0);
         float total = 0.0;
-        for (int i = -4; i <= 4; i++) {
+        for (int i = -TAPS; i <= TAPS; i++) {
             float w = exp(-0.5 * float(i * i) / (sigma * sigma));
             sum += texture(_group_0_binding_0_fs, uv + step * float(i)) * w;
             total += w;
@@ -303,6 +318,22 @@ struct Shape {
     others_advanced: bool,
     /// Draw with the renderer's own fragment program rather than the short one.
     renderer_shader: bool,
+    /// The blur's half-width, which decides its loop's trip count.
+    ///
+    /// Five is what the shrunk case's deviation computes, and eleven iterations
+    /// is what that is. The error is one level, so this moves it across the
+    /// eight-bit floor without changing what the driver compiles -- which is
+    /// the trap `renderer_shader` fell into. The renderer's own program takes
+    /// its count from the deviation, so this applies to it by scaling that.
+    taps: i32,
+    /// Keep the shrunk case's deviation while `taps` changes, so the loop runs
+    /// over a kernel it does not cover.
+    ///
+    /// This is the shape of the measurement #214 drew the wrong conclusion
+    /// from, kept as a variant because the trap is worth being able to re-run:
+    /// the deviation and the trip count have to move together, or what changed
+    /// is the picture rather than the program.
+    clipped: bool,
 }
 
 const AS_FOUND: Shape = Shape {
@@ -312,6 +343,8 @@ const AS_FOUND: Shape = Shape {
     others_samples: 4,
     others_advanced: true,
     renderer_shader: true,
+    taps: 5,
+    clipped: false,
 };
 
 const VARIANTS: &[(&str, Shape, &str)] = &[
@@ -357,13 +390,33 @@ const VARIANTS: &[(&str, Shape, &str)] = &[
         "the other frames blending ordinarily",
     ),
     (
-        "small-shader",
+        "short-shader",
         Shape {
             renderer_shader: false,
             ..AS_FOUND
         },
-        "the same four passes with a short fragment program instead of the \
-         renderer's -- the control that separates the shader from the arrangement",
+        "the same four passes with a thirty-line fragment program instead of \
+         the renderer's -- which reproduces, and draws the same frame to the byte",
+    ),
+    (
+        "nine-taps",
+        Shape {
+            taps: 4,
+            ..AS_FOUND
+        },
+        "a shallower blur: nine iterations and the deviation that matches them, \
+         which reproduces -- so the trip count is not an ingredient either",
+    ),
+    (
+        "clipped-kernel",
+        Shape {
+            renderer_shader: false,
+            taps: 4,
+            clipped: true,
+            ..AS_FOUND
+        },
+        "the short program looping nine times over a kernel sized for eleven \
+         -- zero, and the only thing that moved is the picture",
     ),
 ];
 
@@ -385,6 +438,20 @@ fn equation(var: &str, fallback: u32) -> u32 {
     }
 }
 
+/// The deviation that makes the generated program's blur take `taps` taps.
+///
+/// `solid.wgsl` reaches `(sigma - 0.5) * sqrt(3)` each way and rounds up, so a
+/// count names a band of deviations rather than one. The shrunk case's own
+/// value is returned for the five it computes -- the frame then stays the
+/// recording's exactly -- and the middle of the band for anything else.
+fn sigma_for(what: Shape) -> f32 {
+    if what.taps == 5 || what.clipped {
+        return 3.1289234;
+    }
+    let reach = what.taps as f32 - 0.5;
+    0.5 + reach / 1.7320508
+}
+
 /// The subject: the layer's content, its blur in two passes, and the frame that
 /// composites it.
 ///
@@ -400,7 +467,7 @@ fn subject(what: Shape) -> Vec<Pass> {
         Blend::Over
     };
     let step = 1.0 / SIDE as f32;
-    let sigma = 3.1289234;
+    let sigma = sigma_for(what);
     let whole = [0.0, 0.0, SIDE as f32, SIDE as f32];
 
     // The layer's own two draws, over a transparent clear.
@@ -764,12 +831,17 @@ impl Program {
     ///
     /// The vertex stage is the renderer's either way: the lowering is appended
     /// to the fragment, so that is the stage a control on the shader moves.
-    fn new(gl: &glow::Context, renderer_shader: bool) -> Self {
+    fn new(gl: &glow::Context, renderer_shader: bool, taps: i32) -> Self {
         let vertex = emblema_shaders::SOLID_VS_GLSL;
+        let substituted;
         let fragment = if renderer_shader {
             emblema_shaders::SOLID_FS_GLSL
         } else {
-            SMALL_FS
+            // The short program's trip count is a literal, so it is substituted
+            // here; the generated one takes its own from the deviation, which
+            // `sigma_for` sets instead.
+            substituted = SMALL_FS.replace("TAPS", &taps.to_string());
+            substituted.as_str()
         };
         let plain = compile(gl, vertex, fragment);
         let blend = compile(gl, vertex, &with_advanced_blend(fragment));
@@ -1275,7 +1347,7 @@ fn main() {
                 println!();
             }
             let gl = &bare.gl;
-            let program = Program::new(gl, what.renderer_shader);
+            let program = Program::new(gl, what.renderer_shader, what.taps);
             let placeholder = placeholder(gl);
 
             let first = render(gl, &program, placeholder, bare.blend_barrier, &subject);

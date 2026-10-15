@@ -195,6 +195,21 @@ fn mode_from(var: &str, fallback: BlendMode) -> BlendMode {
     }
 }
 
+/// The subject's layer blur, default the shrunk case's own 3.1289234.
+///
+/// A knob because the deviation decides the *trip count* of the blur's tap
+/// loop, and the trip count turns out to be the ingredient: `solid.wgsl` reaches
+/// `(sigma - 0.5) * sqrt(3)` each way, so this value gives five taps each side
+/// and eleven iterations. Eleven to seventeen reproduce and nothing outside
+/// that does -- see `docs/on-a-board.md` and
+/// `probe-the-layer-composite`, where the window was found.
+fn blur_sigma() -> f32 {
+    std::env::var("SIGMA")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3.128_923_4)
+}
+
 const SIDE: u32 = 128;
 
 /// The subject: a fill, then a layer holding two draws.
@@ -253,7 +268,7 @@ fn subject(what: Shape_) -> Scene {
     }
     let mut spec = LayerSpec::opacity(0.680_524_2).with_blend(layer_blend);
     if what.subject_layer_blur {
-        spec = spec.with_blur(3.128_923_4);
+        spec = spec.with_blur(blur_sigma());
     }
     Scene::tree(
         "subject",

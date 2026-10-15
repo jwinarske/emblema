@@ -4522,7 +4522,86 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### The shader was never the ingredient, and the oracle has a floor, 2026-10-15
+
+Two entries below say the **shader body** is what the second instability needs,
+on the strength of a thirty-line fragment program that read zero of twelve where
+the generated 964-line one read twelve. That is wrong, and the way it is wrong is
+the one `a-residual-needs-a-control` names: the short program changed two things
+at once.
+
+**The minimal reproducer is fifty lines of shader, and it reproduces.** Starting
+from the generated fragment and cutting only what this frame cannot reach -- the
+tint blend's twenty-nine modes, the dither, the color filter, the four analytic
+shape fields, morphology, the mesh, the four gradients, the glyph, the mipmap and
+cubic samplers, three tile modes, the nearest-sampling snap -- it goes **964
+lines to 188** with the picture **byte-identical** and twenty-four hits of
+twenty-four at every step. Not one of those arms is an ingredient, and none of
+them is dead code to the compiler either: the kind a draw takes is a uniform, so
+every arm is live until the driver specializes it.
+
+And then a thirty-line program written from scratch reproduces as well --
+**twelve of twelve, and the same picture hash as the generated one**, which is a
+stronger statement than reproducing: the two programs draw the same frame to the
+byte.
+
+**What the first measurement actually changed.** The short program's blur ran
+nine iterations where the generated one computes eleven from its deviation. Move
+only that, in either program, and the number moves:
+
+| | hits of twelve |
+|---|---:|
+| the generated program | 12 |
+| the short program, eleven iterations | 12 |
+| the short program, nine iterations over a kernel sized for eleven | **0** |
+| either program, nine iterations and the deviation that matches them | 12 |
+
+So it is not the trip count either. It is the **picture**: a deviation of 3.13
+sampled over nine taps is a different frame, and in that frame the error does not
+clear eight bits.
+
+**Three things say the miscompile is there all along.** `AMD_DEBUG=ps,nir` dumps
+the same specializations at nine taps as at eleven --
+`opt.inline_uniforms = 1 (0x3, 0x0, 0x0, 0x0)` among them, which is the Overlay
+one. The renderer's own reducer reproduces at **every** deviation tried, 2.5
+through 5.5, which is nine to nineteen iterations: `SIGMA=` on
+`ablate-the-frame-loop` reads nine or ten of twelve at all five values. And the
+probe reproduces at nine iterations the moment the deviation matches the count.
+
+**So the oracle has a floor, and that is the lesson.** The error is one level. A
+frame whose arithmetic puts it below half a quantum reads zero with the
+miscompile fully in place, so **a zero from any of these probes means "not
+visible in this frame", not "not miscompiled"** -- and that applies to every
+control recorded in the two entries below as much as to the one it caught.
+
+What keeps the five ablations standing is that they read zero in **two different
+frames**: `subject-multisampled`, `no-layer-blur`, `subject-no-advanced`,
+`others-single-sample` and `others-no-advanced` are zero of twelve in the
+renderer's frame and zero of twelve in the probe's. One frame reading zero is
+weak evidence; two frames whose arithmetic differs is not. The equation sweep has
+the same corroboration, and `radeonsi_inline_uniforms=false` has better: it
+leaves the picture hash unchanged, so there is no arithmetic to blame.
+
+**The artifact is better for it.** `docs/mesa-blend-instability.c` is now
+self-contained -- its own fifty lines of shader, no generated code, no files to
+produce first:
+
+    cc -O2 -o blend-instability docs/mesa-blend-instability.c -lEGL -lGLESv2
+    ./blend-instability
+
+reads twelve of twelve at **one** round of the disturbing frames, which is what
+the renderer itself does. The dose dependence recorded below was the generated
+shader's, not the defect's: under `--generated` one round is still seven or eight
+of twelve and eight rounds is twelve, while the shaders it now carries saturate
+at one. `TAPS=4` is the floor case, kept as a knob because it is what the trap
+looks like from inside.
+
 ### The reproducer in C, and the state accumulates, 2026-10-15
+
+**Superseded in two places by the entry above**: the dose table here is the
+generated shader's rather than the defect's, and the `--small` control is the one
+that was read wrongly. Kept as it stood, because the measurements are right and
+only what they were taken to show has moved.
 
 `docs/mesa-blend-instability.c` is the entry below's remaining step: the same
 frame loop in EGL and GLES with no Rust in it, reading the two generated shaders
@@ -4584,6 +4663,10 @@ What is left is filing it, which is not something this machine should do on its
 own.
 
 ### A bare reproduction, and the shader is the ingredient, 2026-10-15
+
+**The title is wrong and the entry is kept anyway**: the shader is not the
+ingredient, and the entry two above says what the `small-shader` control actually
+changed. The bare reproduction and everything else here stands.
 
 `probe-the-layer-composite` reproduces the second instability with no renderer
 in it: EGL, GL, and the renderer's fragment program as a string. The entry

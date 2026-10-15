@@ -1,11 +1,12 @@
 //! The C reproducer still describes this renderer's frame.
 //!
 //! `docs/mesa-blend-instability.c` is the artifact a Mesa bug report carries:
-//! the frame loop in EGL and GLES with no Rust in it, reading the two generated
-//! shaders from files. Because it is not compiled by anything here, nothing
-//! would notice if the paint block it fills in by hand stopped matching the
-//! block the shader declares -- it would keep building, keep running, and
-//! quietly stop reproducing.
+//! the frame loop in EGL and GLES with no Rust in it, carrying its own fifty
+//! lines of shader and taking the generated pair from files under
+//! `--generated`. Because it is not compiled by anything here, nothing would
+//! notice if the paint block it fills in by hand stopped matching the block
+//! either shader declares -- it would keep building, keep running, and quietly
+//! stop reproducing.
 //!
 //! So the numbers it hardcodes are checked against the ones this tree defines.
 //! Not the whole file: the geometry and the colors are a shrunk case's and mean
@@ -62,7 +63,9 @@ fn the_reproducers_material_kinds_match() {
 /// Both are the translator's rather than the WGSL's -- the block is named after
 /// the struct it carries and the sampler after the texture's group and binding
 /// -- so both are part of the contract and neither is an implementation
-/// detail. The same two names are pinned on the shader crate's side.
+/// detail. The same two names are pinned on the shader crate's side, and the
+/// reproducer's own shader uses them so that `--generated` can swap one program
+/// for the other with nothing else moving.
 #[test]
 fn the_reproducer_looks_up_the_generated_names() {
     for name in ["Paint_block_0Fragment", "_group_0_binding_0_fs"] {
