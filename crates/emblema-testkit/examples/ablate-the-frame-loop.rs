@@ -50,6 +50,10 @@ struct Shape_ {
     subject_layer_blur: bool,
     /// The subject's layer and one of its children blend `Overlay`.
     subject_advanced: bool,
+    /// Only the layer's own composite blends it, not the child draw.
+    subject_advanced_layer_only: bool,
+    /// Only the child draw blends it, not the layer's composite.
+    subject_advanced_draw_only: bool,
     /// The other frames are multisampled.
     others_samples: u32,
     /// One of the other frames has a draw with a mask blur.
@@ -69,6 +73,8 @@ const AS_FOUND: Shape_ = Shape_ {
     subject_samples: 1,
     subject_layer_blur: true,
     subject_advanced: true,
+    subject_advanced_layer_only: false,
+    subject_advanced_draw_only: false,
     others_samples: 4,
     others_mask_blur: true,
     others_advanced: true,
@@ -137,6 +143,22 @@ const VARIANTS: &[(&str, Shape_, &str)] = &[
         "every clip and difference clip taken out, on both sides",
     ),
     (
+        "subject-layer-blend-only",
+        Shape_ {
+            subject_advanced_layer_only: true,
+            ..AS_FOUND
+        },
+        "the layer composites `Overlay` and the draw inside it blends ordinarily",
+    ),
+    (
+        "subject-draw-blend-only",
+        Shape_ {
+            subject_advanced_draw_only: true,
+            ..AS_FOUND
+        },
+        "the draw inside blends `Overlay` and the layer composites ordinarily",
+    ),
+    (
         "others-no-advanced",
         Shape_ {
             others_advanced: false,
@@ -199,6 +221,21 @@ fn subject(what: Shape_) -> Scene {
         },
         Fill::Solid([0.822_578_67, 0.279_028_27, 0.669_239_34, 1.0]),
     );
+    // Which of the subject's two advanced blends is in force. `as-found` has
+    // both; the two variants below keep one each, which is what says whether
+    // the defect rides on the layer's composite or on the draw inside it --
+    // and the composite is drawn by this renderer's own shader where the draw
+    // can be given a caller's.
+    let draw_blend = if what.subject_advanced_layer_only {
+        BlendMode::SrcOver
+    } else {
+        advanced
+    };
+    let layer_blend = if what.subject_advanced_draw_only {
+        BlendMode::SrcOver
+    } else {
+        advanced
+    };
     let mut second = Item::filled(
         Shape::Rect {
             min: [10.0, 23.0],
@@ -206,7 +243,7 @@ fn subject(what: Shape_) -> Scene {
         },
         Fill::Solid([0.167_555_4, 0.442_319_3, 0.497_562_4, 0.772_613_64]),
     )
-    .with_blend(advanced);
+    .with_blend(draw_blend);
     if what.clips {
         under = under.with_clip_out([38.0, 29.0, 89.0, 81.0]);
         first = first
@@ -214,7 +251,7 @@ fn subject(what: Shape_) -> Scene {
             .with_clip_out([16.0, 2.0, 40.0, 44.0]);
         second = second.with_clip([17.0, 25.0, 39.0, 74.0]);
     }
-    let mut spec = LayerSpec::opacity(0.680_524_2).with_blend(advanced);
+    let mut spec = LayerSpec::opacity(0.680_524_2).with_blend(layer_blend);
     if what.subject_layer_blur {
         spec = spec.with_blur(3.128_923_4);
     }
