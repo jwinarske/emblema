@@ -43,7 +43,8 @@
 //! ```text
 //! probe-the-layer-composite            # every ingredient
 //! probe-the-layer-composite --list     # the variants
-//! probe-the-layer-composite --shader   # the fragment program, as the driver gets it
+//! probe-the-layer-composite --shader   # the fragment program, as generated
+//! probe-the-layer-composite --vertex   # the vertex program beside it
 //! ```
 //!
 //! `EQUATION` and `OTHERS_EQUATION` name the advanced equation each side
@@ -1204,12 +1205,27 @@ fn report(name: &str, first: &[u8], again: &[u8], detail: bool) -> i32 {
 
 fn main() {
     let wanted = std::env::args().nth(1);
-    // The fragment program as the driver gets it, qualifier and all. What a
-    // report upstream carries is this text and a draw that miscompiles it, and
-    // printing it is how it leaves here without a Rust toolchain at the other
-    // end.
+    // Either stage, as generated. What a report upstream carries is this text
+    // and a draw that miscompiles it, and printing it is how it leaves here
+    // without a Rust toolchain at the other end --
+    // `docs/mesa-blend-instability.c` is the draw and reads both of these from
+    // files.
+    //
+    // `--shader` is the source as generated rather than as the driver gets it,
+    // because the C program inserts the blend qualifier itself: it builds both
+    // forms of the program, as this one and the renderer do, and a source that
+    // already carried the two lines would declare them twice.
+    // `--shader-blend` is the qualified form, for reading.
     if wanted.as_deref() == Some("--shader") {
+        print!("{}", emblema_shaders::SOLID_FS_GLSL);
+        return;
+    }
+    if wanted.as_deref() == Some("--shader-blend") {
         print!("{}", with_advanced_blend(emblema_shaders::SOLID_FS_GLSL));
+        return;
+    }
+    if wanted.as_deref() == Some("--vertex") {
+        print!("{}", emblema_shaders::SOLID_VS_GLSL);
         return;
     }
     if wanted.as_deref() == Some("--list") {
