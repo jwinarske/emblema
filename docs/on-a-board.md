@@ -4522,6 +4522,38 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### Which of the subject's two blends carries it: the layer's, 2026-10-15
+
+The subject has two advanced blends, and every ablation so far has moved them
+together: `LayerSpec::with_blend(Overlay)` on the layer and `.with_blend(Overlay)`
+on one of the draws inside it. Split, at twelve runs each:
+
+| | nonzero |
+|---|---|
+| *(as found, both)* | 8 of 12 |
+| **the layer composites `Overlay`, the draw inside does not** | **4 of 12** |
+| the draw inside blends `Overlay`, the layer composites `SrcOver` | **0 of 12** |
+
+So it is the **layer's composite**, and the draw inside it is not a necessary
+ingredient at all. And it is the same mechanism: `radeonsi_inline_uniforms=false`
+takes the layer-only variant from 4 of 12 to **0 of 12**.
+
+**Which is why a caller's own program cannot be the lever here.** The testkit can
+give a *draw* a runtime effect -- `Fill::RuntimeEffect`, a fragment program with
+no renderer code in it -- and that was the cheap way to ask whether the shader's
+*body* is the ingredient, since the bare probe reaches the right variant with a
+small one and reproduces nothing. The draw is the half that does not matter. The
+composite is this renderer's own shader drawing the layer's resolved texture
+with the equation on it, and nothing in the API replaces that.
+
+**What it does narrow.** A bare reproduction has to express a *layer composite*:
+an offscreen target rendered, resolved, and then drawn as a texture under
+`GL_OVERLAY_KHR` into a single-sample target -- with multisampled advanced-blend
+frames between the two renders of it. `probe-the-blend-instability`'s shapes
+composite, but through its own small shader; what the renderer does there is the
+7,172-line one with Mesa's lowering appended. That is the next thing to put in a
+bare program, and it is a narrower ask than "the renderer's shader" was.
+
 ### A bare reproduction of the second instability is still not in hand, 2026-10-15
 
 `probe-the-blend-instability` can now express the second instability's
