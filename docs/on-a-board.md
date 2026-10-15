@@ -4522,6 +4522,45 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### A bare reproduction of the second instability is still not in hand, 2026-10-15
+
+`probe-the-blend-instability` can now express the second instability's
+*arrangement* and still does not reproduce it. `OTHERS=n` renders the subject,
+then n frames of a different shape, then the subject again -- two sets of targets
+and two `Ingredients`, which is what the single-frame-repeated loop could never
+do. `EQUATION=overlay` selects `GL_OVERLAY_KHR`, the one equation that matters,
+which this probe had never used: it was built for the first instability, where
+Multiply and Difference are enough.
+
+**Zero levels, every combination tried.** Equation Difference and Overlay;
+`OTHERS` at 1, 2, 3, 10, 40 and 120; `shape-same-equation` so both draws take the
+equation rather than only the composite; four repeats at the small counts.
+
+So four explanations are ruled out, and they were the plausible ones:
+
+| ruled out | how |
+|---|---|
+| the wrong equation | Overlay tried directly, and it is the one the renderer's reducer names |
+| too few draws for the inline-uniforms heuristic | 120 other frames reproduces nothing |
+| the composite taking the equation but not the inside draw | `shape-same-equation` tried |
+| the probe not declaring `blend_support_all_equations` | it declares it in five places, so Mesa does append its lowering here |
+
+**And a note on an argument of mine that was half right.** The entry above
+established the miscompiled code is Mesa's own lowering rather than one of this
+renderer's shaders, and I took that to mean a renderer-free reproduction had
+become the right artifact after all -- against the kept paragraph saying
+"renderer-free" is meaningless here. The premise does flip: any program declaring
+the qualifier gets Mesa's lowering, so whose shader it is was never the obstacle.
+What the sweep above shows is that it was never the obstacle *in either
+direction* -- something else in the renderer's arrangement is necessary, and a
+bare program is no closer for knowing where the shader came from.
+
+**One thing fell out of it.** The first instability's size depends on the
+equation too: 15 levels over 317 bytes at `GL_DIFFERENCE_KHR`, and 3 over 107 at
+`GL_OVERLAY_KHR`. The default is unchanged, so every figure recorded for it still
+stands -- but the two instabilities now both have an equation-dependent
+magnitude, which was not known of the first.
+
 ### What the second instability still owes, and why it is not a bare probe, 2026-10-14
 
 The first instability has `probe-the-blend-instability`: EGL and GL and nothing
