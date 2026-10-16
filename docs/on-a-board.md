@@ -4554,13 +4554,32 @@ did not fix the case, and it broke
 purpose and asserts the ramp loses it. Reverted.
 
 **That failure is the useful part.** If refusing the fast route leaves the
-disagreement exactly where it was, the route is not the variable. The remaining
-reading, untested: both sides walk the stops, their *parameter* differs by a hair
+disagreement exactly where it was, the route is not the variable.
+
+**And the remaining reading is no longer untested.** Sweeping the middle stop
+and leaving everything else alone, the same case through both routes:
+
+| middle stop | last section | worst |
+|---|---|---|
+| 0.9991748 | **0.029 px** | **6 levels** |
+| 0.99 | 0.355 px | 0 |
+| 0.95 | 1.773 px | 0 |
+| 0.9 | 3.546 px | 0 |
+| 0.5 | 17.728 px | 0 |
+| 0.0 | 35.456 px | 0 |
+
+It depends on the step's steepness, and it is gone well before a whole pixel --
+already at 0.355 of one. Put beside the fix that did nothing, the two facts agree
+on one reading: both sides walk the stops, their *parameter* differs by a hair
 because `draw_rect` and `draw_path` generate the geometry separately, and a step
-this narrow turns a hair into six levels. Under that reading a one-level floor is
-not a meaningful comparison for stops this close, and the question is which of
-three things to do -- make the geometry paths agree, stop the generator producing
-sub-pixel stop pairs, or name it a divergence the way the catalog names its own.
+compressed into three hundredths of a pixel turns that hair into six levels.
+Nothing here is wrong with either route.
+
+Which bears on the remedy without settling it. "Make the geometry paths agree" is
+the weakest of the three, because a hair of difference between independently
+generated geometry is not a defect to be fixed; a floor on what the generator may
+produce, or naming it a divergence, are the two that match what was measured. The
+call is not made here.
 
 **The gate is green only because the case is set aside.** Committing the
 regression file turns it red, which is the honest state for a defect nobody has
