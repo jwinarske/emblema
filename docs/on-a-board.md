@@ -4522,6 +4522,50 @@ off for it and nothing else. Not done, and not recommended from here: the
 reading above is one machine, one Mesa (26.2.4), and the defect belongs
 upstream rather than in a quirk list.
 
+### The gradient routes disagree on a near-step, 2026-10-15
+
+Found by `the_routes_agree_over_generated_gradients` during an unrelated gate
+run, and **not yet resolved**: the two linear-gradient routes differ by **six
+levels at byte 7197 of 65536** where that file's floor is one.
+
+The shrunk case, kept here because it is not committed as a regression file yet
+and would otherwise be lost:
+
+```
+cc 8a8a790d06b46a31c087eed1bb0494412abab986adf83cf332502564ddab921d
+min [4.0, 14.471816]  max [28.0, 49.928]
+LinearGradient start [4.0, 49.928] end [4.0, 14.471816]  tile Clamp  blend SrcOver
+stops  black @ 0.0,  black @ 0.9991748,  green(0, 0.628, 0) @ 1.0
+```
+
+A near-step: black for the first 99.92 per cent and the whole ramp in the last
+eight hundredths of one per cent, on a rectangle about thirty-five units tall.
+That file's own header says one level is the floor two precisions give and that
+"if a generated one exceeds it, the interesting question is which input did".
+This is which.
+
+**A fix was tried and was wrong, both ways it can be.** The reasoning was that
+each section of the vertex-interpolated route is a quad carrying the stop colors
+on its corners, so a stop pair spanning three hundredths of a pixel is a quad the
+rasterizer cannot place -- and that `fast_gradient_sections` should refuse it, the
+way it already refuses every tile mode but `Clamp` for a neighboring reason. It
+did not fix the case, and it broke
+`a_baked_ramp_is_the_coarser_of_the_two_routes`, which builds a narrow spike on
+purpose and asserts the ramp loses it. Reverted.
+
+**That failure is the useful part.** If refusing the fast route leaves the
+disagreement exactly where it was, the route is not the variable. The remaining
+reading, untested: both sides walk the stops, their *parameter* differs by a hair
+because `draw_rect` and `draw_path` generate the geometry separately, and a step
+this narrow turns a hair into six levels. Under that reading a one-level floor is
+not a meaningful comparison for stops this close, and the question is which of
+three things to do -- make the geometry paths agree, stop the generator producing
+sub-pixel stop pairs, or name it a divergence the way the catalog names its own.
+
+**The gate is green only because the case is set aside.** Committing the
+regression file turns it red, which is the honest state for a defect nobody has
+fixed, and is why it has not been committed without the call being made.
+
 ### The shader was never the ingredient, and the oracle has a floor, 2026-10-15
 
 Two entries below say the **shader body** is what the second instability needs,
