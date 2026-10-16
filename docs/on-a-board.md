@@ -4806,9 +4806,25 @@ So four explanations are ruled out, and they were the plausible ones:
 | the probe not declaring `blend_support_all_equations` | it declares it in five places, so Mesa does append its lowering here |
 | the frame being too small | `SIDE` raised to 128, the reducer's own size, and to 256: zero at both |
 | the probe's shaders never getting the variant | it compiles eight, and **two carry `inline_uniforms = 1`** |
+| the missing resolve | `SUBJECT_SAMPLES=4` makes the subject's layer multisampled, so the blit runs and the composite samples a resolved texture: still zero |
 
-The last of those is the one that would have explained all the others, and it
-does not: the probe reaches an inline-uniforms variant and still does not
+**The resolve was the last thing the description named that this arrangement did
+not do**, and it is not the ingredient. `SUBJECT_SAMPLES` sets the subject's own
+sample count independently of the variant, because at one sample the blit is
+skipped and the composite samples the layer's own texture instead. At four the
+blit runs. Under `nodccmsaa`, at one and four samples and with zero, one and
+three frames between, four repeats each: **zero every time**.
+
+**And this negative has the control the earlier ones lacked.** The same
+arrangement without `nodccmsaa` reports **3 levels over 107 bytes** at four
+samples with no frames between -- which is the first instability at Overlay, to
+the byte, from the entry below. So the harness does see a frame-to-frame
+difference when one exists, `nodccmsaa` does suppress the one it is meant to, and
+the zeros above are the absence of the second instability rather than a probe
+that cannot measure. `OTHERS=0` exists for exactly that comparison.
+
+The inline-uniforms line above is the one that would have explained all the
+others, and it does not: the probe reaches an inline-uniforms variant and still does not
 reproduce.
 
 **And the value is in the key after all**, so this does not stop here. The dump
