@@ -4784,6 +4784,20 @@ bare program, and it is a narrower ask than "the renderer's shader" was.
 
 ### A bare reproduction of the second instability is still not in hand, 2026-10-15
 
+> **Superseded, same day, by *A bare reproduction, and the shader is the
+> ingredient* above.** One exists: `probe-the-layer-composite`, eleven hits of
+> twelve on `radeonsi` and zero on `llvmpipe`. The heading is left as it was
+> written because the list below is still the record of what was ruled out, and
+> because what it was missing is worth naming rather than deleting.
+>
+> **The arrangement is four passes, not three.** The layer's content, *two*
+> separable blur passes, and the composite. Every negative below was measured
+> against a three-pass arrangement, so none of them were ever tests of the thing
+> -- the equation, the frame count, the size, the variant, the inlined value and
+> the resolve were all eliminated from a shape that could not have reproduced it
+> whatever they were set to. That is the honest reading: the list is sound about
+> what it tried and was asking in the wrong place.
+
 `probe-the-blend-instability` can now express the second instability's
 *arrangement* and still does not reproduce it. `OTHERS=n` renders the subject,
 then n frames of a different shape, then the subject again -- two sets of targets
