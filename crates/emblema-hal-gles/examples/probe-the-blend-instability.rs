@@ -1328,20 +1328,32 @@ fn main() {
             // multisampled under whatever this variant uses, because the
             // renderer's reducer showed they owe an advanced blend rather than
             // a particular one.
-            let others: usize = std::env::var("OTHERS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            if others > 0 {
+            let others: Option<usize> = std::env::var("OTHERS").ok().and_then(|v| v.parse().ok());
+            if let Some(others) = others {
+                // The subject's own sample count, independent of the variant.
+                //
+                // `samples` decides whether the layer is multisampled, and so
+                // whether there is a *resolve* before the composite: at one
+                // sample the blit is skipped and the composite samples the
+                // layer's own texture instead. That blit is the one thing a
+                // bare reproduction is described as needing which this
+                // arrangement did not do, so it is settable without dragging
+                // the rest of the variant with it. `OTHERS=0` is allowed now,
+                // because the same code path with no frames between is the
+                // control this comparison needs.
+                let subject_samples: i32 = std::env::var("SUBJECT_SAMPLES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1);
                 let subject = Ingredients {
-                    samples: 1,
+                    samples: subject_samples,
                     ..*what
                 };
                 let disturber = Ingredients {
                     samples: 4,
                     ..*what
                 };
-                let mut subject_layer = target(gl, 1, what.stencil);
+                let mut subject_layer = target(gl, subject_samples, what.stencil);
                 let mut subject_resolved = target(gl, 1, what.stencil);
                 let mut subject_output = target(gl, 1, what.stencil);
                 let mut other_layer = target(gl, 4, what.stencil);
@@ -1386,7 +1398,7 @@ fn main() {
                     .filter(|(a, b)| a != b)
                     .count();
                 println!(
-                    "{name:24} subject after {others} multisampled frame(s): \
+                    "{name:24} subject({subject_samples}x) after {others} frame(s): \
                      worst {worst:3} level(s), {differing:5} byte(s) differ | \
                      {label} {} -> {}",
                     center(&before),
