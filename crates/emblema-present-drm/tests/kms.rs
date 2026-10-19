@@ -1003,6 +1003,15 @@ fn a_gbm_allocated_ring_presents_and_survives_a_resize() {
 
     let Some(other) = other else {
         eprintln!("skipping the resize: this connector offers one extent");
+        // Destroyed on the way out, which the first version of this did not do.
+        // A connector with one mode is the only way to reach this line, so on a
+        // machine whose connectors offer several it never ran -- and on a Pi 5,
+        // whose DSI panel offers exactly one, it left four frames in flight and
+        // the ring's textures undestroyed. The validation layer reported a
+        // pipeline and a render pass still in use by a command buffer at
+        // `vkDestroyDevice`, which is what a skip that forgets its teardown
+        // looks like from the log.
+        target.destroy(&mut ctx);
         return;
     };
     eprintln!("resizing to {other:?}");

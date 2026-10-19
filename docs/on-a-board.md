@@ -4147,6 +4147,41 @@ declares 2 memory plane(s) and 1 were described`.
 The test pins no modifier on purpose: a device that prefers linear runs the same
 path with one plane, which is the case that must keep working.
 
+### The Pi 5 proves the GBM path, 2026-10-19
+
+The board the other three could not be. `v3dv` both imports a dma-buf and draws,
+which is the pair nothing else on this bench has, so `with_gbm` is testable end
+to end for the first time.
+
+**The export suite is eight of eight**, including the round trip at the layout
+the device picks for itself: modifier **`0x0700000000000006`**, which is Broadcom
+UIF and *tiled*. Every round trip recorded before this one was linear -- on the
+workstation because RADV's DCC needed the multi-plane work first, on the Radxa
+and the SA8155P because neither could import at all. So this is also the first
+non-linear import this renderer has done anywhere.
+
+**The whole `kms.rs` suite is nine of nine**, and that is both paths on one
+board:
+
+| | |
+|---|---|
+| the direct path | `a_rendered_frame_reaches_a_real_display_controller`, driving `card1` at 800x1280 |
+| the GBM path | a ring of three at 800x1280, presented, and the display took the allocation |
+| pacing, incidentally | 54 flips over 53 blanks, **missed 0**, one CPU wait |
+
+GBM allocated at modifier `0x0` where the renderer's own export prefers UIF,
+which is the arrangement this path exists for: the allocation is made on the
+display's device, so it is made in a layout the display accepts.
+
+**And a defect of mine that only a one-mode connector could find.** The ring test
+skips its resize where a connector offers a single extent, and that skip returned
+*before* `PresentTarget::destroy`. On this workstation every connector offers
+several extents, so the line never ran; the Pi 5's DSI panel offers exactly one,
+and the run left four frames in flight and the ring's textures undestroyed --
+reported as a pipeline and a render pass still in use by a command buffer at
+`vkDestroyDevice`. A skip that forgets its teardown looks like a driver fault in
+the log and is not one. Fixed, and nine of nine is after the fix.
+
 ### And the SA8155P cannot answer it either, 2026-10-14
 
 Looking for a board whose renderer *imports*, since the Radxa's does not. The
@@ -4176,7 +4211,9 @@ driver does not recognize something in the chain handed to it. Whether that is
 the same cause as `ERROR_UNKNOWN` from pipeline creation is not established here,
 and the two could be unrelated.
 
-**So the fleet still cannot prove `with_gbm` end to end.** Three boards, three
+**So the fleet still cannot prove `with_gbm` end to end.** *(Wrong by one board
+-- see the entry above. The Pi 5 proves it. The three readings below are each
+still true of their own board.)* Three boards, three
 different reasons: the Pi family allocates for itself so the path is not the only
 one there, the Radxa needs the path and has no device that imports, and the
 SA8155P imports nothing because it draws nothing. The proof needs a board whose
@@ -4234,7 +4271,8 @@ Otherwise the error is merely hidden, which is what the drop-time check prevents
 in the census as unavailable rather than silently absent. What remains unproven
 is the thing the board was run for -- that `with_gbm` allocates and presents on a
 device that cannot allocate for itself -- because no Vulkan device on this board
-imports. That needs a board whose renderer does, and this fleet has not got one.
+imports. That needs a board whose renderer does -- **and the Pi 5 is one**, which
+this entry had no reason to expect and did not check. See the entry above.
 
 ### The GBM ring presents, and what this machine cannot tell about it, 2026-10-14
 
