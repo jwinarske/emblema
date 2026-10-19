@@ -4575,11 +4575,31 @@ because `draw_rect` and `draw_path` generate the geometry separately, and a step
 compressed into three hundredths of a pixel turns that hair into six levels.
 Nothing here is wrong with either route.
 
-Which bears on the remedy without settling it. "Make the geometry paths agree" is
-the weakest of the three, because a hair of difference between independently
-generated geometry is not a defect to be fixed; a floor on what the generator may
-produce, or naming it a divergence, are the two that match what was measured. The
-call is not made here.
+Which bears on the remedy, and the call is made now: **a floor on what the
+generator may produce.** Not "make the geometry paths agree", because a hair of
+difference between independently generated geometry is not a defect to fix; and
+not a named divergence, because the thing to exclude is a *class* the comparison
+cannot speak about rather than one case that happens to fail.
+
+`spaced_by_a_pixel` in `gradient_routes.rs` drops an interior stop sitting less
+than one pixel of the shape's own axis from the one before it, or that close to
+the endpoint. A pixel rather than the 0.355 measured clean, because the generated
+rectangle may be transformed and the strategy sees it untransformed.
+
+**What it costs, measured rather than assumed:** over 600 generated cases the
+stop-count distribution goes from `{2: 204, 3: 205, 4: 191}` to
+`{2: 211, 3: 212, 4: 177}`. Fourteen cases in six hundred lose one stop -- 2.3
+per cent -- and two thirds still carry interior stops. The floor is not quietly
+turning this into a two-stop test.
+
+**And it still catches a real disagreement.** Shifting the interpolated route's
+green by 0.02 inside `fast_gradient_sections` fails the generated test at six
+levels. That control is the point: a floor that removed the comparison's teeth
+along with the degenerate inputs would look identical from the test log.
+
+Nine hundred fresh cases over three seeds are clean with the floor in, and the
+shrunk case above replays clean through it, so its seed is committed as a
+regression the way proptest's own note asks.
 
 **The gate is green only because the case is set aside.** Committing the
 regression file turns it red, which is the honest state for a defect nobody has

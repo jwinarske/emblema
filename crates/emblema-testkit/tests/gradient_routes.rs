@@ -134,6 +134,7 @@ fn case() -> impl Strategy<Value = Case> {
                 ([min[0], min[1]], [min[0], max[1]])
             };
             let (start, end) = if reversed { (b, a) } else { (a, b) };
+            let stops = spaced_by_a_pixel(stops, &a, &b);
             Case {
                 min,
                 max,
@@ -147,6 +148,62 @@ fn case() -> impl Strategy<Value = Case> {
             }
         },
     )
+}
+
+/// Drop interior stops that sit less than a pixel from the one before them.
+///
+/// Not a tolerance, and not a case carved out of a failing suite: it is what
+/// makes the comparison mean anything. The two routes are meant to paint the
+/// same picture, and for a step compressed into a fraction of a pixel they
+/// cannot -- `draw_rect` and `draw_path` generate the geometry separately, so a
+/// fragment's parameter differs between them by a hair, and a step that narrow
+/// turns a hair into whichever side of it the pixel's center lands on.
+///
+/// Measured, and this is the whole reason for the function. Stops at `0.0`,
+/// `0.9991748` and `1.0` on a rectangle thirty-five units tall put the last
+/// step **three hundredths of a pixel** across and the two routes six levels
+/// apart, where this file's floor is one. Sweeping that middle stop and
+/// changing nothing else: six levels at 0.029 px, and **zero** at 0.355 px and
+/// at every width above it. So the disagreement belongs to the step's
+/// steepness, not to either route -- refusing the interpolated route for such a
+/// gradient was tried and changed nothing, which is the other half of the
+/// evidence.
+///
+/// A pixel rather than the 0.355 that was measured clean, because the generated
+/// rectangle may be transformed and this sees it untransformed: one pixel of the
+/// shape's own axis is the margin that holds when something scales it down a
+/// little. `docs/on-a-board.md` has the measurement.
+fn spaced_by_a_pixel(stops: Vec<Stop>, a: &[f32; 2], b: &[f32; 2]) -> Vec<Stop> {
+    let axis = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+    if axis <= 0.0 {
+        return stops;
+    }
+    let floor = 1.0 / axis;
+    let mut out: Vec<Stop> = Vec::with_capacity(stops.len());
+    for stop in stops {
+        // The last stop is the endpoint at 1.0 and always kept; an interior one
+        // too close to what precedes it, or to that endpoint, is dropped.
+        let keep = match out.last() {
+            None => true,
+            Some(previous) => {
+                stop.offset >= previous.offset + floor && (1.0 - stop.offset) >= floor
+            }
+        };
+        if keep {
+            out.push(stop);
+        }
+    }
+    // The endpoint is not optional: the predicate requires a stop at 1.0, and
+    // dropping the one that was there would send every case down the fragment
+    // route and quietly stop testing the pair.
+    if out.last().map(|s| s.offset) != Some(1.0) {
+        let last = Stop::new(
+            out.last().map(|s| s.color).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            1.0,
+        );
+        out.push(last);
+    }
+    out
 }
 
 fn blend() -> impl Strategy<Value = BlendMode> {
