@@ -244,6 +244,11 @@ pub mod sampling {
 }
 
 /// Tile mode selector shared with the shader.
+///
+/// emblema's own numbering, older than [`TileMode`]'s upstream discriminants
+/// and deliberately not cast from them: `DECAL` is 2 and `MIRROR` 3 here,
+/// the other way round from the enum, and only this side is visible from
+/// the shader.
 pub mod tile {
     pub const CLAMP: f32 = 0.0;
     pub const REPEAT: f32 = 1.0;
@@ -334,12 +339,16 @@ pub enum Gamma {
 }
 
 impl ColorFilter {
-    /// A filter from the twenty numbers `dart:ui` states one in.
+    /// A filter from a 4x5 color matrix, in `dart:ui`'s layout but not its
+    /// units.
     ///
     /// Row-major and five wide: four scales and a constant per output channel,
     /// red row first, applied to straight color with each channel from zero to
-    /// one. The constants are in the same units, so a matrix written against
-    /// the 0-255 convention has to have its last column divided by 255 first.
+    /// one. The constants are in the same units, zero to one, as Impeller's
+    /// are. `ColorFilter.matrix` states them in 0-255, and the engine divides
+    /// that column by 255 before Impeller sees it
+    /// (`lib/ui/painting/color_filter.cc`); a caller passing `dart:ui`'s
+    /// numbers through has to do the same.
     pub fn matrix(rows: [f32; 20]) -> Self {
         let mut columns = [[0.0f32; 4]; 4];
         let mut offset = [0.0f32; 4];
@@ -1003,19 +1012,19 @@ pub enum Material {
 }
 
 /// What happens outside an image's own bounds.
+///
+/// Numbered as upstream numbers them: the discriminants are `dart:ui`'s
+/// `TileMode.index`, `DlTileMode` and Impeller's `Entity::TileMode`, so
+/// `as u8` gives an embedder the upstream number, as with
+/// [`crate::BlendMode`]. The number a shader reads is [`tile`], kept apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
 pub enum TileMode {
     /// Hold the edge pixel. The usual choice for drawing an image once.
     #[default]
-    Clamp,
+    Clamp = 0,
     /// Repeat the image, tiling the plane.
-    Repeat,
-    /// Draw nothing outside the image.
-    ///
-    /// Distinct from clamping in the only case that matters: a shape larger
-    /// than the image it is filled with. Clamping smears the border across the
-    /// remainder, which reads as a rendering fault rather than as a choice.
-    Decal,
+    Repeat = 1,
     /// Repeat, reversing every other copy.
     ///
     /// What repeating is for when the two ends do not match. A ramp tiled by
@@ -1023,7 +1032,13 @@ pub enum TileMode {
     /// every period, and that discontinuity is a visible seam; reflecting each
     /// alternate copy joins end to end and leaves none. The period is twice as
     /// long, since a copy and its reflection make one.
-    Mirror,
+    Mirror = 2,
+    /// Draw nothing outside the image.
+    ///
+    /// Distinct from clamping in the only case that matters: a shape larger
+    /// than the image it is filled with. Clamping smears the border across the
+    /// remainder, which reads as a rendering fault rather than as a choice.
+    Decal = 3,
 }
 
 impl Material {
@@ -1665,6 +1680,27 @@ pub enum MaterialVariant {
 
 #[cfg(test)]
 mod tests {
+
+    /// The enum carries upstream's numbers; the shader keeps its own, and
+    /// reordering the enum to the first left the second alone.
+    #[test]
+    fn tile_modes_are_upstreams_numbers_and_the_shader_keeps_its_own() {
+        assert_eq!(
+            [
+                TileMode::Clamp,
+                TileMode::Repeat,
+                TileMode::Mirror,
+                TileMode::Decal
+            ]
+            .map(|t| t as u8),
+            [0, 1, 2, 3],
+            "dart:ui TileMode.index and Impeller's Entity::TileMode"
+        );
+        assert_eq!(tile_code(TileMode::Clamp), tile::CLAMP);
+        assert_eq!(tile_code(TileMode::Repeat), tile::REPEAT);
+        assert_eq!(tile_code(TileMode::Mirror), 3.0);
+        assert_eq!(tile_code(TileMode::Decal), 2.0);
+    }
 
     /// `VertexGradient` packs as the identity for the tint that colors it, and
     /// asks for a dither where `Solid` does not.
