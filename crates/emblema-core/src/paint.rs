@@ -772,8 +772,10 @@ impl Paint {
 
     /// A fill that runs around a center in user space.
     ///
-    /// Angles are in radians, counter-clockwise from the positive X axis. At
-    /// any number of stops; see [`Paint::linear_gradient`].
+    /// Angles are in radians from the positive X axis, increasing toward
+    /// positive Y: clockwise on screen, where Y points down, as `dart:ui` and
+    /// Skia measure them. At any number of stops; see
+    /// [`Paint::linear_gradient`].
     pub fn sweep_gradient(
         center: Vec2,
         start_angle: f32,

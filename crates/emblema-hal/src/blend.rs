@@ -61,83 +61,97 @@ impl BlendFactors {
 /// destination survive and where; the separable modes, which mix the two
 /// arithmetically channel by channel; and the non-separable modes, which
 /// exchange whole attributes of a color. Only the first works everywhere.
+///
+/// Numbered as upstream numbers them: the discriminants are Impeller's
+/// `BlendMode` and `dart:ui`'s `BlendMode.index`, which agree with each other
+/// and with Skia's `SkBlendMode`. A caller holding one of those numbers --
+/// an embedder decoding a `Paint`, a port reading a serialized display list
+/// -- converts with a table it can check against this one rather than a
+/// match it has to keep in step by hand, and `as u8` gives the number back.
+///
+/// The number a shader reads is [`Self::code`], not this. The two are kept
+/// apart on purpose; see there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
 pub enum BlendMode {
     /// Leave nothing behind. Neither source nor destination survives.
-    Clear,
+    Clear = 0,
     /// Replace the destination outright, alpha included.
     ///
     /// Not the same as [`Self::SrcOver`] with an opaque source: this overwrites
     /// destination alpha too, which decides whether a layer composites
     /// correctly when it is itself drawn onto something else.
-    Src,
+    Src = 1,
     /// Keep the destination and discard the source.
-    Dst,
+    Dst = 2,
     /// Source over destination: the default for drawing one thing on another.
     #[default]
-    SrcOver,
+    SrcOver = 3,
     /// Destination over source, as though the source were drawn underneath.
-    DstOver,
+    DstOver = 4,
     /// Source, clipped to where the destination is.
-    SrcIn,
+    SrcIn = 5,
     /// Destination, clipped to where the source is.
-    DstIn,
+    DstIn = 6,
     /// Source, clipped to where the destination is not.
-    SrcOut,
+    SrcOut = 7,
     /// Destination, clipped to where the source is not.
-    DstOut,
+    DstOut = 8,
     /// Source drawn on top, but only within the destination's shape.
-    SrcATop,
+    SrcATop = 9,
     /// Destination drawn on top, but only within the source's shape.
-    DstATop,
+    DstATop = 10,
     /// Whichever of the two is not overlapped by the other.
-    Xor,
+    Xor = 11,
     /// The two added together, saturating.
     ///
     /// Used for light accumulation, where overlapping contributions should
     /// brighten rather than replace.
-    Plus,
+    Plus = 12,
     /// The two multiplied together.
-    Modulate,
+    Modulate = 13,
 
     // Everything below mixes the two sides arithmetically and requires
     // advanced blending. The formulas are the separable ones from the
     // compositing specification, applied per channel to unpremultiplied color.
-    /// Multiply the two, which always darkens.
-    Multiply,
     /// The inverse of multiplying the inverses, which always lightens.
-    Screen,
+    Screen = 14,
     /// Multiply or screen depending on the destination, so the destination
     /// decides the contrast.
-    Overlay,
+    Overlay = 15,
     /// The darker of the two, per channel.
-    Darken,
+    Darken = 16,
     /// The lighter of the two, per channel.
-    Lighten,
+    Lighten = 17,
     /// Brighten the destination in proportion to the source.
-    ColorDodge,
+    ColorDodge = 18,
     /// Darken the destination in proportion to the inverse of the source.
-    ColorBurn,
+    ColorBurn = 19,
     /// Overlay with the roles reversed, so the source decides the contrast.
-    HardLight,
+    HardLight = 20,
     /// A gentler hard-light, without the hard transition at the midpoint.
-    SoftLight,
+    SoftLight = 21,
     /// The absolute difference, which inverts where the two agree.
-    Difference,
+    Difference = 22,
     /// Like difference, but with a softer response near the midpoint.
-    Exclusion,
+    Exclusion = 23,
+    /// Multiply the two, which always darkens.
+    ///
+    /// Last of the separable modes rather than first, because that is where
+    /// upstream numbers it (`impeller/geometry/color.h`).
+    Multiply = 24,
 
     // Everything below is non-separable: each output channel depends on all
     // three input channels, because these are stated in terms of a color's
     // hue, saturation and luminosity rather than of its components.
     /// The source's hue, with the backdrop's saturation and luminosity.
-    Hue,
+    Hue = 25,
     /// The source's saturation, with the backdrop's hue and luminosity.
-    Saturation,
+    Saturation = 26,
     /// The source's hue and saturation, with the backdrop's luminosity.
-    Color,
+    Color = 27,
     /// The source's luminosity, with the backdrop's hue and saturation.
-    Luminosity,
+    Luminosity = 28,
 }
 
 impl BlendMode {
@@ -189,7 +203,6 @@ impl BlendMode {
 
     /// The modes that need advanced blending.
     pub const ADVANCED: &'static [Self] = &[
-        Self::Multiply,
         Self::Screen,
         Self::Overlay,
         Self::Darken,
@@ -200,6 +213,7 @@ impl BlendMode {
         Self::SoftLight,
         Self::Difference,
         Self::Exclusion,
+        Self::Multiply,
         Self::Hue,
         Self::Saturation,
         Self::Color,
@@ -225,7 +239,6 @@ impl BlendMode {
         Self::Xor,
         Self::Plus,
         Self::Modulate,
-        Self::Multiply,
         Self::Screen,
         Self::Overlay,
         Self::Darken,
@@ -236,23 +249,21 @@ impl BlendMode {
         Self::SoftLight,
         Self::Difference,
         Self::Exclusion,
+        Self::Multiply,
         Self::Hue,
         Self::Saturation,
         Self::Color,
         Self::Luminosity,
     ];
 
-    /// Whether this mode needs advanced blending.
-    ///
-    /// Callers check [`crate::Capabilities::advanced_blend`] before using one, and a
-    /// backend without it refuses rather than substituting something that looks
-    /// close: a silently wrong blend mode is a picture nobody can debug from.
     /// The number a shader reads to identify this mode.
     ///
-    /// Spelled out rather than cast from the discriminant, because the
-    /// discriminant is an implementation detail a reordering would change and
-    /// this number is written into a uniform buffer that a shader decodes. The
-    /// two must agree, and only one of them is visible from the shader.
+    /// Spelled out rather than cast from the discriminant, because this number
+    /// is written into a uniform buffer that a shader decodes, and the two
+    /// must agree where only one of them is visible from the shader. It is
+    /// emblema's own numbering and predates the upstream discriminants: it
+    /// still counts `Multiply` as 14, which moving the variant did not change
+    /// and does not need to.
     pub const fn code(self) -> f32 {
         match self {
             Self::Clear => 0.0,
@@ -287,6 +298,11 @@ impl BlendMode {
         }
     }
 
+    /// Whether this mode needs advanced blending.
+    ///
+    /// Callers check [`crate::Capabilities::advanced_blend`] before using one, and a
+    /// backend without it refuses rather than substituting something that looks
+    /// close: a silently wrong blend mode is a picture nobody can debug from.
     pub const fn is_advanced(self) -> bool {
         !matches!(
             self,
@@ -1037,6 +1053,23 @@ mod tests {
                 "{mode} has a formula in both families"
             );
         }
+    }
+
+    #[test]
+    fn discriminants_are_upstreams_numbers() {
+        // ALL is in declaration order, so its index is the discriminant.
+        for (i, mode) in BlendMode::ALL.iter().enumerate() {
+            assert_eq!(*mode as usize, i, "{mode} is out of place in ALL");
+        }
+        // Spot checks against Impeller's BlendMode (impeller/geometry/color.h)
+        // and dart:ui's BlendMode.index, which share these numbers.
+        assert_eq!(BlendMode::SrcOver as u8, 3);
+        assert_eq!(BlendMode::Modulate as u8, 13);
+        assert_eq!(BlendMode::Screen as u8, 14);
+        assert_eq!(BlendMode::Exclusion as u8, 23);
+        assert_eq!(BlendMode::Multiply as u8, 24);
+        assert_eq!(BlendMode::Luminosity as u8, 28);
+        assert_eq!(BlendMode::ALL.len(), 29);
     }
 
     #[test]
