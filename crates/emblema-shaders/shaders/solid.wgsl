@@ -659,12 +659,22 @@ fn rrect_blur_coverage(clip: vec3<f32>) -> vec4<f32> {
     // does without it. In the domain the CPU side produces it cannot bite:
     // `min_edge` is positive and `erf7` is monotonic, so the difference is
     // never negative, and `scale` is half an `erf7` and so never above a half
-    // while the difference is never above two. It is here because this writes
-    // a premultiplied color, where a coverage above one would put color past
-    // alpha and show up as a bright fringe rather than as an obviously wrong
-    // picture. If it ever does bite, something on the CPU side is wrong and
-    // this hides it -- so it is worth removing to look, rather than trusting.
-    return paint.stops[0] * clamp(coverage, 0.0, 1.0);
+    // while the difference is never above two. It is here because a coverage
+    // above one would put color past alpha and show up as a bright fringe
+    // rather than as an obviously wrong picture. If it ever does bite,
+    // something on the CPU side is wrong and this hides it -- so it is worth
+    // removing to look, rather than trusting.
+    //
+    // The color is straight, as every solid paint's is, and premultiplied
+    // here, as the glyph and ellipse arms do: this arm returns before the
+    // shared premultiply at the end of `shade`. Returning `color * coverage`
+    // left the color channels at full strength under a fractional alpha,
+    // which a black shadow cannot show and a colored one shows as a fringe
+    // brighter than what it falls on. Upstream's `rrect_blur.frag` multiplies
+    // a color the CPU side has already premultiplied.
+    let tint = paint.stops[0];
+    let alpha = tint.a * clamp(coverage, 0.0, 1.0);
+    return vec4<f32>(tint.rgb * alpha, alpha);
 }
 
 /// A rounded rectangle evaluated here rather than built out of triangles.

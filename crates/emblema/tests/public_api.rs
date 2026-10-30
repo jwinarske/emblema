@@ -294,6 +294,51 @@ fn a_shadows_softness_is_fixed_in_device_pixels() {
     );
 }
 
+/// A colored, blurred rounded rectangle comes out premultiplied.
+///
+/// The analytic route returns its color from its own arm of the shader, ahead
+/// of the premultiply every other solid paint gets at the end, so the arm has
+/// to do it itself. It did not: the color channels came out at full strength
+/// under a fractional alpha. Black hides that completely -- zero times any
+/// alpha is zero -- which is why every shadow test passed while a colored
+/// shadow drew a fringe brighter than the surface it fell on.
+///
+/// Half-transparent blue on black, where a premultiplied blend can put no more
+/// than half of full blue anywhere, and the center of a large rectangle is
+/// covered all but completely. One pass, so it is the analytic route under
+/// test rather than the general blur.
+#[test]
+fn a_colored_blurred_rounded_rect_is_premultiplied() {
+    let Some(mut ctx) = context() else { return };
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    let paint = Paint::fill(Color::srgb(0.0, 0.0, 1.0, 0.5)).with_mask_blur(4.0);
+    canvas
+        .draw_path(
+            &Rect::new(16.0, 16.0, 112.0, 112.0).to_rounded_path(12.0),
+            &paint,
+        )
+        .expect("a blurred rounded rect");
+    let recording = canvas.finish();
+    assert_eq!(recording.passes.len(), 1, "not the analytic route");
+    let mut surface = ctx
+        .create_surface(SIZE, PixelFormat::Rgba8Unorm)
+        .expect("surface");
+    ctx.draw(&mut surface, &recording).expect("draw");
+    let pixels = ctx.read(&mut surface).expect("read");
+    ctx.destroy_surface(surface);
+    let center = pixel(&pixels, 64, 64);
+    assert!(
+        (center[2] as i32 - 128).abs() <= 2 && center[0] == 0 && center[1] == 0,
+        "half-transparent blue over black should be half blue, got {center:?}"
+    );
+    let brightest = pixels.chunks_exact(4).map(|p| p[2]).max().unwrap_or(0);
+    assert!(
+        brightest <= 130,
+        "a channel above its alpha: blue reaches {brightest}"
+    );
+}
+
 /// A shadow falls `elevation` device pixels straight down the screen, under
 /// any scale or rotation.
 ///
