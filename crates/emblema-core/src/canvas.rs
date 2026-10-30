@@ -4167,13 +4167,6 @@ impl Canvas {
         Ok(self)
     }
 
-    /// Fill or stroke a circle.
-    ///
-    /// An antialiased solid fill goes through the same distance field a rounded
-    /// rectangle does, because it is one: a square whose corner radius is half
-    /// its side has no straight edge left, and the field reduces exactly to the
-    /// distance from the center less the radius. So a circle costs two
-    /// triangles and needs no shader of its own, where four cubics flattened to
     /// The shadow an object at `elevation` casts, under one light.
     ///
     /// The rule rather than the picture, which is why this is a call and not a
@@ -4188,9 +4181,11 @@ impl Canvas {
     /// at a quarter of the stated color's alpha before that alpha is adjusted
     /// for the color's own luminance.
     ///
-    /// `elevation` is in the same units the canvas draws in. Impeller scales
-    /// it by a device pixel ratio first, which is a framework concept rather
-    /// than a rendering one; a caller who has one should apply it here.
+    /// `elevation` is in device pixels, whatever the transform: the shadow
+    /// falls that far straight down the screen, as upstream's does. Upstream
+    /// is handed it in logical pixels and multiplies by a device pixel ratio
+    /// first (`occluder_z = dpr * elevation`), which is a framework concept
+    /// rather than a rendering one; a caller who has one should apply it here.
     ///
     /// `transparent_occluder` is accepted and unused, which is what upstream
     /// does with it -- `DlDispatcherBase::drawShadow` takes the flag and its
@@ -4210,32 +4205,54 @@ impl Canvas {
             return Ok(self);
         }
 
+        let shade = tonal_shadow_color(color);
+        let affine = self.transform.to_affine();
+        // The y axis's stretch, not the larger of the two: upstream divides by
+        // `GetCurrentTransform().GetScale().y`, the length of the transformed
+        // y basis vector. Without a basis to read -- perspective -- the single
+        // factor stands in.
+        let scale_y = affine
+            .map(|a| a.matrix2.y_axis.length())
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or_else(|| {
+                let s = max_scale_of(self.transform);
+                if s.is_finite() && s > 0.0 {
+                    s
+                } else {
+                    1.0
+                }
+            });
         // Elevation gives a kernel radius, which the blur takes as a
         // deviation only after converting. Skipping the conversion is the
         // larger half of what made a shadow here twice as soft as upstream's.
-        let sigma = sigma_for_radius(LIGHT_RADIUS * elevation);
-        let shade = tonal_shadow_color(color);
-        // Divided by the transform's scale, which is upstream's division and
-        // is here for upstream's reason. A mask blur's sigma is stated in the
-        // space the drawing is in and grows with the transform, so a shadow
-        // whose softness comes from an *elevation* rather than from a length
-        // would grow with it too -- and upstream's does not. Its
-        // `drawShadow` divides its radius by the canvas scale precisely to
-        // cancel the multiplication its filter applies, leaving a shadow's
-        // softness fixed in device pixels however large the caster is drawn.
         //
-        // This division did not exist while the sigma was device-space,
-        // because there was no multiplication to cancel. Removing it was the
-        // half of the blur change that a test caught rather than the half that
-        // was designed: `a_shadows_softness_is_fixed_in_device_pixels` is that
-        // test, and it was written when the opposite convention made the same
-        // shadow come out right without any division at all.
-        let scale = max_scale_of(self.transform);
-        let sigma = if scale.is_finite() && scale > 0.0 {
-            sigma / scale
-        } else {
-            sigma
-        };
+        // Divided by the y scale first and converted after, in upstream's
+        // order: `Radius{kLightRadius * occluder_z / scale.y}` and then
+        // `Radius::operator Sigma`. A mask blur's sigma is stated in the space
+        // the drawing is in and grows with the transform, so a shadow whose
+        // softness comes from an *elevation* rather than from a length would
+        // grow with it too -- and upstream's does not. The division cancels
+        // the multiplication the filter applies, leaving a shadow's softness
+        // fixed in device pixels however large the caster is drawn;
+        // `a_shadows_softness_is_fixed_in_device_pixels` is the test. This
+        // used to convert first and divide after, which divides the
+        // conversion's half pixel by the scale too: a shadow a quarter of a
+        // pixel sharper than upstream's at a scale of two.
+        let sigma = sigma_for_radius(LIGHT_RADIUS * elevation / scale_y);
+        // Straight down the screen by `elevation` device pixels: upstream's
+        // `PreConcat(MakeTranslation(0, occluder_z))`, which puts the
+        // translation before the current transform. There is no pre-concat
+        // here, so the device offset goes back through the transform's linear
+        // part, inverted, and is applied as an ordinary translation in local
+        // units. A plain `translate(0, elevation)` moved it `scale` times as
+        // far, and under a rotation along the rotated axis.
+        let device_down = Vec2::new(0.0, elevation);
+        let down = affine
+            .map(|a| a.matrix2)
+            .filter(|m| m.determinant().abs() > f32::EPSILON)
+            .map(|m| m.inverse() * device_down)
+            .filter(|v| v.is_finite())
+            .unwrap_or(Vec2::new(0.0, elevation / scale_y));
         let paint = Paint::fill(shade).with_mask_blur(sigma);
 
         // The whole shadow, whatever the occluder is, which is what upstream
@@ -4252,7 +4269,7 @@ impl Canvas {
         // deviation that produces identical pixels more slowly has nothing to
         // recommend it.
         self.save();
-        self.translate(0.0, elevation);
+        self.translate(down.x, down.y);
         let failure = self.draw_path(path, &paint).err();
         self.restore();
         match failure {
@@ -4261,6 +4278,13 @@ impl Canvas {
         }
     }
 
+    /// Fill or stroke a circle.
+    ///
+    /// An antialiased solid fill goes through the same distance field a rounded
+    /// rectangle does, because it is one: a square whose corner radius is half
+    /// its side has no straight edge left, and the field reduces exactly to the
+    /// distance from the center less the radius. So a circle costs two
+    /// triangles and needs no shader of its own, where four cubics flattened to
     /// a tolerance cost vertices in proportion to how large it is drawn.
     pub fn draw_circle(&mut self, center: Vec2, radius: f32, paint: &Paint) -> Result<&mut Self> {
         // NaN named rather than caught by a negated comparison, which reads as

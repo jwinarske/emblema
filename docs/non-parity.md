@@ -271,13 +271,25 @@ elevation here means what it says.
 **Impact.** A caller working in logical pixels has to scale the elevation
 themselves, by the same factor they scale everything else.
 
+Device pixels for the offset too, which until #226 they were not. Upstream
+moves the shadow with `PreConcat(MakeTranslation(0, occluder_z))`, the
+translation before the current transform, so it falls `occluder_z` straight
+down the screen. This translated in local units: under a scale of two the
+shadow landed twice as far down, and under a rotation it fell along the
+rotated axis. The offset is now mapped back through the transform's inverse,
+and `a_shadows_offset_is_fixed_in_device_pixels` holds it under scales and
+rotations. The same change moved the radius's division by the y scale ahead of
+the conversion to a sigma, as upstream orders the two; dividing after had
+divided the conversion's half pixel too.
+
 Three things that were on this list and are not now, each removed by checking
 rather than by deciding. The tonal color remap is ported. The occluder punch-out
 is gone: upstream takes `transparent_occluder` and never reads it, and in the
 arrangement the flag describes — an opaque caster drawn over its own shadow —
 the punched and unpunched pictures were byte-identical while the punch cost a
 layer, so every shadow was five passes where four will do. And
-`drawShadow` divides its radius by `GetCurrentTransform().GetScale().y`, which
+`drawShadow` divides its radius by `GetCurrentTransform().GetScale().y` -- the
+y basis vector's length, which is what this divides by too -- which
 read as a divergence until both sides were measured: upstream's blur sigma is in
 *local* space — `gaussian_blur_filter_contents.cc` multiplies it by
 `ExtractScale(entity.GetTransform().Basis())` — so that division exists to
