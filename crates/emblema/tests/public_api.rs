@@ -294,6 +294,79 @@ fn a_shadows_softness_is_fixed_in_device_pixels() {
     );
 }
 
+/// A shadow falls `elevation` device pixels straight down the screen, under
+/// any scale or rotation.
+///
+/// Upstream's `drawShadow` pre-concatenates its offset, `transform =
+/// translation * current`, so the translation is in device space. This used to
+/// translate in local units: twice as far under a scale of two, and along the
+/// rotated axis under a rotation, which a Flutter app at any device pixel ratio
+/// shows on every shadow it draws.
+///
+/// The caster is centered on the same device pixel in every case, and the
+/// shadow's centroid measured against it.
+#[test]
+fn a_shadows_offset_is_fixed_in_device_pixels() {
+    let Some(mut ctx) = context() else { return };
+    let extent = Extent2D::new(256, 256);
+    let elevation = 12.0;
+
+    let centroid = |ctx: &mut Context, scale: f32, radians: f32| -> (f32, f32) {
+        let mut canvas = Canvas::new(extent);
+        canvas.clear(Color::BLACK);
+        canvas.save();
+        canvas.translate(128.0, 128.0);
+        canvas.rotate(radians);
+        canvas.scale(scale, scale);
+        // A square around the local origin, so the device center is 128, 128.
+        let half = 16.0 / scale;
+        let mut b = PathBuilder::new();
+        b.move_to(Vec2::new(-half, -half))
+            .line_to(Vec2::new(half, -half))
+            .line_to(Vec2::new(half, half))
+            .line_to(Vec2::new(-half, half))
+            .close();
+        canvas
+            .draw_shadow(&b.build(), Color::WHITE, elevation, false)
+            .expect("a shadow");
+        canvas.restore();
+        let mut surface = ctx
+            .create_surface(extent, PixelFormat::Rgba8Unorm)
+            .expect("surface");
+        ctx.draw(&mut surface, &canvas.finish()).expect("draw");
+        let pixels = ctx.read(&mut surface).expect("read");
+        ctx.destroy_surface(surface);
+
+        let (mut sum, mut sx, mut sy) = (0.0f64, 0.0f64, 0.0f64);
+        for y in 0..extent.height as usize {
+            for x in 0..extent.width as usize {
+                let v = f64::from(pixels[(y * extent.width as usize + x) * 4]);
+                sum += v;
+                sx += v * x as f64;
+                sy += v * y as f64;
+            }
+        }
+        assert!(sum > 0.0, "no shadow drawn");
+        // Pixel centers are at half-integers.
+        ((sx / sum) as f32 + 0.5, (sy / sum) as f32 + 0.5)
+    };
+
+    for (scale, radians, what) in [
+        (1.0, 0.0, "unit"),
+        (2.0, 0.0, "scaled by two"),
+        (0.5, 0.0, "scaled by a half"),
+        (1.0, std::f32::consts::FRAC_PI_2, "turned a quarter"),
+        (2.0, 0.6, "scaled and turned"),
+    ] {
+        let (x, y) = centroid(&mut ctx, scale, radians);
+        assert!(
+            (x - 128.0).abs() < 0.5 && (y - (128.0 + elevation)).abs() < 0.5,
+            "{what}: the shadow's centroid is at {x}, {y}; it falls {elevation} \
+             device pixels below the caster's center at 128, 128 upstream"
+        );
+    }
+}
+
 /// A blur too wide for its tap budget shrinks the image instead of spreading.
 ///
 /// The taps are one per texel while the kernel's radius fits in the budget.
