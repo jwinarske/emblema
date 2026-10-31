@@ -178,6 +178,8 @@ fn paint_for(item: &Item, anti_alias: bool) -> Paint {
         // Not described by the corpus: a gradient's or image's placement is
         // what its own fields already state, and the scenes compare that.
         shader_transform: Transform2D::IDENTITY,
+        // Not described either: an item's colors already carry their alpha.
+        opacity: 1.0,
     }
 }
 

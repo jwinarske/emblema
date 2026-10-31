@@ -866,6 +866,11 @@ fn hostile_paint() -> impl Strategy<Value = Paint> {
                 // Ignored by a solid color; `a_hostile_shader_transform_*`
                 // gives one to every shader that reads it.
                 shader_transform: Transform2D::IDENTITY,
+                // Given by each test that takes a paint, as a parameter of
+                // its own: a fifth field in the tuple above overflows the
+                // strategy tree's stack, as the note on the filtered-layer
+                // test describes.
+                opacity: 1.0,
             },
         )
 }
@@ -905,16 +910,21 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
 
     /// A shader transform of any value, NaN, infinite, singular or in
-    /// perspective, on every shader that reads one, on a rectangle (where a
-    /// linear gradient has a route of its own) and on a mesh: drawn or
-    /// refused, never a recording that cannot be addressed.
+    /// perspective, and an opacity of any value, on every shader that reads
+    /// one, on a rectangle (where a linear gradient has a route of its own)
+    /// and on a mesh: drawn or refused, never a recording that cannot be
+    /// addressed.
     #[test]
     fn a_hostile_shader_transform_records_something_addressable(
         transform in hostile_shader_transform(),
+        opacity in hostile_coord(),
         which in 0..5usize,
         mesh in any::<bool>(),
     ) {
-        let paint = shaders_with_a_space()[which].clone().with_shader_transform(transform);
+        let paint = shaders_with_a_space()[which]
+            .clone()
+            .with_shader_transform(transform)
+            .with_opacity(opacity);
         let mut canvas = Canvas::new(SIZE);
         canvas.clear(Color::BLACK);
         if mesh {
@@ -999,8 +1009,10 @@ proptest! {
     #[test]
     fn a_paint_of_any_configuration_records_something_addressable(
         paint in hostile_paint(),
+        opacity in hostile_coord(),
         curved in any::<bool>(),
     ) {
+        let paint = paint.with_opacity(opacity);
         let mut canvas = Canvas::new(SIZE);
         canvas.clear(Color::BLACK);
         if curved {
@@ -1045,8 +1057,10 @@ proptest! {
     #[test]
     fn a_paint_inside_a_filtered_layer_records_something_addressable(
         paint in hostile_paint(),
+        opacity in hostile_coord(),
         layer in prop::sample::select(hostile_layers()),
     ) {
+        let paint = paint.with_opacity(opacity);
         let mut canvas = Canvas::new(SIZE);
         canvas.clear(Color::BLACK);
         canvas.save_layer(layer);
