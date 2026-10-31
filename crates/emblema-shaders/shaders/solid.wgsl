@@ -1393,24 +1393,23 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         // Sweep: angle about the center, measured in gradient space so an
         // anisotropic target does not bunch the stops on two sides.
         let local = gradient_space(in);
-        let angle = atan2(local.y, local.x);
         let start_angle = paint.geometry.z;
         let sweep = max(paint.geometry.w - start_angle, 1e-6);
-        // The angle is brought into one turn ahead of the start, which removes
-        // the atan2 branch cut: that discontinuity is a property of how the
-        // angle was computed and not of the gradient, so a sweep beginning at
-        // any angle runs forward from there without a seam.
+        // The angle in [0, 2pi) from the positive X axis, as upstream's
+        // sweep_gradient_fill.frag measures it, atan(-y, -x) / 2pi + 0.5:
+        // the parameter is where that angle sits between the two the paint
+        // states, so a direction before the start is below zero and one
+        // past the end above one, and the tile mode says what both draw.
+        // A sweep that starts below zero or ends past a turn meets the cut
+        // at the positive X axis there, as it does upstream.
         //
-        // Dividing by a full turn rather than by the sweep is the distinction
-        // that makes a tile mode possible at all. Folding by the sweep would
-        // send every direction back inside the arc, which *is* repeating, and
-        // would leave clamp and decal with nothing outside to act on. Past the
-        // end of a partial sweep the parameter now exceeds one, and what
-        // happens there is the paint's to say.
-        let delta = angle - start_angle;
+        // Dividing by the sweep from an angle measured on its own, rather
+        // than folding by the sweep, is what leaves an outside at all:
+        // folding would send every direction back inside the arc, which is
+        // repeating, and leave clamp and decal nothing to act on.
         let turn = 6.28318530717958647692;
-        let ahead = delta - turn * floor(delta / turn);
-        let tiled = tile_gradient(ahead / sweep, paint.params.z);
+        let angle = atan2(-local.y, -local.x) + turn * 0.5;
+        let tiled = tile_gradient((angle - start_angle) / sweep, paint.params.z);
         color = gradient_color(tiled.x, count) * tiled.y;
     } else if (kind > 8.5 && kind < 9.5) {
         // Conical: the parameter is where a point sits between two circles,

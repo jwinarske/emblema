@@ -18274,3 +18274,80 @@ fn an_opacity_of_nothing_or_not_a_number_draws_nothing_and_a_runtime_effect_keep
     assert_eq!(*effect.effective_shader(), effect.shader);
     assert!(effect.is_visible());
 }
+
+/// Red to blue around `start..end`, filling the target, `tile` outside.
+fn sweep_shot(ctx: &mut Context, start: f32, end: f32, tile: TileMode) -> Vec<u8> {
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas
+        .draw_rect(
+            Rect::from_size(128.0, 128.0),
+            &Paint::sweep_gradient(
+                Vec2::splat(64.0),
+                start,
+                end,
+                vec![
+                    GradientStop::new(Color::linear(1.0, 0.0, 0.0, 1.0), 0.0),
+                    GradientStop::new(Color::linear(0.0, 0.0, 1.0, 1.0), 1.0),
+                ],
+            )
+            .with_tile_mode(tile)
+            .with_anti_alias(false),
+        )
+        .expect("sweep");
+    render(ctx, canvas)
+}
+
+/// The pixel 40 from the center in the direction `angle`, clockwise from
+/// the positive X axis as Y points down.
+fn toward(pixels: &[u8], angle: f32) -> [u8; 4] {
+    let (s, c) = angle.sin_cos();
+    pixel(
+        pixels,
+        (64.0 + 40.0 * c).round() as u32,
+        (64.0 + 40.0 * s).round() as u32,
+    )
+}
+
+#[test]
+fn a_sweep_measures_its_angle_from_the_positive_x_axis_as_upstream_does() {
+    // Upstream's sweep_gradient_fill.frag: the angle in [0, 2pi) from +X,
+    // and the parameter where it sits between the two the paint states. A
+    // direction before the start is below zero, so clamp holds the first
+    // stop there and decal draws nothing; one past the end holds the last.
+    let Some(mut ctx) = context() else { return };
+    let (red, blue) = ([255u8, 0, 0, 255], [0u8, 0, 255, 255]);
+    let clamped = sweep_shot(&mut ctx, PI / 4.0, PI, TileMode::Clamp);
+    close_enough(
+        toward(&clamped, PI / 8.0),
+        red,
+        2,
+        "before the start, clamped",
+    );
+    close_enough(toward(&clamped, 1.5 * PI), blue, 2, "past the end, clamped");
+    let decal = sweep_shot(&mut ctx, PI / 4.0, PI, TileMode::Decal);
+    close_enough(
+        toward(&decal, PI / 8.0),
+        [0, 0, 0, 255],
+        2,
+        "before the start, decal",
+    );
+
+    // From a quarter turn back to a quarter turn on: just below the
+    // positive X axis is three quarters round from it, past the end, so
+    // the last stop; just above, a quarter round, the ramp's middle. The
+    // cut at +X is upstream's, and folding the angle to the start would
+    // have put the middle on both sides.
+    let across = sweep_shot(&mut ctx, -PI / 2.0, PI / 2.0, TileMode::Clamp);
+    close_enough(
+        toward(&across, -PI / 8.0),
+        blue,
+        2,
+        "above the axis, past the end",
+    );
+    let below = toward(&across, PI / 8.0);
+    assert!(
+        below[0] > 60 && below[2] > 60,
+        "below the axis, inside the arc, a mix of both: {below:?}"
+    );
+}
