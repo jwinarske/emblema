@@ -8,8 +8,10 @@ through KMS with no compositor present.
 > (linear, radial, sweep), and the Porter-Duff blend modes render on both
 > backends and are verified against real hardware and a software reference. The
 > advanced blend modes — separable and non-separable both, all fifteen — render
-> on Vulkan where the device offers the advanced-blend extension, and are
-> reported as unavailable elsewhere rather than approximated. Clipping works on both
+> on Vulkan where the device offers the advanced-blend extension and on GLES
+> through `GL_KHR_blend_equation_advanced`, coherent where offered and with a
+> barrier per draw otherwise, and are reported as unavailable elsewhere rather
+> than approximated. Clipping works on both
 > backends for rectangles and arbitrary paths, nests, and antialiases with the
 > shapes it confines. Images can be uploaded and drawn as a paint, with clamp,
 > repeat, mirror and decal tiling, and with a source rectangle so a sprite

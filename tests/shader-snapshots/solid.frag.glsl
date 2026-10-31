@@ -951,7 +951,7 @@ void main() {
     if ((tint_mode == 13)) {
         tinted = (in_.tint * _e1);
     } else {
-        vec4 _e15 = blend_tint(tint_mode, in_.tint, _e1);
+        vec4 _e15 = blend_tint(tint_mode, _e1, in_.tint);
         tinted = _e15;
     }
     vec4 _e16 = tinted;

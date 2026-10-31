@@ -4,6 +4,12 @@
 //! and both operations were marked complete here while supporting exactly one
 //! of the modes -- a multiply, which is `Modulate` and was not a choice.
 //!
+//! The paint's result is the source and the carried color the destination,
+//! which is what `dart:ui` documents for both calls and what upstream draws.
+//! These tests had it the other way round, the color the source, matching a
+//! shader that had it so; the Porter-Duff table and both references below
+//! are stated in dart:ui's order now.
+//!
 //! The shader's formulas are checked against `emblema_hal`'s, which existed
 //! first and are the software reference the conformance tests already compare
 //! hardware to. Neither was derived from the other, which is what makes the
@@ -31,8 +37,9 @@ fn context() -> Option<Context> {
     }
 }
 
-/// Draw one full-target triangle pair whose vertices all carry `tint`, over a
-/// paint of `under`, combining them with `mode`. Returns the middle texel.
+/// Draw one full-target triangle pair whose vertices all carry `tint`, the
+/// destination, under a paint of `under`, the source, combining them with
+/// `mode`. Returns the middle texel.
 fn combined(ctx: &mut Context, mode: BlendMode, tint: Color, under: Color) -> [u8; 4] {
     let mesh = Vertices::full(
         VertexMode::Triangles,
@@ -108,7 +115,8 @@ fn every_advanced_mode_agrees_with_the_reference_formulas() {
     for mode in advanced {
         let got = combined(&mut ctx, mode, tint, under);
         // The reference takes premultiplied color, and both sides are opaque.
-        let want = blend_advanced(mode, [0.8, 0.35, 0.15, 1.0], [0.25, 0.6, 0.9, 1.0])
+        // The paint is the source, the vertex color the backdrop.
+        let want = blend_advanced(mode, [0.25, 0.6, 0.9, 1.0], [0.8, 0.35, 0.15, 1.0])
             .unwrap_or_else(|| panic!("{} is advanced", mode.name()));
         for channel in 0..3 {
             let expected = (want[channel].clamp(0.0, 1.0) * 255.0).round() as i32;
@@ -135,9 +143,10 @@ fn an_advanced_mode_composites_as_well_as_blends() {
 
     let tint = Color::srgb(0.8, 0.2, 0.1, 0.6);
     let under = Color::srgb(0.2, 0.7, 0.9, 0.4);
-    // Premultiplied, which is what the reference takes and the target stores.
-    let src = [0.8 * 0.6, 0.2 * 0.6, 0.1 * 0.6, 0.6];
-    let dst = [0.2 * 0.4, 0.7 * 0.4, 0.9 * 0.4, 0.4];
+    // Premultiplied, which is what the reference takes and the target stores:
+    // the paint the source, the vertex color the backdrop.
+    let src = [0.2 * 0.4, 0.7 * 0.4, 0.9 * 0.4, 0.4];
+    let dst = [0.8 * 0.6, 0.2 * 0.6, 0.1 * 0.6, 0.6];
 
     for mode in [
         BlendMode::Multiply,
@@ -171,17 +180,19 @@ fn the_porter_duff_modes_do_what_their_definitions_say() {
     let under = Color::linear(0.0, 0.0, 1.0, 0.5);
 
     // Premultiplied, which is what the target stores and what these formulas
-    // are stated on: src is (0.5, 0, 0, 0.5) and dst is (0, 0, 0.5, 0.5).
+    // are stated on: the paint, src, is (0, 0, 0.5, 0.5), and the vertex
+    // color, dst, is (0.5, 0, 0, 0.5). `Src` is the paint alone and `Dst`
+    // the color alone, as dart:ui says of both.
     for (mode, want) in [
         (BlendMode::Clear, [0.0f32, 0.0, 0.0, 0.0]),
-        (BlendMode::Src, [0.5, 0.0, 0.0, 0.5]),
-        (BlendMode::Dst, [0.0, 0.0, 0.5, 0.5]),
-        (BlendMode::SrcOver, [0.5, 0.0, 0.25, 0.75]),
-        (BlendMode::DstOver, [0.25, 0.0, 0.5, 0.75]),
-        (BlendMode::SrcIn, [0.25, 0.0, 0.0, 0.25]),
-        (BlendMode::DstIn, [0.0, 0.0, 0.25, 0.25]),
-        (BlendMode::SrcOut, [0.25, 0.0, 0.0, 0.25]),
-        (BlendMode::DstOut, [0.0, 0.0, 0.25, 0.25]),
+        (BlendMode::Src, [0.0, 0.0, 0.5, 0.5]),
+        (BlendMode::Dst, [0.5, 0.0, 0.0, 0.5]),
+        (BlendMode::SrcOver, [0.25, 0.0, 0.5, 0.75]),
+        (BlendMode::DstOver, [0.5, 0.0, 0.25, 0.75]),
+        (BlendMode::SrcIn, [0.0, 0.0, 0.25, 0.25]),
+        (BlendMode::DstIn, [0.25, 0.0, 0.0, 0.25]),
+        (BlendMode::SrcOut, [0.0, 0.0, 0.25, 0.25]),
+        (BlendMode::DstOut, [0.25, 0.0, 0.0, 0.25]),
         (BlendMode::SrcATop, [0.25, 0.0, 0.25, 0.5]),
         (BlendMode::DstATop, [0.25, 0.0, 0.25, 0.5]),
         (BlendMode::Xor, [0.25, 0.0, 0.25, 0.5]),
