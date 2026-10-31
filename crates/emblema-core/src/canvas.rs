@@ -2571,7 +2571,12 @@ impl Canvas {
         if matches!(paint.style, Style::Fill) {
             if let Some((rect, 0.0)) = path.as_rounded_rect() {
                 let rect = Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
-                if let Some(sections) = fast_gradient_sections(rect, &paint.shader) {
+                // Only where the gradient is in the rectangle's own space:
+                // the sections run along the rectangle's edges.
+                let sections = (paint.shader_transform == Transform2D::IDENTITY)
+                    .then(|| fast_gradient_sections(rect, &paint.shader))
+                    .flatten();
+                if let Some(sections) = sections {
                     return self.draw_gradient_sections(&sections, paint);
                 }
             }
@@ -2579,7 +2584,7 @@ impl Canvas {
 
         // Resolved before the clip is read, since it may add a slot to this
         // pass's table.
-        let material = self.material_for(&paint.shader);
+        let material = self.material_for(paint);
         // A stroke too thin to cover a pixel is widened to one and dimmed to
         // pay for it. See `thin_stroke`; this is the tessellated route, where
         // the quantization it exists for is at its worst -- coverage comes
@@ -2667,15 +2672,19 @@ impl Canvas {
         Ok(self)
     }
 
-    /// Resolve a shader against the current transform.
+    /// Resolve a paint's shader against the current transform.
     ///
     /// Gradient endpoints go through the same mapping the geometry does, so a
     /// gradient rotates and scales with its shape rather than staying fixed to
     /// the screen. Doing it here rather than in the fragment stage means the
     /// shader receives clip-space endpoints and needs no transform of its own.
-    fn material_for(&mut self, shader: &Shader) -> Material {
-        let to_clip = self.target.projection() * self.transform;
-        self.material_from(shader, to_clip)
+    ///
+    /// The paint's [`Paint::shader_transform`] comes first, from the shader's
+    /// space into the canvas's, so it is folded into the same one mapping and
+    /// costs the fragment stage nothing.
+    fn material_for(&mut self, paint: &Paint) -> Material {
+        let to_clip = self.target.projection() * self.transform * paint.shader_transform;
+        self.material_from(&paint.shader, to_clip)
     }
 
     /// The same, for a draw whose fragments locate themselves some other way.
@@ -2689,8 +2698,11 @@ impl Canvas {
     ///
     /// The shader then runs the same arithmetic on `(uv, 1)` that it runs on a
     /// clip position, which is why there is one path in it rather than two.
-    fn material_at_texture_coords(&mut self, shader: &Shader) -> Material {
-        self.material_from(shader, Transform2D::IDENTITY)
+    ///
+    /// The shader's own transform stays: the coordinates are in the space
+    /// the paint is used in, and it carries the shader's space into that.
+    fn material_at_texture_coords(&mut self, paint: &Paint) -> Material {
+        self.material_from(&paint.shader, paint.shader_transform)
     }
 
     fn material_from(&mut self, shader: &Shader, to_clip: Transform2D) -> Material {
@@ -4557,9 +4569,9 @@ impl Canvas {
         // sibling of `effect.wgsl` differing in one line.
         let at_coords = textured && !matches!(paint.shader, Shader::Image { .. });
         let material = match (&paint.shader, textured) {
-            (Shader::Image { .. }, true) => self.mesh_material(&paint.shader)?,
-            _ if at_coords => self.material_at_texture_coords(&paint.shader),
-            _ => self.material_for(&paint.shader),
+            (Shader::Image { .. }, true) => self.mesh_material(paint)?,
+            _ if at_coords => self.material_at_texture_coords(paint),
+            _ => self.material_for(paint),
         };
 
         let to_clip = self.target.projection() * self.transform;
@@ -4692,7 +4704,15 @@ impl Canvas {
     /// selects part of a sheet, are both things the vertices have already
     /// said. A caller wanting one sprite from a sheet states its texels in the
     /// coordinates.
-    fn mesh_material(&mut self, shader: &Shader) -> Result<Material> {
+    fn mesh_material(&mut self, paint: &Paint) -> Result<Material> {
+        // The same as a source rectangle, below: the coordinates already say
+        // where the image lands.
+        if paint.shader_transform != Transform2D::IDENTITY {
+            return Err(Error::Unsupported(
+                "a textured mesh states its own coordinates; put the shader transform in them",
+            ));
+        }
+        let shader = &paint.shader;
         let Shader::Image {
             slot,
             alpha,
@@ -4794,7 +4814,7 @@ impl Canvas {
                 if paint.mask_blur > 0.0 || !paint.image_filter.is_identity() {
                     return self.draw_points_individually(points, &stroke, paint);
                 }
-                let material = self.material_for(&paint.shader);
+                let material = self.material_for(paint);
                 let Material::Solid(color) = material else {
                     // A field takes one color, which is what a point field is.
                     // Anything else keeps the old route, where each point is
@@ -5292,15 +5312,19 @@ impl Canvas {
         // The paint supplies everything but the shader -- its blend, its
         // filters, whether it antialiases -- and the shader is the sheet, read
         // by the coordinates the vertices carry.
-        let painted = paint.clone().with_shader(Shader::Image {
-            slot,
-            rect: into,
-            alpha: 1.0,
-            tile: TileMode::Clamp,
-            source: Rect::new(0.0, 0.0, 1.0, 1.0),
-            tint: Color::WHITE,
-            sampling: Sampling::Linear,
-        });
+        // The paint's own shader is replaced, and its transform with it.
+        let painted = paint
+            .clone()
+            .with_shader(Shader::Image {
+                slot,
+                rect: into,
+                alpha: 1.0,
+                tile: TileMode::Clamp,
+                source: Rect::new(0.0, 0.0, 1.0, 1.0),
+                tint: Color::WHITE,
+                sampling: Sampling::Linear,
+            })
+            .with_shader_transform(Transform2D::IDENTITY);
         self.draw_vertices(&mesh, &painted)
     }
 

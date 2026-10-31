@@ -21,6 +21,7 @@ use emblema_core::{
     SourceRect, Sprite, Style, Vec2, Vertices,
 };
 use emblema_geometry::dash::Dash;
+use emblema_geometry::transform::Transform2D;
 use emblema_hal::{Hal, HalContext, PixelFormat, Result, TextureDescriptor};
 
 fn color_of(c: [f32; 4]) -> Color {
@@ -174,6 +175,9 @@ fn paint_for(item: &Item, anti_alias: bool) -> Paint {
         }),
         blend: item.blend,
         anti_alias,
+        // Not described by the corpus: a gradient's or image's placement is
+        // what its own fields already state, and the scenes compare that.
+        shader_transform: Transform2D::IDENTITY,
     }
 }
 
