@@ -1,5 +1,7 @@
 //! How a shape is drawn.
 
+use std::borrow::Cow;
+
 use crate::canvas::{Morphology, Rect};
 use crate::color::Color;
 use emblema_geometry::dash::Dash;
@@ -187,6 +189,32 @@ impl Shader {
             // an empty destination makes an image provably invisible.
             Self::Image { alpha, rect, .. } => *alpha > 0.0 && !rect.is_empty(),
         }
+    }
+
+    /// This shader with what it produces multiplied by `opacity`, which
+    /// [`Paint::opacity`] says is between zero and one.
+    ///
+    /// Folded into the colors the shader is stated in, which is exact: a
+    /// gradient interpolates straight color and premultiplies after, so a
+    /// stop's alpha scaled is the result's scaled; an image's alpha already
+    /// scales what it samples. A runtime effect is returned as it is: its
+    /// program writes the color, and upstream's `RuntimeEffectContents` does
+    /// not apply the factor either.
+    pub fn at_opacity(&self, opacity: f32) -> Shader {
+        let mut out = self.clone();
+        let scale = |c: &mut Color| *c = c.with_alpha(c.a * opacity);
+        match &mut out {
+            Self::Solid(color) => scale(color),
+            Self::Image { alpha, .. } => *alpha *= opacity,
+            Self::LinearGradient { stops, .. }
+            | Self::RadialGradient { stops, .. }
+            | Self::SweepGradient { stops, .. }
+            | Self::ConicalGradient { stops, .. } => {
+                stops.iter_mut().for_each(|s| scale(&mut s.color));
+            }
+            Self::RuntimeEffect { .. } => {}
+        }
+        out
     }
 }
 
@@ -723,6 +751,15 @@ pub struct Paint {
     /// a solid color, which has no space, and by a runtime effect, whose
     /// program locates itself.
     pub shader_transform: Transform2D,
+    /// What the shader produces is multiplied by this, from zero to one: the
+    /// alpha of `dart:ui`'s paint color, which modulates whatever shader the
+    /// paint has, as upstream's opacity factor does on every color source.
+    ///
+    /// One by default. Kept apart from the shader so it survives
+    /// [`Self::with_shader`], and read through [`Self::effective_shader`], so
+    /// every route draws the same. A value outside zero to one is clamped
+    /// into it, and one that is not a number draws nothing.
+    pub opacity: f32,
 }
 
 impl Default for Paint {
@@ -739,6 +776,7 @@ impl Default for Paint {
             tint_blend: BlendMode::Modulate,
             anti_alias: true,
             shader_transform: Transform2D::IDENTITY,
+            opacity: 1.0,
         }
     }
 }
@@ -1051,6 +1089,27 @@ impl Paint {
         self
     }
 
+    /// Multiply what the shader produces. See [`Paint::opacity`].
+    pub fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
+    /// The shader as the paint draws it: [`Self::opacity`] folded in. Every
+    /// route reads the shader through this.
+    pub fn effective_shader(&self) -> Cow<'_, Shader> {
+        let opacity = if self.opacity.is_nan() {
+            0.0
+        } else {
+            self.opacity.clamp(0.0, 1.0)
+        };
+        if opacity == 1.0 {
+            Cow::Borrowed(&self.shader)
+        } else {
+            Cow::Owned(self.shader.at_opacity(opacity))
+        }
+    }
+
     /// Scale an image paint's sampled color. Ignored by other paints.
     pub fn with_image_alpha(mut self, alpha: f32) -> Self {
         if let Shader::Image { alpha: current, .. } = &mut self.shader {
@@ -1118,7 +1177,7 @@ impl Paint {
     /// skipping them early keeps empty geometry out of the batch rather than
     /// tessellating it and discovering it was empty.
     pub fn is_visible(&self) -> bool {
-        if !self.shader.is_visible() {
+        if !self.effective_shader().is_visible() {
             return false;
         }
         match &self.style {

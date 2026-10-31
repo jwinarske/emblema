@@ -2574,7 +2574,7 @@ impl Canvas {
                 // Only where the gradient is in the rectangle's own space:
                 // the sections run along the rectangle's edges.
                 let sections = (paint.shader_transform == Transform2D::IDENTITY)
-                    .then(|| fast_gradient_sections(rect, &paint.shader))
+                    .then(|| fast_gradient_sections(rect, &paint.effective_shader()))
                     .flatten();
                 if let Some(sections) = sections {
                     return self.draw_gradient_sections(&sections, paint);
@@ -2684,7 +2684,7 @@ impl Canvas {
     /// costs the fragment stage nothing.
     fn material_for(&mut self, paint: &Paint) -> Material {
         let to_clip = self.target.projection() * self.transform * paint.shader_transform;
-        self.material_from(&paint.shader, to_clip)
+        self.material_from(&paint.effective_shader(), to_clip)
     }
 
     /// The same, for a draw whose fragments locate themselves some other way.
@@ -2702,7 +2702,7 @@ impl Canvas {
     /// The shader's own transform stays: the coordinates are in the space
     /// the paint is used in, and it carries the shader's space into that.
     fn material_at_texture_coords(&mut self, paint: &Paint) -> Material {
-        self.material_from(&paint.shader, paint.shader_transform)
+        self.material_from(&paint.effective_shader(), paint.shader_transform)
     }
 
     fn material_from(&mut self, shader: &Shader, to_clip: Transform2D) -> Material {
@@ -3854,7 +3854,8 @@ impl Canvas {
         if paint.mask_blur_style != MaskBlurStyle::Normal {
             return None;
         }
-        let Shader::Solid(color) = &paint.shader else {
+        let shader = paint.effective_shader();
+        let Shader::Solid(color) = &*shader else {
             return None;
         };
         if radius.is_nan() || radius < 0.0 {
@@ -4045,7 +4046,8 @@ impl Canvas {
         // that which route a shape takes stays invisible. See `thin_stroke`.
         let (stroke, coverage) =
             thin_stroke(self.transform, analytic_stroke(paint)?, Zero::IsNotAStroke);
-        let Shader::Solid(color) = &paint.shader else {
+        let shader = paint.effective_shader();
+        let Shader::Solid(color) = &*shader else {
             return None;
         };
         // A radius of zero is a plain rectangle, which this field describes as
@@ -4354,7 +4356,8 @@ impl Canvas {
         }
         let (stroke, coverage) =
             thin_stroke(self.transform, analytic_stroke(paint)?, Zero::IsNotAStroke);
-        let Shader::Solid(color) = &paint.shader else {
+        let shader = paint.effective_shader();
+        let Shader::Solid(color) = &*shader else {
             return None;
         };
         let to_clip = self.target.projection() * self.transform;
@@ -4417,7 +4420,7 @@ impl Canvas {
             );
         }
 
-        let color = match &paint.shader {
+        let color = match &*paint.effective_shader() {
             Shader::Solid(color) => color.to_array(),
             // A run tints one color, so anything else has no meaning here. The
             // first stop of a gradient is a guess at what was meant, and a
@@ -4712,7 +4715,7 @@ impl Canvas {
                 "a textured mesh states its own coordinates; put the shader transform in them",
             ));
         }
-        let shader = &paint.shader;
+        let shader = paint.effective_shader();
         let Shader::Image {
             slot,
             alpha,
@@ -4721,7 +4724,7 @@ impl Canvas {
             source,
             sampling,
             ..
-        } = shader
+        } = &*shader
         else {
             return Err(Error::Unsupported("a mesh material needs an image paint"));
         };

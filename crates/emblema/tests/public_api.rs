@@ -18140,3 +18140,137 @@ fn a_textured_mesh_refuses_a_shader_transform_and_a_nine_slice_drops_its_paints(
         )
         .expect("a nine-slice's paint keeps its blend, not its shader");
 }
+
+/// Every shader kind, filling the target, at `opacity`, over black.
+fn every_shader_at(ctx: &mut Context, opacity: f32) -> Vec<Vec<u8>> {
+    let mut image = ctx
+        .create_image(Extent2D::new(4, 4), PixelFormat::Rgba8Unorm)
+        .expect("image");
+    ctx.write_image(&mut image, &quadrant_image())
+        .expect("upload");
+    let stops = || {
+        vec![
+            GradientStop::new(Color::srgb(1.0, 0.8, 0.0, 1.0), 0.0),
+            GradientStop::new(Color::srgb(0.2, 0.4, 1.0, 1.0), 1.0),
+        ]
+    };
+    let paints = [
+        Paint::fill(Color::srgb(0.9, 0.5, 0.2, 1.0)),
+        Paint::image(0, Rect::from_size(128.0, 128.0)).with_sampling(Sampling::Nearest),
+        Paint::linear_gradient(Vec2::ZERO, Vec2::new(128.0, 0.0), stops()),
+        Paint::radial_gradient(Vec2::splat(64.0), 60.0, stops()),
+        Paint::sweep_gradient(Vec2::splat(64.0), 0.0, 2.0 * PI, stops()),
+        Paint::conical_gradient(Vec2::splat(40.0), 4.0, Vec2::splat(64.0), 60.0, stops()),
+    ];
+    let shots = paints
+        .into_iter()
+        .map(|paint| {
+            let mut canvas = Canvas::new(SIZE);
+            canvas.clear(Color::BLACK);
+            canvas
+                .draw_path(
+                    &square_path(Rect::from_size(128.0, 128.0)),
+                    &paint.with_opacity(opacity).with_anti_alias(false),
+                )
+                .expect("fill");
+            let mut surface = ctx
+                .create_surface(SIZE, PixelFormat::Rgba8Unorm)
+                .expect("surface");
+            ctx.draw_with_images(&mut surface, &canvas.finish(), &[&image])
+                .expect("draw");
+            let pixels = ctx.read(&mut surface).expect("read");
+            ctx.destroy_surface(surface);
+            pixels
+        })
+        .collect();
+    ctx.destroy_image(image);
+    shots
+}
+
+#[test]
+fn a_paints_opacity_scales_what_every_shader_produces() {
+    // dart:ui's paint alpha modulates whatever shader the paint has, and
+    // upstream applies it to every color source as an opacity factor. Over
+    // black, half the opacity is half of every channel the paint drew.
+    let Some(mut ctx) = context() else { return };
+    let full = every_shader_at(&mut ctx, 1.0);
+    let half = every_shader_at(&mut ctx, 0.5);
+    let names = ["solid", "image", "linear", "radial", "sweep", "conical"];
+    for ((full, half), name) in full.iter().zip(&half).zip(names) {
+        for (x, y) in [(16, 16), (100, 30), (64, 64), (30, 110), (112, 112)] {
+            let f = pixel(full, x, y);
+            let want = [
+                (f32::from(f[0]) / 2.0).round() as u8,
+                (f32::from(f[1]) / 2.0).round() as u8,
+                (f32::from(f[2]) / 2.0).round() as u8,
+                255,
+            ];
+            close_enough(pixel(half, x, y), want, 2, &format!("{name} at ({x}, {y})"));
+        }
+    }
+}
+
+#[test]
+fn a_paints_opacity_survives_a_new_shader_and_reaches_the_rectangle_route() {
+    // Kept apart from the shader, so setting the shader after keeps it; and
+    // read by the route a linear gradient along a rectangle's edge takes,
+    // which must draw what the general one does.
+    let Some(mut ctx) = context() else { return };
+    let gradient = Shader::LinearGradient {
+        start: Vec2::ZERO,
+        end: Vec2::new(128.0, 0.0),
+        stops: vec![
+            GradientStop::new(Color::srgb(1.0, 1.0, 1.0, 1.0), 0.0),
+            GradientStop::new(Color::srgb(0.0, 0.6, 1.0, 1.0), 1.0),
+        ],
+        tile: TileMode::Clamp,
+    };
+    let paint = Paint::default()
+        .with_opacity(0.5)
+        .with_shader(gradient)
+        .with_anti_alias(false);
+    assert_eq!(paint.opacity, 0.5);
+    let shot = |ctx: &mut Context, rect_route: bool| {
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        if rect_route {
+            canvas.draw_rect(Rect::from_size(128.0, 128.0), &paint)
+        } else {
+            canvas.draw_path(&square_path(Rect::from_size(128.0, 128.0)), &paint)
+        }
+        .expect("fill");
+        render(ctx, canvas)
+    };
+    let (rect, path) = (shot(&mut ctx, true), shot(&mut ctx, false));
+    for x in [4, 40, 64, 90, 124] {
+        close_enough(
+            pixel(&rect, x, 64),
+            pixel(&path, x, 64),
+            2,
+            &format!("the two routes at x {x}"),
+        );
+    }
+    let left = pixel(&path, 4, 64);
+    assert!(
+        (120..=136).contains(&left[0]),
+        "white at half opacity over black: {left:?}"
+    );
+}
+
+#[test]
+fn an_opacity_of_nothing_or_not_a_number_draws_nothing_and_a_runtime_effect_keeps_its_color() {
+    let solid = Paint::fill(Color::WHITE);
+    assert!(!solid.clone().with_opacity(0.0).is_visible());
+    assert!(!solid.clone().with_opacity(f32::NAN).is_visible());
+    assert!(!solid.clone().with_opacity(-1.0).is_visible());
+    // Past one is one, not a brighter color.
+    assert_eq!(
+        *solid.clone().with_opacity(4.0).effective_shader(),
+        Shader::Solid(Color::WHITE)
+    );
+    // A program writes its own color; upstream's `RuntimeEffectContents`
+    // keeps the factor and never reads it.
+    let effect = Paint::runtime_effect(0, vec![0.5; 4]).with_opacity(0.25);
+    assert_eq!(*effect.effective_shader(), effect.shader);
+    assert!(effect.is_visible());
+}
