@@ -706,6 +706,23 @@ pub struct Paint {
     /// property of the target rather than of a draw: a canvas that mixes the
     /// two antialiases everything.
     pub anti_alias: bool,
+    /// Where the shader's own space sits in the space the paint is used in:
+    /// the shader's local matrix.
+    ///
+    /// An image's rectangle, a gradient's points and radii and a sweep's
+    /// angles are stated in the shader's space, and this carries them into
+    /// the space the shape is drawn in, before the canvas transform. So a
+    /// gradient can be rotated, skewed or put in perspective independently
+    /// of the shape it fills, and an image laid down at any angle: what
+    /// `dart:ui`'s `ImageShader` and `Gradient` take as `matrix4`, and what
+    /// upstream applies as a color source's effect transform.
+    ///
+    /// Composed into the mapping each fragment is located through, so a
+    /// radial gradient under a stretch is an ellipse, as it is upstream, and
+    /// nothing about the shape changes. The identity by default. Ignored by
+    /// a solid color, which has no space, and by a runtime effect, whose
+    /// program locates itself.
+    pub shader_transform: Transform2D,
 }
 
 impl Default for Paint {
@@ -721,6 +738,7 @@ impl Default for Paint {
             blend: BlendMode::SrcOver,
             tint_blend: BlendMode::Modulate,
             anti_alias: true,
+            shader_transform: Transform2D::IDENTITY,
         }
     }
 }
@@ -955,6 +973,12 @@ impl Paint {
             },
             ..Default::default()
         }
+    }
+
+    /// Place the shader's space in the paint's. See [`Paint::shader_transform`].
+    pub fn with_shader_transform(mut self, transform: Transform2D) -> Self {
+        self.shader_transform = transform;
+        self
     }
 
     /// What happens outside the paint's own extent.

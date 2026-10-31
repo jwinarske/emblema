@@ -14,6 +14,7 @@ use emblema::{
     TileMode, Transform2D, Vec2, VertexMode, Vertices, MAX_STOPS, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
 };
 use googletest::prelude::*;
+use std::f32::consts::PI;
 
 const SIZE: Extent2D = Extent2D {
     width: 128,
@@ -17885,4 +17886,257 @@ fn a_scissor_does_not_change_what_a_derivative_free_draw_paints() {
         "a scissored gradient differs from an unscissored one by {} at ({}, {})",
         worst.0, worst.1, worst.2
     );
+}
+
+/// `rotation` and the others about the middle of the target, as a shader
+/// transform: carried there, applied, and carried back.
+fn about_the_middle(transform: Affine2) -> Transform2D {
+    let middle = Vec2::splat(64.0);
+    Transform2D::from(
+        Affine2::from_translation(middle) * transform * Affine2::from_translation(-middle),
+    )
+}
+
+/// The quadrant image laid over the whole target under `shader_transform`,
+/// on an untransformed canvas: only the paint's own transform moves it.
+fn quadrants_under(ctx: &mut Context, shader_transform: Transform2D) -> Vec<u8> {
+    let mut image = ctx
+        .create_image(Extent2D::new(4, 4), PixelFormat::Rgba8Unorm)
+        .expect("image");
+    ctx.write_image(&mut image, &quadrant_image())
+        .expect("upload");
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::linear(0.0, 0.0, 0.0, 1.0));
+    canvas
+        .draw_rect(
+            Rect::from_size(128.0, 128.0),
+            &Paint::image(0, Rect::from_size(128.0, 128.0))
+                .with_sampling(Sampling::Nearest)
+                .with_shader_transform(shader_transform)
+                .with_anti_alias(false),
+        )
+        .expect("rect");
+    let mut surface = ctx
+        .create_surface(SIZE, PixelFormat::Rgba8Unorm)
+        .expect("surface");
+    ctx.draw_with_images(&mut surface, &canvas.finish(), &[&image])
+        .expect("draw");
+    let pixels = ctx.read(&mut surface).expect("read");
+    ctx.destroy_surface(surface);
+    ctx.destroy_image(image);
+    pixels
+}
+
+#[test]
+fn an_image_turns_and_mirrors_by_its_shader_transform_alone() {
+    // dart:ui's `ImageShader` places an image by a full matrix; a rectangle
+    // says only a scale and a translation. The shape stays where it is; the
+    // image turns, or mirrors, inside it.
+    let Some(mut ctx) = context() else { return };
+    let (red, green, blue, yellow) = (
+        [255u8, 0, 0, 255],
+        [0u8, 255, 0, 255],
+        [0u8, 0, 255, 255],
+        [255u8, 255, 0, 255],
+    );
+    let corners = |pixels: &[u8]| {
+        [
+            pixel(pixels, 16, 16),
+            pixel(pixels, 112, 16),
+            pixel(pixels, 16, 112),
+            pixel(pixels, 112, 112),
+        ]
+    };
+
+    let half_turn = quadrants_under(&mut ctx, about_the_middle(Affine2::from_angle(PI)));
+    assert_eq!(
+        corners(&half_turn),
+        [yellow, blue, green, red],
+        "a half turn"
+    );
+
+    // A quarter turn clockwise on screen, where Y points down: what was at
+    // the top-left is at the top-right.
+    let quarter = quadrants_under(&mut ctx, about_the_middle(Affine2::from_angle(PI / 2.0)));
+    assert_eq!(
+        corners(&quarter),
+        [blue, red, yellow, green],
+        "a quarter turn"
+    );
+
+    // A mirror, the negative scale a rectangle cannot state.
+    let mirrored = quadrants_under(
+        &mut ctx,
+        about_the_middle(Affine2::from_scale(Vec2::new(-1.0, 1.0))),
+    );
+    assert_eq!(corners(&mirrored), [green, red, yellow, blue], "a mirror");
+}
+
+/// Two stops, black to white, opaque.
+fn black_to_white() -> Vec<GradientStop> {
+    vec![
+        GradientStop::new(Color::linear(0.0, 0.0, 0.0, 1.0), 0.0),
+        GradientStop::new(Color::linear(1.0, 1.0, 1.0, 1.0), 1.0),
+    ]
+}
+
+fn gradient_shot(ctx: &mut Context, paint: Paint) -> Vec<u8> {
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas
+        .draw_rect(Rect::from_size(128.0, 128.0), &paint.with_anti_alias(false))
+        .expect("gradient");
+    render(ctx, canvas)
+}
+
+#[test]
+fn a_radial_gradient_stretched_by_its_shader_transform_is_an_ellipse() {
+    // Twice as wide as it is tall: a point 60 to the right is as far through
+    // the ramp as one 30 below. Upstream draws it so; folding the stretch
+    // into the radius could not, since a radius is one number.
+    let Some(mut ctx) = context() else { return };
+    let pixels = gradient_shot(
+        &mut ctx,
+        Paint::radial_gradient(Vec2::splat(64.0), 40.0, black_to_white())
+            .with_shader_transform(about_the_middle(Affine2::from_scale(Vec2::new(2.0, 1.0)))),
+    );
+    close_enough(
+        pixel(&pixels, 64 + 60, 64),
+        pixel(&pixels, 64, 64 + 30),
+        2,
+        "equally far through an ellipse twice as wide as tall",
+    );
+    let (wide, tall) = (pixel(&pixels, 64 + 30, 64), pixel(&pixels, 64, 64 + 30));
+    assert!(
+        tall[0] > wide[0] + 40,
+        "the same distance is further through the ramp across the short axis: \
+         right {wide:?}, below {tall:?}"
+    );
+}
+
+#[test]
+fn a_skewed_linear_gradient_slants_its_bands_inside_a_rectangle() {
+    // A skew, x' = x + y/2: the bands lean. Drawn by `draw_rect`, which has a
+    // route for a linear gradient along a rectangle's edge; that route must
+    // decline one in a space of its own.
+    let Some(mut ctx) = context() else { return };
+    let skew = Affine2::from_cols(Vec2::X, Vec2::new(0.5, 1.0), Vec2::ZERO);
+    let pixels = gradient_shot(
+        &mut ctx,
+        Paint::linear_gradient(Vec2::ZERO, Vec2::new(128.0, 0.0), black_to_white())
+            .with_shader_transform(Transform2D::from(skew)),
+    );
+    // In the gradient's space a point is (x - y/2, y): 40 at the top and 60
+    // forty rows down are the same band.
+    close_enough(
+        pixel(&pixels, 40, 0),
+        pixel(&pixels, 60, 40),
+        2,
+        "one band, slanted",
+    );
+    let (top, below) = (pixel(&pixels, 40, 0), pixel(&pixels, 40, 40));
+    assert!(
+        top[0] > below[0] + 20,
+        "straight down crosses bands: top {top:?}, below {below:?}"
+    );
+}
+
+#[test]
+fn a_sweep_gradient_turns_with_its_shader_transform() {
+    let Some(mut ctx) = context() else { return };
+    let sweep = || Paint::sweep_gradient(Vec2::splat(64.0), 0.0, 2.0 * PI, black_to_white());
+    let plain = gradient_shot(&mut ctx, sweep());
+    let turned = gradient_shot(
+        &mut ctx,
+        sweep().with_shader_transform(about_the_middle(Affine2::from_angle(PI / 2.0))),
+    );
+    // A quarter turn clockwise carries the sweep's start from the right of
+    // the center to below it: what was a quarter of the way round, below,
+    // is now a half, on the left; what was at the right is now a quarter.
+    close_enough(
+        pixel(&turned, 64 - 30, 64),
+        pixel(&plain, 64, 64 + 30),
+        2,
+        "a quarter of the way round, a quarter turn on",
+    );
+    close_enough(
+        pixel(&turned, 64, 64 - 30),
+        pixel(&plain, 64 - 30, 64),
+        2,
+        "half way round, a quarter turn on",
+    );
+}
+
+#[test]
+fn a_shader_transform_keeps_its_perspective() {
+    // dart:ui's matrix4 has a perspective row, and upstream keeps it
+    // (`To3x3`). With w = 1 + x/256, the gradient's middle (64 in its own
+    // space) lands at 64 / (1 + 64/256) = 51.2 in the paint's: an affine
+    // reading of the same matrix would leave it at 64.
+    let Some(mut ctx) = context() else { return };
+    let mut m = [0.0f32; 16];
+    for i in [0, 5, 10, 15] {
+        m[i] = 1.0;
+    }
+    m[3] = 1.0 / 256.0;
+    let gradient = || Paint::linear_gradient(Vec2::ZERO, Vec2::new(128.0, 0.0), black_to_white());
+    let plain = gradient_shot(&mut ctx, gradient());
+    let projected = gradient_shot(
+        &mut ctx,
+        gradient().with_shader_transform(Transform2D::from_column_major_4x4(&m)),
+    );
+    close_enough(
+        pixel(&projected, 51, 64),
+        pixel(&plain, 64, 64),
+        3,
+        "the ramp's middle, divided through by w",
+    );
+}
+
+#[test]
+fn a_textured_mesh_refuses_a_shader_transform_and_a_nine_slice_drops_its_paints() {
+    // A textured mesh's coordinates already say where the image lands, so
+    // a transform on top is refused by name, as a source rectangle is.
+    let mut canvas = Canvas::new(SIZE);
+    let mesh = Vertices::textured(
+        VertexMode::Triangles,
+        vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(64.0, 0.0),
+            Vec2::new(0.0, 64.0),
+        ],
+        vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+    )
+    .expect("mesh");
+    let turned = Transform2D::from(Affine2::from_angle(0.5));
+    let refused = canvas
+        .draw_vertices(
+            &mesh,
+            &Paint::image(0, Rect::from_size(64.0, 64.0)).with_shader_transform(turned),
+        )
+        .map(|_| ());
+    assert!(
+        matches!(refused, Err(Error::Unsupported(why)) if why.contains("shader transform")),
+        "{refused:?}"
+    );
+    // A gradient on a mesh takes it: the coordinates are in the paint's
+    // space, and the transform carries the gradient's into it.
+    canvas
+        .draw_vertices(
+            &mesh,
+            &Paint::linear_gradient(Vec2::ZERO, Vec2::X, black_to_white())
+                .with_shader_transform(turned),
+        )
+        .expect("a gradient's space placed in the coordinates' space");
+    // A nine-slice draws its image through a mesh, the paint's own shader
+    // replaced, and its transform with it: nothing to refuse.
+    canvas
+        .draw_image_nine(
+            0,
+            Extent2D::new(4, 4),
+            Rect::new(1.0, 1.0, 3.0, 3.0),
+            Rect::from_size(64.0, 64.0),
+            &Paint::fill(Color::WHITE).with_shader_transform(turned),
+        )
+        .expect("a nine-slice's paint keeps its blend, not its shader");
 }

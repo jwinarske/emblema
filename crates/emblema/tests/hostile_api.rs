@@ -863,8 +863,78 @@ fn hostile_paint() -> impl Strategy<Value = Paint> {
                 blend,
                 tint_blend,
                 anti_alias,
+                // Ignored by a solid color; `a_hostile_shader_transform_*`
+                // gives one to every shader that reads it.
+                shader_transform: Transform2D::IDENTITY,
             },
         )
+}
+
+/// A shader transform no builder would make: any of the nine entries of the
+/// 3x3, perspective row included, from the hostile coordinates.
+fn hostile_shader_transform() -> impl Strategy<Value = Transform2D> {
+    prop::collection::vec(hostile_coord(), 9).prop_map(|c| {
+        Transform2D::from_column_major_4x4(&[
+            c[0], c[1], 0.0, c[2], //
+            c[3], c[4], 0.0, c[5], //
+            0.0, 0.0, 1.0, 0.0, //
+            c[6], c[7], 0.0, c[8],
+        ])
+    })
+}
+
+/// Each shader that reads a transform, plainly configured: what is hostile
+/// here is only the transform.
+fn shaders_with_a_space() -> Vec<Paint> {
+    let stops = || {
+        vec![
+            GradientStop::new(Color::linear(1.0, 0.0, 0.0, 1.0), 0.0),
+            GradientStop::new(Color::linear(0.0, 0.0, 1.0, 1.0), 1.0),
+        ]
+    };
+    vec![
+        Paint::image(0, Rect::new(0.0, 0.0, 64.0, 64.0)),
+        Paint::linear_gradient(Vec2::ZERO, Vec2::new(64.0, 0.0), stops()),
+        Paint::radial_gradient(Vec2::splat(64.0), 32.0, stops()),
+        Paint::conical_gradient(Vec2::splat(48.0), 4.0, Vec2::splat(64.0), 40.0, stops()),
+        Paint::sweep_gradient(Vec2::splat(64.0), 0.0, 3.0, stops()),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
+
+    /// A shader transform of any value, NaN, infinite, singular or in
+    /// perspective, on every shader that reads one, on a rectangle (where a
+    /// linear gradient has a route of its own) and on a mesh: drawn or
+    /// refused, never a recording that cannot be addressed.
+    #[test]
+    fn a_hostile_shader_transform_records_something_addressable(
+        transform in hostile_shader_transform(),
+        which in 0..5usize,
+        mesh in any::<bool>(),
+    ) {
+        let paint = shaders_with_a_space()[which].clone().with_shader_transform(transform);
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        if mesh {
+            let vertices = Vertices::textured(
+                VertexMode::Triangles,
+                vec![Vec2::new(0.0, 0.0), Vec2::new(96.0, 0.0), Vec2::new(0.0, 96.0)],
+                vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            )
+            .expect("mesh");
+            let _ = canvas.draw_vertices(&vertices, &paint);
+        } else {
+            let _ = canvas.draw_rect(Rect::new(16.0, 16.0, 112.0, 112.0), &paint);
+        }
+        let recording = canvas.finish();
+        prop_assert!(
+            recording_is_addressable(&recording).is_ok(),
+            "{}",
+            recording_is_addressable(&recording).unwrap_err()
+        );
+    }
 }
 
 /// Layers a builder would not produce, written out rather than generated.
