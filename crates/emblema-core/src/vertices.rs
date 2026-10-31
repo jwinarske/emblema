@@ -191,10 +191,13 @@ impl Vertices {
 pub struct Sprite {
     /// The part of the sheet to draw, in texels.
     pub source: SourceRect,
-    /// A color multiplied into this sprite alone.
+    /// A color combined with this sprite alone, by the paint's
+    /// [`Paint::tint_blend`](crate::paint::Paint::tint_blend): the sprite the
+    /// source and the color the destination, as `drawAtlas` takes them.
+    /// Under the default, `Modulate`, it is multiplied in.
     ///
-    /// White changes nothing, and is what [`Sprite::new`] and [`Sprite::at`]
-    /// give. This is what makes one sheet serve a whole palette -- and it is
+    /// White changes nothing under that default, and is what [`Sprite::new`]
+    /// and [`Sprite::at`] give. This is what makes one sheet serve a whole palette -- and it is
     /// per sprite rather than per batch, which is the difference between one
     /// draw and one draw per color.
     pub color: Color,

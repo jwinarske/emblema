@@ -18351,3 +18351,110 @@ fn a_sweep_measures_its_angle_from_the_positive_x_axis_as_upstream_does() {
         "below the axis, inside the arc, a mix of both: {below:?}"
     );
 }
+
+/// The shuffled quadrants, each sprite's color `color`, under `mode`.
+fn atlas_tinted(ctx: &mut Context, color: Color, mode: BlendMode) -> Vec<u8> {
+    let mut image = ctx
+        .create_image(Extent2D::new(4, 4), PixelFormat::Rgba8Unorm)
+        .expect("image");
+    ctx.write_image(&mut image, &quadrant_image())
+        .expect("upload");
+    let sprites: Vec<Sprite> = shuffled_quadrants()
+        .into_iter()
+        .map(|s| s.with_color(color))
+        .collect();
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas
+        .draw_atlas(
+            &sprites,
+            Extent2D::new(4, 4),
+            &Paint::image(0, Rect::from_size(128.0, 128.0)).with_tint_blend(mode),
+        )
+        .expect("atlas");
+    let mut surface = ctx
+        .create_surface(SIZE, PixelFormat::Rgba8Unorm)
+        .expect("surface");
+    ctx.draw_with_images(&mut surface, &canvas.finish(), &[&image])
+        .expect("draw");
+    let pixels = ctx.read(&mut surface).expect("read");
+    ctx.destroy_surface(surface);
+    ctx.destroy_image(image);
+    pixels
+}
+
+#[test]
+fn an_atlas_blends_the_sprite_over_its_color_in_dart_uis_order() {
+    // dart:ui's drawAtlas: "the image part will be considered the source of
+    // the operation and the associated color will be considered the
+    // destination". So over an opaque magenta, `SrcOver` is the sheet and
+    // `Dst` the magenta; with the two the other way round, as this was,
+    // each is the other.
+    let Some(mut ctx) = context() else { return };
+    let magenta = Color::srgb(1.0, 0.0, 1.0, 1.0);
+    let over = atlas_tinted(&mut ctx, magenta, BlendMode::SrcOver);
+    assert_eq!(
+        pixel(&over, 32, 32),
+        [255, 255, 0, 255],
+        "the sheet's yellow"
+    );
+    assert_eq!(pixel(&over, 96, 96), [255, 0, 0, 255], "the sheet's red");
+    let dst = atlas_tinted(&mut ctx, magenta, BlendMode::Dst);
+    assert_eq!(pixel(&dst, 32, 32), [255, 0, 255, 255], "the color alone");
+    // Modulate, the default, is the same either way round.
+    let modulated = atlas_tinted(&mut ctx, magenta, BlendMode::Modulate);
+    assert_eq!(
+        pixel(&modulated, 32, 32),
+        [255, 0, 0, 255],
+        "yellow times magenta"
+    );
+}
+
+#[test]
+fn a_nine_slice_fades_by_its_paints_opacity() {
+    // Upstream draws the nine pieces as nine image rectangles with the one
+    // paint, alpha included; they tile the destination, so each faded is
+    // the whole faded. Over black, half the opacity is half of every
+    // channel.
+    let Some(mut ctx) = context() else { return };
+    let shot = |ctx: &mut Context, opacity: f32| {
+        let mut image = ctx
+            .create_image(Extent2D::new(12, 12), PixelFormat::Rgba8Unorm)
+            .expect("image");
+        ctx.write_image(&mut image, &nine_region_image())
+            .expect("upload");
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::BLACK);
+        canvas
+            .draw_image_nine(
+                0,
+                Extent2D::new(12, 12),
+                Rect::new(4.0, 4.0, 8.0, 8.0),
+                Rect::new(8.0, 8.0, 120.0, 120.0),
+                &Paint::fill(Color::WHITE)
+                    .with_opacity(opacity)
+                    .with_anti_alias(false),
+            )
+            .expect("nine patch");
+        let mut surface = ctx
+            .create_surface(SIZE, PixelFormat::Rgba8Unorm)
+            .expect("surface");
+        ctx.draw_with_images(&mut surface, &canvas.finish(), &[&image])
+            .expect("draw");
+        let pixels = ctx.read(&mut surface).expect("read");
+        ctx.destroy_surface(surface);
+        ctx.destroy_image(image);
+        pixels
+    };
+    let (full, half) = (shot(&mut ctx, 1.0), shot(&mut ctx, 0.5));
+    for (x, y) in [(12, 12), (64, 12), (64, 64), (116, 116), (12, 90)] {
+        let f = pixel(&full, x, y);
+        let want = [
+            (f32::from(f[0]) / 2.0).round() as u8,
+            (f32::from(f[1]) / 2.0).round() as u8,
+            (f32::from(f[2]) / 2.0).round() as u8,
+            255,
+        ];
+        close_enough(pixel(&half, x, y), want, 2, &format!("({x}, {y})"));
+    }
+}

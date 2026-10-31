@@ -4642,9 +4642,10 @@ impl Canvas {
     /// does not carry: a recording is built without touching a device and has
     /// never seen how large the texture is.
     ///
-    /// Per-sprite colors, which `dart:ui` offers here, need a color per vertex
-    /// and this vertex format has none. A tint on the paint applies to the
-    /// whole batch.
+    /// Each sprite's [`Sprite::color`] goes to its four corners and combines
+    /// with what the sheet gives there by the paint's
+    /// [`Paint::tint_blend`], as `dart:ui`'s colors and blend mode do: the
+    /// sprite the source, its color the destination.
     pub fn draw_atlas(
         &mut self,
         sprites: &[Sprite],
@@ -5155,10 +5156,12 @@ impl Canvas {
     /// direction is the whole of what a nine-patch means, and nine call sites
     /// are nine chances to stretch a corner.
     ///
-    /// The paint supplies the blend, the filters and whether the edges are
-    /// antialiased; its shader is replaced, since each of the nine pieces
-    /// needs its own. A caller wanting the whole thing faded should draw it
-    /// into a layer, which is what fading a group means everywhere else here.
+    /// The paint supplies the blend, the filters, its opacity and whether the
+    /// edges are antialiased; its shader is replaced, since each of the nine
+    /// pieces needs its own. The opacity fades each piece, which is the same
+    /// picture as fading the whole: the pieces tile the destination without
+    /// overlapping. Upstream's `NinePatchConverter` draws nine image
+    /// rectangles with the one paint, alpha included, and no layer.
     ///
     /// A center reaching an edge leaves pieces of no width or height, and
     /// those are skipped rather than drawn empty. A center outside the image

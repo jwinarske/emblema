@@ -1330,8 +1330,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Both sides are premultiplied, so this is a componentwise product and
     // stays premultiplied. Multiplying by a straight color instead would leave
     // the alpha applied once to the color and twice to itself.
-    // The caller's color is the source and the paint's result the backdrop,
-    // which is the order `dart:ui` states for both of the calls that carry one.
+    // The paint's result is the source and the caller's color the backdrop,
+    // which is the order `dart:ui` states for both of the calls that carry
+    // one: for `drawVertices`, "the colors from the `paint` parameter are
+    // considered the source, and the colors from the `vertices` are
+    // considered the destination"; for `drawAtlas`, "the image part will be
+    // considered the source of the operation and the associated color will
+    // be considered the destination". Upstream draws it so, `dst = v_color`
+    // and `src` the texture in vertices_uber_1.frag, and the texture bound as
+    // the destination of an inverted Porter-Duff mode in `AtlasContents`.
     let shaded = shade(in);
     let tint_mode = i32(paint.filter_params.y + 0.5);
     // `Modulate` is the mode a draw that asked for nothing gets, white being
@@ -1344,7 +1351,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (tint_mode == 13) {
         tinted = in.tint * shaded;
     } else {
-        tinted = blend_tint(tint_mode, in.tint, shaded);
+        tinted = blend_tint(tint_mode, shaded, in.tint);
     }
     return dithered(filtered(tinted), in.position.xy);
 }

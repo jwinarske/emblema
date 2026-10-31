@@ -724,6 +724,10 @@ pub struct Paint {
     /// alone. [`BlendMode::Modulate`] multiplies, which is the identity for the
     /// white a caller who supplied no color gets.
     ///
+    /// The paint's result is the source and the carried color the
+    /// destination, the order `dart:ui` states for both calls: so `SrcOver`
+    /// lays the paint over the color, and `Dst` keeps the color alone.
+    ///
     /// Distinct from [`Self::blend`], which decides how the result reaches the
     /// target. Both colors here are in the shader already, so every mode is
     /// available to this one without an extension.
