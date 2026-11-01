@@ -14,9 +14,10 @@
 //! Not every shape comes here. An antialiased rounded rect, circle or ellipse,
 //! and a blurred rounded rect, are drawn as one quad whose coverage the
 //! fragment shader computes; `emblema-core`'s canvas makes that choice, and
-//! those shapes never become a [`Path`] here. A plain rect is still
-//! tessellated, deliberately: evaluating it measured slower on the boards this
-//! targets (`docs/on-a-board.md`).
+//! those shapes never become a [`Path`] here. A filled plain rect is still
+//! tessellated, deliberately: evaluating it measured about thirty per cent
+//! slower on every board this targets (`docs/on-a-board.md`); a stroked one is
+//! evaluated.
 
 pub mod dash;
 pub mod flatten;

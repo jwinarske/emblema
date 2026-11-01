@@ -2482,13 +2482,15 @@ rather than in principle.
   shape is wrong on both of them equally, and is caught instead by holding it
   against the tessellated route and against the exact area it approximates.
 
-  A plain rectangle is the same field with no corner to round, and takes it for
-  the second reason rather than the first: four vertices is four vertices
-  either way, but the pass no longer multisamples for it. That is the shape a
-  frame is mostly made of, so it is where the saving is largest — and it is
-  invisible on an axis-aligned rectangle at integer bounds, which has no edge
-  to antialias, and worth the most on a rotated or fractionally placed one,
-  which is what needed four samples before.
+  A plain rectangle is the same field with no corner to round, and a stroked
+  one takes it. A filled one does not, since 2026-10-01: it took the field on
+  the reasoning that sparing the pass multisampling was worth four times the
+  fill, and measured the other way — tessellated at four samples beat the
+  field at one by thirty to thirty-five per cent on V3D, PowerVR and x86-64,
+  because multisampling costs 1.23 to 2.62 times rather than four and the field
+  is evaluated across a whole quad to a constant. Upstream draws a filled
+  rectangle as a four-vertex strip too. `docs/on-a-board.md`, "A square
+  rectangle was on the wrong route", has the frames and the control.
 
   Where the time actually goes was measured rather than assumed, and it is not
   where the vertex counts suggest. At 1920×1080 with a hundred and sixty
