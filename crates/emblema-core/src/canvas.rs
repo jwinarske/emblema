@@ -1992,11 +1992,11 @@ impl Canvas {
             // what is underneath shows -- smearing the edge across them is what
             // a clamp would do and is not what a filter that moved an image
             // says about where the image is not.
-            tile: if moved_by.is_some() {
+            tile: [if moved_by.is_some() {
                 TileMode::Decal
             } else {
                 TileMode::Clamp
-            },
+            }; 2],
             // A layer is composited at its own size, so a texel lands on a
             // pixel and the filter has nothing to blend. Linear anyway, which
             // is what a target scaled by a resize would want.
@@ -5039,7 +5039,7 @@ impl Canvas {
             to_local: invert_to_local(picture_to_clip),
             slot,
             alpha: 1.0,
-            tile: TileMode::Clamp,
+            tile: [TileMode::Clamp; 2],
             // At its own size a texel lands on a pixel, and under a transform
             // the recording is resampled -- which is what a picture drawn
             // scaled means, and the same answer a matrix image filter gives.
@@ -5325,7 +5325,7 @@ impl Canvas {
                 slot,
                 rect: into,
                 alpha: 1.0,
-                tile: TileMode::Clamp,
+                tile: [TileMode::Clamp; 2],
                 source: Rect::new(0.0, 0.0, 1.0, 1.0),
                 tint: Color::WHITE,
                 sampling: Sampling::Linear,
@@ -5698,7 +5698,7 @@ impl Canvas {
             to_local: to_local_columns(clip_to_texture),
             slot,
             alpha: frame.paint.alpha,
-            tile: TileMode::Clamp,
+            tile: [TileMode::Clamp; 2],
             // A layer composites at its own size, so nothing is between texels
             // to choose between.
             sampling: Sampling::Linear,
@@ -5801,7 +5801,7 @@ impl Canvas {
                 to_local,
                 slot: 0,
                 alpha: 1.0,
-                tile: TileMode::Clamp,
+                tile: [TileMode::Clamp; 2],
                 sampling: Sampling::Linear,
                 source: [0.0, 0.0, 1.0, 1.0],
                 tint: [1.0, 1.0, 1.0, 1.0],
@@ -6014,7 +6014,7 @@ impl Canvas {
                 to_local,
                 slot: 0,
                 alpha: 1.0,
-                tile: TileMode::Clamp,
+                tile: [TileMode::Clamp; 2],
                 sampling: Sampling::Linear,
                 source: [0.0, 0.0, 1.0, 1.0],
                 tint: [1.0, 1.0, 1.0, 1.0],

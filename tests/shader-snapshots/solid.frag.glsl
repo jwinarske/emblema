@@ -128,17 +128,17 @@ vec2 snapped(vec2 coord) {
 }
 
 float cubic_weight(float x) {
-    float t_4 = abs(x);
-    if ((t_4 < 1.0)) {
+    float t_5 = abs(x);
+    if ((t_5 < 1.0)) {
         float cubic_1 = ((12.0 - (9.0 * 0.33333334)) - (6.0 * 0.33333334));
         float square = ((-18.0 + (12.0 * 0.33333334)) + (6.0 * 0.33333334));
-        return ((((((cubic_1 * t_4) + square) * t_4) * t_4) + (6.0 - (2.0 * 0.33333334))) / 6.0);
+        return ((((((cubic_1 * t_5) + square) * t_5) * t_5) + (6.0 - (2.0 * 0.33333334))) / 6.0);
     }
-    if ((t_4 < 2.0)) {
+    if ((t_5 < 2.0)) {
         float cubic_2 = (-(0.33333334) - (6.0 * 0.33333334));
         float square_1 = ((6.0 * 0.33333334) + (30.0 * 0.33333334));
         float linear = ((-12.0 * 0.33333334) - (48.0 * 0.33333334));
-        return (((((((cubic_2 * t_4) + square_1) * t_4) + linear) * t_4) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
+        return (((((((cubic_2 * t_5) + square_1) * t_5) + linear) * t_5) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
     }
     return 0.0;
 }
@@ -223,40 +223,53 @@ vec4 sampled(vec2 coord_2, vec2 texels_1, vec2 low_1, vec2 high_1) {
     return _e25;
 }
 
-vec2 tile_uv(vec2 uv_3, float tile_1) {
+float tile_axis(float t_3, float tile_1) {
     if (((tile_1 > 0.5) && (tile_1 < 1.5))) {
-        return fract(uv_3);
+        return fract(t_3);
     }
     if ((tile_1 > 2.5)) {
-        return (vec2(1.0) - abs((vec2(1.0) - (uv_3 - (2.0 * floor((uv_3 * 0.5)))))));
+        return (1.0 - abs((1.0 - (t_3 - (2.0 * floor((t_3 * 0.5)))))));
     }
-    return clamp(uv_3, vec2(0.0), vec2(1.0));
+    return clamp(t_3, 0.0, 1.0);
 }
 
-vec4 sample_mesh(vec2 uv_4) {
+vec2 tile_uv(vec2 uv_3, vec2 tile_2) {
+    float _e4 = tile_axis(uv_3.x, tile_2.x);
+    float _e7 = tile_axis(uv_3.y, tile_2.y);
+    return vec2(_e4, _e7);
+}
+
+bool decaled(vec2 uv_4, vec2 tile_3) {
+    bvec2 decal = bvec2(greaterThan(tile_3, vec2(1.5)).x && lessThan(tile_3, vec2(2.5)).x, greaterThan(tile_3, vec2(1.5)).y && lessThan(tile_3, vec2(2.5)).y);
+    bvec2 outside = bvec2(lessThan(uv_4, vec2(0.0)).x || greaterThan(uv_4, vec2(1.0)).x, lessThan(uv_4, vec2(0.0)).y || greaterThan(uv_4, vec2(1.0)).y);
+    return any(bvec2(decal.x && outside.x, decal.y && outside.y));
+}
+
+vec4 sample_mesh(vec2 uv_5) {
     vec4 texel = vec4(0.0);
-    float tile_2 = _group_1_binding_0_fs.geometry.y;
-    vec2 _e5 = tile_uv(uv_4, tile_2);
-    vec4 _e14 = sampled(_e5, (uv_4 * vec2(uvec2(textureSize(_group_0_binding_0_fs, 0).xy))), vec2(0.0), vec2(1.0));
+    vec4 _e3 = _group_1_binding_0_fs.geometry;
+    vec2 tile_4 = _e3.yz;
+    vec2 _e5 = tile_uv(uv_5, tile_4);
+    vec4 _e14 = sampled(_e5, (uv_5 * vec2(uvec2(textureSize(_group_0_binding_0_fs, 0).xy))), vec2(0.0), vec2(1.0));
     texel = _e14;
-    if (((tile_2 > 1.5) && (tile_2 < 2.5))) {
-        if ((any(lessThan(uv_4, vec2(0.0))) || any(greaterThan(uv_4, vec2(1.0))))) {
-            texel = vec4(0.0);
-        }
+    bool _e16 = decaled(uv_5, tile_4);
+    if (_e16) {
+        texel = vec4(0.0);
     }
     vec4 tint_1 = _group_1_binding_0_fs.stops[0];
     vec4 premultiplied_1 = vec4((tint_1.xyz * tint_1.w), tint_1.w);
-    vec4 _e41 = texel;
-    float _e46 = _group_1_binding_0_fs.geometry.x;
-    return ((_e41 * premultiplied_1) * _e46);
+    vec4 _e28 = texel;
+    float _e33 = _group_1_binding_0_fs.geometry.x;
+    return ((_e28 * premultiplied_1) * _e33);
 }
 
 vec4 sample_image(vec3 clip_1) {
     vec2 coord_3 = vec2(0.0);
     vec4 texel_1 = vec4(0.0);
     vec2 _e1 = to_gradient_space(clip_1);
-    float tile_3 = _group_1_binding_0_fs.geometry.w;
-    vec2 _e6 = tile_uv(_e1, tile_3);
+    vec4 _e4 = _group_1_binding_0_fs.geometry;
+    vec2 tile_5 = _e4.wy;
+    vec2 _e6 = tile_uv(_e1, tile_5);
     coord_3 = _e6;
     vec4 source_1 = _group_1_binding_0_fs.stops[0];
     vec2 _e13 = coord_3;
@@ -271,17 +284,15 @@ vec4 sample_image(vec3 clip_1) {
     vec2 _e47 = coord_3;
     vec4 _e48 = sampled(_e47, texels_2, low_2, high_2);
     texel_1 = _e48;
-    if (((tile_3 > 1.5) && (tile_3 < 2.5))) {
-        bool outside = (any(lessThan(_e1, vec2(0.0))) || any(greaterThan(_e1, vec2(1.0))));
-        if (outside) {
-            texel_1 = vec4(0.0);
-        }
+    bool _e50 = decaled(_e1, tile_5);
+    if (_e50) {
+        texel_1 = vec4(0.0);
     }
     vec4 tint_2 = _group_1_binding_0_fs.stops[1];
     vec4 premultiplied_2 = vec4((tint_2.xyz * tint_2.w), tint_2.w);
-    vec4 _e75 = texel_1;
-    float _e80 = _group_1_binding_0_fs.geometry.z;
-    return ((_e75 * premultiplied_2) * _e80);
+    vec4 _e62 = texel_1;
+    float _e67 = _group_1_binding_0_fs.geometry.z;
+    return ((_e62 * premultiplied_2) * _e67);
 }
 
 float coverage_of(float distance_, float per_pixel, float width) {
@@ -397,8 +408,8 @@ vec4 ellipse_coverage(vec3 clip_4) {
     return _e9;
 }
 
-vec4 point_field_coverage(vec2 uv_5) {
-    vec4 _e4 = disc_coverage(uv_5, vec2(1.0, 1.0));
+vec4 point_field_coverage(vec2 uv_6) {
+    vec4 _e4 = disc_coverage(uv_6, vec2(1.0, 1.0));
     return _e4;
 }
 
@@ -438,11 +449,11 @@ vec4 blur_along_axis(vec3 clip_5) {
     return (_e61 / vec4(max(_e62, 1e-6)));
 }
 
-vec4 sample_or_nothing(vec2 uv_6) {
-    if ((any(lessThan(uv_6, vec2(0.0))) || any(greaterThan(uv_6, vec2(1.0))))) {
+vec4 sample_or_nothing(vec2 uv_7) {
+    if ((any(lessThan(uv_7, vec2(0.0))) || any(greaterThan(uv_7, vec2(1.0))))) {
         return vec4(0.0);
     }
-    vec4 _e15 = textureLod(_group_0_binding_0_fs, vec2(uv_6), 0.0);
+    vec4 _e15 = textureLod(_group_0_binding_0_fs, vec2(uv_7), 0.0);
     return _e15;
 }
 
@@ -805,7 +816,7 @@ vec4 dithered(vec4 color_1, vec2 frag_1) {
 
 vec4 shade(VertexOutput in_3) {
     vec4 color_2 = vec4(0.0);
-    float t_3 = 0.0;
+    float t_4 = 0.0;
     bool covered = false;
     vec4 _e4 = _group_1_binding_0_fs.stops[0];
     color_2 = _e4;
@@ -823,9 +834,9 @@ vec4 shade(VertexOutput in_3) {
         vec2 axis = _e32.zw;
         float length_squared = max(dot(axis, axis), 1e-6);
         vec2 _e37 = gradient_space(in_3);
-        float t_5 = (dot(_e37, axis) / length_squared);
+        float t_6 = (dot(_e37, axis) / length_squared);
         float _e43 = _group_1_binding_0_fs.params.z;
-        vec2 _e44 = tile_gradient(t_5, _e43);
+        vec2 _e44 = tile_gradient(t_6, _e43);
         vec4 _e46 = gradient_color(_e44.x, count_2);
         color_2 = (_e46 * _e44.y);
     } else {
@@ -863,11 +874,11 @@ vec4 shade(VertexOutput in_3) {
                             float far = max(((b + root) / a_1), ((b - root) / a_1));
                             float near = min(((b + root) / a_1), ((b - root) / a_1));
                             if (((r0_ + (far * dr)) >= 0.0)) {
-                                t_3 = far;
+                                t_4 = far;
                                 covered = true;
                             } else {
                                 if (((r0_ + (near * dr)) >= 0.0)) {
-                                    t_3 = near;
+                                    t_4 = near;
                                     covered = true;
                                 }
                             }
@@ -876,12 +887,12 @@ vec4 shade(VertexOutput in_3) {
                         if ((abs(b) > 1e-6)) {
                             float only = (c_6 / (2.0 * b));
                             if (((r0_ + (only * dr)) >= 0.0)) {
-                                t_3 = only;
+                                t_4 = only;
                                 covered = true;
                             }
                         }
                     }
-                    float _e178 = t_3;
+                    float _e178 = t_4;
                     float _e182 = _group_1_binding_0_fs.params.z;
                     vec2 _e183 = tile_gradient(_e178, _e182);
                     vec4 _e185 = gradient_color(_e183.x, count_2);

@@ -76,7 +76,7 @@ fn full_target_mapping() -> Material {
         to_local: across_the_target(0.5),
         slot: 0,
         alpha: 1.0,
-        tile: TileMode::Clamp,
+        tile: [TileMode::Clamp; 2],
         sampling: emblema_hal::Sampling::Linear,
         source: [0.0, 0.0, 1.0, 1.0],
         tint: [1.0, 1.0, 1.0, 1.0],
@@ -229,7 +229,7 @@ fn a_mesh_reads_its_own_coordinates_the_same_way_on_both_backends() {
         slot: 0,
         alpha: 1.0,
         tint: [1.0, 1.0, 1.0, 1.0],
-        tile: TileMode::Clamp,
+        tile: [TileMode::Clamp; 2],
         sampling: emblema_hal::Sampling::Linear,
     };
     let mut ran = 0;
@@ -262,7 +262,7 @@ fn a_mesh_tint_scales_the_texel_it_read() {
             slot: 0,
             alpha: 1.0,
             tint: [1.0, 1.0, 1.0, 1.0],
-            tile: TileMode::Clamp,
+            tile: [TileMode::Clamp; 2],
             sampling: emblema_hal::Sampling::Linear,
         },
     );
@@ -272,7 +272,7 @@ fn a_mesh_tint_scales_the_texel_it_read() {
             slot: 0,
             alpha: 0.5,
             tint: [1.0, 1.0, 1.0, 1.0],
-            tile: TileMode::Clamp,
+            tile: [TileMode::Clamp; 2],
             sampling: emblema_hal::Sampling::Linear,
         },
     );
@@ -385,7 +385,7 @@ fn nearest_sampling_steps_between_texels_on_both_backends() {
         to_local: across_the_target(1.0),
         slot: 0,
         alpha: 1.0,
-        tile: TileMode::Clamp,
+        tile: [TileMode::Clamp; 2],
         sampling,
         source: [0.0, 0.0, 1.0, 1.0],
         tint: [1.0, 1.0, 1.0, 1.0],
@@ -550,7 +550,7 @@ fn a_source_rectangle_draws_only_that_part_of_the_image() {
         to_local: across_the_target(1.0),
         slot: 0,
         alpha: 1.0,
-        tile: TileMode::Clamp,
+        tile: [TileMode::Clamp; 2],
         sampling: emblema_hal::Sampling::Linear,
         source,
         tint: [1.0, 1.0, 1.0, 1.0],
@@ -598,7 +598,7 @@ fn a_repeated_source_rectangle_tiles_the_piece_rather_than_the_sheet() {
             to_local: across_the_target(1.0),
             slot: 0,
             alpha: 1.0,
-            tile: TileMode::Repeat,
+            tile: [TileMode::Repeat; 2],
             sampling: emblema_hal::Sampling::Linear,
             source: [0.0, 0.0, 0.5, 0.5],
             tint: [1.0, 1.0, 1.0, 1.0],
@@ -625,7 +625,7 @@ fn the_tile_modes_differ_outside_the_image() {
         to_local: across_the_target(1.0),
         slot: 0,
         alpha: 1.0,
-        tile,
+        tile: [tile; 2],
         sampling: emblema_hal::Sampling::Linear,
         source: [0.0, 0.0, 1.0, 1.0],
         tint: [1.0, 1.0, 1.0, 1.0],
@@ -701,6 +701,53 @@ fn the_tile_modes_differ_outside_the_image() {
 }
 
 #[test]
+fn each_axis_tiles_by_its_own_mode() {
+    let Ok(mut ctx) = Validated::new(DevicePreference::Auto) else {
+        return;
+    };
+    // The image in the top-left quarter again, repeating across and decaled
+    // down: a row of copies along the top and nothing under it. One mode for
+    // both axes cannot draw this, and an image shader upstream can.
+    let image = |tile| Material::Image {
+        to_local: across_the_target(1.0),
+        slot: 0,
+        alpha: 1.0,
+        tile,
+        sampling: emblema_hal::Sampling::Linear,
+        source: [0.0, 0.0, 1.0, 1.0],
+        tint: [1.0, 1.0, 1.0, 1.0],
+    };
+    let band = render::<VulkanHal>(&mut ctx, image([TileMode::Repeat, TileMode::Decal]));
+    assert_eq!(
+        pixel(&band, 18, 2),
+        [255, 0, 0, 255],
+        "across, the image did not start again"
+    );
+    for (x, y) in [(2, 18), (18, 18), (28, 28)] {
+        assert_eq!(
+            pixel(&band, x, y),
+            [0, 0, 0, 0],
+            "down, ({x}, {y}) drew something outside the image"
+        );
+    }
+
+    // And the other way about, clamped across and repeated down: the copy
+    // below starts again at the top-left texel, and right of the image the
+    // edge column is held.
+    let column = render::<VulkanHal>(&mut ctx, image([TileMode::Clamp, TileMode::Repeat]));
+    assert_eq!(
+        pixel(&column, 2, 18),
+        [255, 0, 0, 255],
+        "down, the image did not start again"
+    );
+    assert_eq!(
+        pixel(&column, 18, 18),
+        [0, 255, 0, 255],
+        "across, the edge column of the copy below was not held"
+    );
+}
+
+#[test]
 fn a_batch_naming_a_texture_nobody_supplied_is_refused() {
     let mut ran = 0;
     let mut batch = Batch::new();
@@ -770,7 +817,7 @@ fn a_rendered_target_can_be_sampled_by_a_later_pass() {
                 to_local: across_the_target(0.5),
                 slot: 0,
                 alpha: 1.0,
-                tile: TileMode::Clamp,
+                tile: [TileMode::Clamp; 2],
                 sampling: emblema_hal::Sampling::Linear,
                 source: [0.0, 0.0, 1.0, 1.0],
                 tint: [1.0, 1.0, 1.0, 1.0],

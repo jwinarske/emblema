@@ -108,7 +108,7 @@ fn shader_for(fill: &Fill) -> Shader {
             slot: crate::fixture::SLOT,
             rect: Rect::new(rect[0], rect[1], rect[2], rect[3]),
             alpha: *alpha,
-            tile: *tile,
+            tile: [*tile; 2],
             source: Rect::new(source[0], source[1], source[2], source[3]),
             tint: color_of(*tint),
             sampling: *sampling,

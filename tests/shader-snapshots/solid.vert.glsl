@@ -41,29 +41,41 @@ vec2 tile_gradient(float t_1, float tile) {
 }
 
 float cubic_weight(float x) {
-    float t_4 = abs(x);
-    if ((t_4 < 1.0)) {
+    float t_5 = abs(x);
+    if ((t_5 < 1.0)) {
         float cubic_1 = ((12.0 - (9.0 * 0.33333334)) - (6.0 * 0.33333334));
         float square = ((-18.0 + (12.0 * 0.33333334)) + (6.0 * 0.33333334));
-        return ((((((cubic_1 * t_4) + square) * t_4) * t_4) + (6.0 - (2.0 * 0.33333334))) / 6.0);
+        return ((((((cubic_1 * t_5) + square) * t_5) * t_5) + (6.0 - (2.0 * 0.33333334))) / 6.0);
     }
-    if ((t_4 < 2.0)) {
+    if ((t_5 < 2.0)) {
         float cubic_2 = (-(0.33333334) - (6.0 * 0.33333334));
         float square_1 = ((6.0 * 0.33333334) + (30.0 * 0.33333334));
         float linear = ((-12.0 * 0.33333334) - (48.0 * 0.33333334));
-        return (((((((cubic_2 * t_4) + square_1) * t_4) + linear) * t_4) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
+        return (((((((cubic_2 * t_5) + square_1) * t_5) + linear) * t_5) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
     }
     return 0.0;
 }
 
-vec2 tile_uv(vec2 uv_3, float tile_1) {
+float tile_axis(float t_3, float tile_1) {
     if (((tile_1 > 0.5) && (tile_1 < 1.5))) {
-        return fract(uv_3);
+        return fract(t_3);
     }
     if ((tile_1 > 2.5)) {
-        return (vec2(1.0) - abs((vec2(1.0) - (uv_3 - (2.0 * floor((uv_3 * 0.5)))))));
+        return (1.0 - abs((1.0 - (t_3 - (2.0 * floor((t_3 * 0.5)))))));
     }
-    return clamp(uv_3, vec2(0.0), vec2(1.0));
+    return clamp(t_3, 0.0, 1.0);
+}
+
+vec2 tile_uv(vec2 uv_3, vec2 tile_2) {
+    float _e4 = tile_axis(uv_3.x, tile_2.x);
+    float _e7 = tile_axis(uv_3.y, tile_2.y);
+    return vec2(_e4, _e7);
+}
+
+bool decaled(vec2 uv_4, vec2 tile_3) {
+    bvec2 decal = bvec2(greaterThan(tile_3, vec2(1.5)).x && lessThan(tile_3, vec2(2.5)).x, greaterThan(tile_3, vec2(1.5)).y && lessThan(tile_3, vec2(2.5)).y);
+    bvec2 outside = bvec2(lessThan(uv_4, vec2(0.0)).x || greaterThan(uv_4, vec2(1.0)).x, lessThan(uv_4, vec2(0.0)).y || greaterThan(uv_4, vec2(1.0)).y);
+    return any(bvec2(decal.x && outside.x, decal.y && outside.y));
 }
 
 float coverage_of(float distance_, float per_pixel, float width) {
