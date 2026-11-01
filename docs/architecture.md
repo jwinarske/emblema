@@ -1,9 +1,11 @@
 # Architecture
 
-emblema is a tessellation-based 2D vector graphics renderer. It targets the
-full range of Linux-capable graphics hardware, from desktop discrete GPUs down
-to embedded SoCs driving panels directly through KMS with no compositor
-present.
+emblema is a 2D vector graphics renderer that tessellates paths on the CPU
+and needs no compute shaders; rounded rects, circles, ellipses and their
+blurred shadows are evaluated per pixel instead (Renderer internals, below),
+and glyphs are quads sampled from an atlas. It targets the full range of
+Linux-capable graphics hardware, from desktop discrete GPUs down to embedded
+SoCs driving panels directly through KMS with no compositor present.
 
 This document records the invariants that govern the codebase. Where a rule
 here conflicts with local convenience, the rule wins; several of them exist
@@ -13,9 +15,11 @@ because violating them is cheap today and a breaking redesign later.
 
 Four properties define the project against neighboring renderers:
 
-- **Tessellation-based, no compute shader requirement.** Runs correctly on
-  every Vulkan 1.1+ device and every GLES 3.0 device, including embedded GPUs
-  where compute is weak or driver support is immature.
+- **No compute shader requirement.** Paths are tessellated on the CPU and the
+  common shapes are evaluated in the fragment shader; the GPU only rasterizes
+  triangles. Runs correctly on every Vulkan 1.1+ device and every GLES 3.0
+  device, including embedded GPUs where compute is weak or driver support is
+  immature.
 - **Predictable frame times.** All pipelines are compiled ahead of time. No
   shader compilation jank, no driver-specific compute paths.
 - **First-class direct scanout.** Most 2D renderers assume a windowing system
@@ -2478,13 +2482,15 @@ rather than in principle.
   shape is wrong on both of them equally, and is caught instead by holding it
   against the tessellated route and against the exact area it approximates.
 
-  A plain rectangle is the same field with no corner to round, and takes it for
-  the second reason rather than the first: four vertices is four vertices
-  either way, but the pass no longer multisamples for it. That is the shape a
-  frame is mostly made of, so it is where the saving is largest — and it is
-  invisible on an axis-aligned rectangle at integer bounds, which has no edge
-  to antialias, and worth the most on a rotated or fractionally placed one,
-  which is what needed four samples before.
+  A plain rectangle is the same field with no corner to round, and a stroked
+  one takes it. A filled one does not, since 2026-10-01: it took the field on
+  the reasoning that sparing the pass multisampling was worth four times the
+  fill, and measured the other way — tessellated at four samples beat the
+  field at one by thirty to thirty-five per cent on V3D, PowerVR and x86-64,
+  because multisampling costs 1.23 to 2.62 times rather than four and the field
+  is evaluated across a whole quad to a constant. Upstream draws a filled
+  rectangle as a four-vertex strip too. `docs/on-a-board.md`, "A square
+  rectangle was on the wrong route", has the frames and the control.
 
   Where the time actually goes was measured rather than assumed, and it is not
   where the vertex counts suggest. At 1920×1080 with a hundred and sixty

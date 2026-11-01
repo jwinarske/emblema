@@ -1,8 +1,9 @@
 //! Path types and tessellation.
 //!
-//! Everything is tessellated. A convex path takes a fan fill, which avoids
-//! both the sweep and the stencil pass, and everything else goes through the
-//! general fill — so [`path::Path::convexity`] is what chooses between them.
+//! Every path this crate is given is tessellated. A convex path takes a fan
+//! fill, which avoids both the sweep and the stencil pass, and everything else
+//! goes through the general fill — so [`path::Path::convexity`] is what
+//! chooses between them.
 //!
 //! Detection is conservative in one direction only: a wrong `Concave` answer
 //! costs speed, and a wrong `Convex` answer renders incorrectly, because a fan
@@ -10,13 +11,13 @@
 //! means. That asymmetry is why the classifier measures how far a polygon
 //! turns in total rather than only whether its turns agree.
 //!
-//! **Not implemented**, and named here because this header described it as
-//! though it were: analytic coverage for rects, rounded rects, circles and
-//! ellipses, computed in the fragment shader instead of tessellating. There is
-//! no rounded rect or ellipse in this crate at all, and a circle is four
-//! cubics that get flattened like any other curve. It is the intended shape --
-//! it is where most of the draw calls in a real interface land -- rather than
-//! something that exists.
+//! Not every shape comes here. An antialiased rounded rect, circle or ellipse,
+//! and a blurred rounded rect, are drawn as one quad whose coverage the
+//! fragment shader computes; `emblema-core`'s canvas makes that choice, and
+//! those shapes never become a [`Path`] here. A filled plain rect is still
+//! tessellated, deliberately: evaluating it measured about thirty per cent
+//! slower on every board this targets (`docs/on-a-board.md`); a stroked one is
+//! evaluated.
 
 pub mod dash;
 pub mod flatten;

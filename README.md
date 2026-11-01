@@ -1,8 +1,11 @@
 # emblema
 
-A tessellation-based 2D vector graphics renderer for Rust, targeting everything
-from desktop discrete GPUs down to embedded SoCs driving panels directly
-through KMS with no compositor present.
+A 2D vector graphics renderer for Rust that tessellates paths on the CPU and
+needs no compute shaders, targeting everything from desktop discrete GPUs down
+to embedded SoCs driving panels directly through KMS with no compositor
+present. The shapes an interface draws most -- rounded rects, circles,
+ellipses and their blurred shadows -- are evaluated per pixel instead, and
+glyphs are quads sampled from an atlas.
 
 > **Status: early development.** Solid fills, strokes, antialiasing, gradients
 > (linear, radial, sweep), and the Porter-Duff blend modes render on both
@@ -44,9 +47,11 @@ with the conditions they were taken under.
 
 ## Why
 
-- **Tessellation-based, no compute shader requirement.** Runs correctly on
-  every Vulkan 1.1+ device and every GLES 3.0 device, including embedded GPUs
-  where compute is weak or driver support is immature.
+- **No compute shader requirement.** Paths are tessellated on the CPU and the
+  common shapes are evaluated in the fragment shader; the GPU only rasterizes
+  triangles. Runs correctly on every Vulkan 1.1+ device and every GLES 3.0
+  device, including embedded GPUs where compute is weak or driver support is
+  immature.
 - **Predictable frame times.** All pipelines are compiled ahead of time — no
   shader compilation jank, no driver-specific compute paths.
 - **First-class direct scanout.** Most 2D renderers assume a windowing system
