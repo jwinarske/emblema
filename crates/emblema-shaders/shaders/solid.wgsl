@@ -1363,6 +1363,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         tinted = blend_tint(tint_mode, shaded, in.tint);
     }
+    // Faded after the blend and before the filter, as upstream's atlas and
+    // vertices contents fade by the paint's alpha. One for a draw without a
+    // color of its own; the paint's opacity is in its material then.
+    tinted = tinted * paint.filter_params.w;
     return dithered(filtered(tinted), in.position.xy);
 }
 

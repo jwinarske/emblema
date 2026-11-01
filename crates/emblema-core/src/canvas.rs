@@ -2664,6 +2664,8 @@ impl Canvas {
                 self.clip,
                 ClipState::content(self.depth),
                 paint.tint_blend,
+                // The section colors carry the paint's opacity already.
+                1.0,
                 // The color comes from the vertices, not from a coordinate, so
                 // there is nothing for the material to read a position for.
                 false,
@@ -4571,6 +4573,28 @@ impl Canvas {
         // below. `effect_mesh_uv.wgsl` is the fixture that proves it: the
         // sibling of `effect.wgsl` differing in one line.
         let at_coords = textured && !matches!(paint.shader, Shader::Image { .. });
+        // A mesh with colors of its own blends the paint's result into them,
+        // and upstream fades what that blend produced by the paint's alpha:
+        // `AtlasContents` and the vertices contents both scale their output,
+        // not their texture. So the material is the paint at full strength
+        // and the opacity rides on the draw, applied after the blend. Under
+        // `Modulate` the two orders are one product; under `SrcOver` a sprite
+        // faded first lets its color show through, which upstream's does not.
+        //
+        // Not a caller's program: its fragment stage is its own, and reads
+        // neither the blend nor this. A mesh without colors blends with none,
+        // and its paint fades as every other draw's does.
+        let opacity = paint.effective_opacity();
+        let fades_after = !mesh.colors().is_empty()
+            && !matches!(paint.shader, Shader::RuntimeEffect { .. })
+            && opacity < 1.0;
+        let full;
+        let (paint, opacity) = if fades_after {
+            full = paint.clone().with_opacity(1.0);
+            (&full, opacity)
+        } else {
+            (paint, 1.0)
+        };
         let material = match (&paint.shader, textured) {
             (Shader::Image { .. }, true) => self.mesh_material(paint)?,
             _ if at_coords => self.material_at_texture_coords(paint),
@@ -4609,6 +4633,7 @@ impl Canvas {
             self.clip,
             ClipState::content(self.depth),
             paint.tint_blend,
+            opacity,
             // Where the coordinates say something the material cannot work out
             // for itself. An image mesh is excluded because it already reads
             // them, through a material of its own; everything else -- a
@@ -4645,7 +4670,9 @@ impl Canvas {
     /// Each sprite's [`Sprite::color`] goes to its four corners and combines
     /// with what the sheet gives there by the paint's
     /// [`Paint::tint_blend`], as `dart:ui`'s colors and blend mode do: the
-    /// sprite the source, its color the destination.
+    /// sprite the source, its color the destination. [`Paint::opacity`]
+    /// fades what that produced, as upstream's atlas fades by the paint's
+    /// alpha, not the sprite before it meets its color.
     pub fn draw_atlas(
         &mut self,
         sprites: &[Sprite],
@@ -4874,6 +4901,7 @@ impl Canvas {
                     self.clip,
                     ClipState::content(self.depth),
                     paint.tint_blend,
+                    1.0,
                     false,
                 )?;
             }

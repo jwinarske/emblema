@@ -767,6 +767,11 @@ pub struct Paint {
     /// [`Self::with_shader`], and read through [`Self::effective_shader`], so
     /// every route draws the same. A value outside zero to one is clamped
     /// into it, and one that is not a number draws nothing.
+    ///
+    /// A mesh or an atlas with colors of its own is the one place the order
+    /// shows: there it fades what [`Self::tint_blend`] produced, after the
+    /// blend, as upstream's vertices and atlas contents do. Under
+    /// `Modulate` that is the same product either way.
     pub opacity: f32,
 }
 
@@ -1122,15 +1127,21 @@ impl Paint {
     /// The shader as the paint draws it: [`Self::opacity`] folded in. Every
     /// route reads the shader through this.
     pub fn effective_shader(&self) -> Cow<'_, Shader> {
-        let opacity = if self.opacity.is_nan() {
-            0.0
-        } else {
-            self.opacity.clamp(0.0, 1.0)
-        };
+        let opacity = self.effective_opacity();
         if opacity == 1.0 {
             Cow::Borrowed(&self.shader)
         } else {
             Cow::Owned(self.shader.at_opacity(opacity))
+        }
+    }
+
+    /// [`Paint::opacity`] as it is applied: held to zero to one, and zero for
+    /// a NaN, which has no amount of fading to stand for.
+    pub(crate) fn effective_opacity(&self) -> f32 {
+        if self.opacity.is_nan() {
+            0.0
+        } else {
+            self.opacity.clamp(0.0, 1.0)
         }
     }
 

@@ -355,10 +355,9 @@ fn every_shader_declares_the_paint_block_the_renderer_packs() {
     );
 
     // And every constant in `layout` is accounted for, so one added there is
-    // classified rather than quietly uncovered. `DITHER` is the one that names
-    // no member of its own: it is two floats inside `filter_params`, which the
-    // constant's own documentation says, so what is asserted is that it lands
-    // inside that member rather than beside it.
+    // classified rather than quietly uncovered. `DITHER` and `OPACITY` name no
+    // member of their own: each is a float inside `filter_params`, which their
+    // own documentation says.
     const MATERIAL: &str = include_str!("../../emblema-hal/src/material.rs");
     let module = MATERIAL
         .split_once("pub mod layout {")
@@ -374,12 +373,12 @@ fn every_shader_declares_the_paint_block_the_renderer_packs() {
         let Some(name) = rest.split(':').next() else {
             continue;
         };
-        // `DITHER` names no member of its own -- it is two floats inside
-        // `filter_params` -- so there is nothing here to match it against. Its
-        // place is asserted where both numbers are, beside the constant itself,
-        // and at compile time: two constants compared in a test is an
-        // assertion that cannot fail.
-        if name == "DITHER" {
+        // `DITHER` and `OPACITY` name no member of their own -- each is a
+        // float inside `filter_params` -- so there is nothing here to match
+        // them against. Their places are asserted where the numbers are,
+        // beside the constants themselves, and at compile time: two constants
+        // compared in a test is an assertion that cannot fail.
+        if name == "DITHER" || name == "OPACITY" {
             continue;
         }
         assert!(

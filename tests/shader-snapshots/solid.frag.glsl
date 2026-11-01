@@ -966,9 +966,12 @@ void main() {
         tinted = _e15;
     }
     vec4 _e16 = tinted;
-    vec4 _e17 = filtered(_e16);
-    vec4 _e20 = dithered(_e17, in_.position.xy);
-    _fs2p_location0 = _e20;
+    float _e20 = _group_1_binding_0_fs.filter_params.w;
+    tinted = (_e16 * _e20);
+    vec4 _e22 = tinted;
+    vec4 _e23 = filtered(_e22);
+    vec4 _e26 = dithered(_e23, in_.position.xy);
+    _fs2p_location0 = _e26;
     return;
 }
 
