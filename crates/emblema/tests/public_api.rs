@@ -75,6 +75,28 @@ fn square_path(rect: Rect) -> Path {
     b.build()
 }
 
+/// An L inside `rect`: its top half whole and the left half of its bottom, a
+/// concave outline with no shape recorded on it.
+///
+/// For a test about the general mask blur. A convex outline is blurred as a
+/// shadow mesh, as upstream blurs one; a concave one has no mesh and takes the
+/// blurred layer, which is what these tests compare against.
+fn concave_path(rect: Rect) -> Path {
+    let (mx, my) = (
+        (rect.left + rect.right) / 2.0,
+        (rect.top + rect.bottom) / 2.0,
+    );
+    let mut b = PathBuilder::new();
+    b.move_to(Vec2::new(rect.left, rect.top))
+        .line_to(Vec2::new(rect.right, rect.top))
+        .line_to(Vec2::new(rect.right, my))
+        .line_to(Vec2::new(mx, my))
+        .line_to(Vec2::new(mx, rect.bottom))
+        .line_to(Vec2::new(rect.left, rect.bottom))
+        .close();
+    b.build()
+}
+
 /// Two colors, equal to within `within` on every channel.
 ///
 /// For a comparison against a value a *shader* computed rather than one the API
@@ -3657,11 +3679,11 @@ fn a_mask_blur_softens_a_shape_and_matches_a_blurred_layer() {
     let mut masked = Canvas::new(SIZE);
     masked.clear(Color::BLACK);
     // Through the general route deliberately: the identity below is that
-    // route's justification, and a rectangle that knows it is one no longer
-    // takes it.
+    // route's justification. A rectangle that knows it is one is evaluated
+    // instead, and a convex outline is a shadow mesh, so the shape is concave.
     masked
         .draw_path(
-            &square_path(shape),
+            &concave_path(shape),
             &Paint::fill(color).with_mask_blur(sigma),
         )
         .expect("mask blur");
@@ -3682,7 +3704,7 @@ fn a_mask_blur_softens_a_shape_and_matches_a_blurred_layer() {
         ),
     );
     layered
-        .draw_rect(shape, &Paint::fill(color))
+        .draw_path(&concave_path(shape), &Paint::fill(color))
         .expect("shape");
     layered.restore();
     let layered = render(&mut ctx, layered);
@@ -8184,14 +8206,10 @@ fn an_image_filter_blur_of_a_solid_agrees_with_the_mask_blur_of_the_same_shape()
     // and on a solid color they must agree, or one of them is wrong.
     let Some(mut ctx) = context() else { return };
 
-    let shape = || {
-        let mut b = PathBuilder::new();
-        b.move_to(Vec2::new(32.0, 40.0))
-            .line_to(Vec2::new(96.0, 40.0))
-            .line_to(Vec2::new(64.0, 96.0))
-            .close();
-        b.build()
-    };
+    // Concave, so the mask blur is the blurred layer this identity is about:
+    // a convex outline is blurred as a shadow mesh, as upstream blurs one,
+    // which approximates the Gaussian rather than being it.
+    let shape = || concave_path(Rect::new(32.0, 40.0, 96.0, 96.0));
     let color = Color::linear(0.9, 0.3, 0.2, 1.0);
 
     let mut canvas = Canvas::new(SIZE);
@@ -8604,9 +8622,11 @@ fn the_two_halves_of_a_blur_add_up_to_the_whole_of_it() {
         // other to within a level or two. That difference is the approximation
         // and is pinned separately; here the point is that the composition is
         // exact, which needs all three built the same way.
+        // Concave as well: `Normal` on a convex outline is a shadow mesh and
+        // the other two styles are not.
         canvas
             .draw_path(
-                &square_path(Rect::new(30.0, 30.0, 98.0, 98.0)),
+                &concave_path(Rect::new(30.0, 30.0, 98.0, 98.0)),
                 &Paint::fill(Color::linear(1.0, 1.0, 1.0, 1.0))
                     .with_mask_blur(6.0)
                     .with_mask_blur_style(style),
@@ -8778,8 +8798,10 @@ fn the_occluder_flag_is_accepted_and_changes_nothing() {
 
     // And the picture is still a shadow: dark below the card where it falls,
     // and the card itself still covering the ground above.
+    // Measured 198 when the card's outline was blurred through a layer and
+    // 200 as a shadow mesh; the unshadowed ground is about 230.
     let below = pixel(&opaque, 64, 86)[0] as i32;
-    assert!(below < 200, "the shadow below the card is missing: {below}");
+    assert!(below < 210, "the shadow below the card is missing: {below}");
     let on_card = pixel(&opaque, 64, 70)[0] as i32;
     assert!(
         on_card > 240,
@@ -11334,18 +11356,22 @@ fn an_image_filter_applies_to_a_mesh_as_it_does_to_a_shape() {
     );
 }
 
-/// The same square, as a mesh carrying no colors of its own.
-fn uncolored_square_mesh() -> Vertices {
+/// [`concave_path`] of the square 34 to 94, as a mesh carrying no colors of
+/// its own: the top half's two triangles and the bottom-left quarter's two.
+fn uncolored_concave_mesh() -> Vertices {
     Vertices::indexed(
         VertexMode::Triangles,
         vec![
             Vec2::new(34.0, 34.0),
             Vec2::new(94.0, 34.0),
-            Vec2::new(94.0, 94.0),
+            Vec2::new(94.0, 64.0),
+            Vec2::new(64.0, 64.0),
+            Vec2::new(64.0, 94.0),
             Vec2::new(34.0, 94.0),
+            Vec2::new(34.0, 64.0),
         ],
         vec![],
-        vec![0, 1, 2, 0, 2, 3],
+        vec![0, 1, 2, 0, 2, 6, 6, 3, 4, 6, 4, 5],
     )
     .expect("mesh")
 }
@@ -11370,23 +11396,24 @@ fn a_mask_blur_over_a_mesh_the_paint_fills_matches_the_same_shape_as_a_path() {
     let mut as_mesh = Canvas::new(SIZE);
     as_mesh.clear(Color::BLACK);
     as_mesh
-        .draw_vertices(&uncolored_square_mesh(), &paint())
+        .draw_vertices(&uncolored_concave_mesh(), &paint())
         .expect("a mesh the paint fills takes a mask blur");
     let mesh_pixels = render(&mut ctx, as_mesh);
 
     let mut as_path = Canvas::new(SIZE);
     as_path.clear(Color::BLACK);
-    // An outline with no shape recorded on it, so both sides take the general
-    // route -- which is what this compares. Through `draw_rect` the path would
-    // be evaluated analytically and the mesh would not, and the two would
-    // differ for that reason rather than for the one under test.
+    // A concave outline with no shape recorded on it, so both sides take the
+    // general route -- which is what this compares. A rectangle through
+    // `draw_rect` is evaluated analytically and a convex outline is a shadow
+    // mesh, and the two would differ for that reason rather than for the one
+    // under test.
     as_path
-        .draw_path(&square_path(Rect::new(34.0, 34.0, 94.0, 94.0)), &paint())
+        .draw_path(&concave_path(Rect::new(34.0, 34.0, 94.0, 94.0)), &paint())
         .expect("path");
     let path_pixels = render(&mut ctx, as_path);
 
     // Inside, on the edge, and out in the halo.
-    for (x, y) in [(64u32, 64u32), (64, 34), (64, 28), (34, 34)] {
+    for (x, y) in [(50u32, 50u32), (64, 34), (64, 28), (34, 34)] {
         let (mesh, path) = (pixel(&mesh_pixels, x, y), pixel(&path_pixels, x, y));
         assert_eq!(
             mesh, path,
@@ -14823,9 +14850,26 @@ fn an_analytic_blurred_rectangle_agrees_with_the_blur_it_replaces() {
         } else {
             square_path(rect)
         };
+        // Drawn sharp into a blurred layer, which is what the general route
+        // draws: such an outline as a mask blur is now a shadow mesh, as
+        // upstream draws one, and that approximates the Gaussian in its own
+        // way. The layer is sized as the mask blur sizes its own.
         let mut general = Canvas::new(SIZE);
         general.clear(Color::BLACK);
-        general.draw_path(&reference, &paint).expect("general");
+        let reach = ((sigma - 0.5) * 1.7320508f32).max(0.0).ceil();
+        general.save_layer_bounds(
+            Layer::opacity(1.0).with_blur(sigma),
+            Rect::new(
+                rect.left - reach,
+                rect.top - reach,
+                rect.right + reach,
+                rect.bottom + reach,
+            ),
+        );
+        general
+            .draw_path(&reference, &Paint::fill(Color::WHITE))
+            .expect("general");
+        general.restore();
         let two = render(&mut ctx, general);
 
         let worst = one
@@ -14893,15 +14937,95 @@ fn an_analytic_blurred_rectangle_costs_no_passes() {
         "a blurred rounded rectangle should not have opened a layer"
     );
 
-    // The same outline with no shape recorded on it, which is what the general
-    // route still gets.
+    // The same outline with no shape recorded on it is a shadow mesh, as
+    // upstream draws one: no layer either.
+    let mut mesh = Canvas::new(SIZE);
+    mesh.draw_path(&rect.to_rounded_path_with_radii([[16.0; 2]; 4]), &paint)
+        .expect("mesh");
+    assert_eq!(
+        mesh.finish().passes.len(),
+        1,
+        "a blurred convex outline should not have opened a layer"
+    );
+
+    // A concave one has no mesh, and is what the general route still gets.
     let mut general = Canvas::new(SIZE);
     general
-        .draw_path(&rect.to_rounded_path_with_radii([[16.0; 2]; 4]), &paint)
+        .draw_path(&concave_path(rect), &paint)
         .expect("general");
     assert!(
         general.finish().passes.len() > 1,
         "the general route should still be drawing into a layer"
+    );
+}
+
+/// A blurred oval is upstream's shadow mesh: one draw, no layer, and a picture
+/// that reads as the blur it replaces.
+///
+/// The mesh approximates the Gaussian rather than being it -- upstream chose
+/// its reach, 2.8 deviations, by eye against its analytic shapes -- so the
+/// comparison with a blurred layer is bounded rather than exact. What it must
+/// not do is put the shadow somewhere else or at another size, which a bound on
+/// the mean over the frame catches.
+#[test]
+fn a_blurred_oval_is_a_shadow_mesh_that_reads_as_its_blur() {
+    let oval = Rect::new(24.0, 44.0, 104.0, 84.0);
+    let sigma = 4.0;
+    let paint = Paint::fill(Color::WHITE).with_mask_blur(sigma);
+
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::BLACK);
+    canvas.draw_oval(oval, &paint).expect("mesh");
+    let recording = canvas.finish();
+    assert_eq!(
+        recording.passes.len(),
+        1,
+        "a blurred oval should be one draw, not a layer and its blur passes"
+    );
+
+    let Some(mut ctx) = context() else { return };
+    let mut mesh = Canvas::new(SIZE);
+    mesh.clear(Color::BLACK);
+    mesh.draw_oval(oval, &paint).expect("mesh");
+    let mesh = render(&mut ctx, mesh);
+
+    let reach = ((sigma - 0.5) * 1.7320508f32).max(0.0).ceil();
+    let mut layer = Canvas::new(SIZE);
+    layer.clear(Color::BLACK);
+    layer.save_layer_bounds(
+        Layer::opacity(1.0).with_blur(sigma),
+        Rect::new(
+            oval.left - reach,
+            oval.top - reach,
+            oval.right + reach,
+            oval.bottom + reach,
+        ),
+    );
+    layer
+        .draw_oval(oval, &Paint::fill(Color::WHITE))
+        .expect("layer");
+    layer.restore();
+    let layer = render(&mut ctx, layer);
+
+    // Dark at the center, clear well outside, and soft across the edge.
+    assert!(pixel(&mesh, 64, 64)[0] > 250, "{:?}", pixel(&mesh, 64, 64));
+    assert_eq!(pixel(&mesh, 64, 20)[0], 0, "the shadow reached too far");
+    let edge = pixel(&mesh, 24, 64)[0];
+    assert!(edge > 60 && edge < 200, "the edge is not soft: {edge}");
+
+    let mean = mesh
+        .iter()
+        .zip(&layer)
+        .map(|(a, b)| a.abs_diff(*b) as u64)
+        .sum::<u64>() as f64
+        / mesh.len() as f64;
+    // Measured 0.935, the worst pixel 13 levels apart; the center reads 254
+    // and the edge on the long axis 135. A shadow drawn displaced by a pixel
+    // or a reach off by a deviation moves the mean well past the bound.
+    assert!(
+        mean < 2.0,
+        "the mesh and the blurred layer should be the same shadow; the mean \
+         differs by {mean:.2} levels"
     );
 }
 

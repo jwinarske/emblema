@@ -158,6 +158,7 @@ pub mod kind {
     pub const MORPHOLOGY: f32 = 11.0;
     pub const ROUNDED_RECT_BLUR: f32 = 12.0;
     pub const POINT_FIELD: f32 = 13.0;
+    pub const SHADOW_MESH: f32 = 14.0;
 }
 
 /// How many textures one runtime program may sample.
@@ -1029,6 +1030,19 @@ pub enum Material {
         /// One color for the field, premultiplied as everything here is.
         color: [f32; 4],
     },
+    /// A blurred convex shape's shadow, drawn as a mesh whose vertices carry
+    /// a Gaussian coefficient in their first texture coordinate.
+    ///
+    /// The coefficient is interpolated across each triangle and mapped per
+    /// fragment through the Gaussian's integral, upstream's
+    /// `IPHalfFractionToFastGaussianCDF`: zero at the mesh's outer ring, where
+    /// the shadow has gone, one at its umbra. Interpolating the opacity
+    /// instead would draw the falloff as straight ramps. Upstream's
+    /// `ShadowVerticesContents`; the mesh is `emblema_geometry::shadow`'s.
+    ShadowMesh {
+        /// The shadow's color, straight, as a solid fill's.
+        color: [f32; 4],
+    },
 }
 
 /// What happens outside an image's own bounds.
@@ -1103,7 +1117,8 @@ impl Material {
             | Self::RoundedRect { .. }
             | Self::RoundedRectBlur { .. }
             | Self::Ellipse { .. }
-            | Self::PointField { .. } => None,
+            | Self::PointField { .. }
+            | Self::ShadowMesh { .. } => None,
         }
     }
 
@@ -1152,6 +1167,7 @@ impl Material {
             | Self::RoundedRectBlur { color, .. }
             | Self::Ellipse { color, .. }
             | Self::PointField { color }
+            | Self::ShadowMesh { color }
             | Self::Glyph { color, .. } => scale(color),
             Self::LinearGradient { stops, .. }
             | Self::RadialGradient { stops, .. }
@@ -1176,7 +1192,9 @@ impl Material {
     /// Whether drawing with this would change anything.
     pub fn is_invisible(&self) -> bool {
         match self {
-            Self::Solid(color) | Self::PointField { color } => color[3] <= 0.0,
+            Self::Solid(color) | Self::PointField { color } | Self::ShadowMesh { color } => {
+                color[3] <= 0.0
+            }
             // The colors are on the vertices, so the only honest answer is
             // that it might draw something.
             Self::VertexGradient => false,
@@ -1247,6 +1265,7 @@ impl Material {
             | Self::ConicalGradient { ramp, .. } => *ramp,
             Self::Solid(_)
             | Self::PointField { .. }
+            | Self::ShadowMesh { .. }
             | Self::RoundedRect { .. }
             | Self::RoundedRectBlur { .. }
             | Self::Ellipse { .. } => None,
@@ -1267,6 +1286,7 @@ impl Material {
             Self::VertexGradient => &[],
             Self::Solid(_)
             | Self::PointField { .. }
+            | Self::ShadowMesh { .. }
             | Self::Image { .. }
             | Self::Mesh { .. }
             | Self::Glyph { .. }
@@ -1420,6 +1440,13 @@ impl Material {
             out[layout::STOPS..layout::STOPS + 4].copy_from_slice(color);
             out[layout::PARAMS] = 1.0;
             out[layout::PARAMS + 1] = kind::POINT_FIELD;
+            return out;
+        }
+
+        if let Self::ShadowMesh { color } = self {
+            out[layout::STOPS..layout::STOPS + 4].copy_from_slice(color);
+            out[layout::PARAMS] = 1.0;
+            out[layout::PARAMS + 1] = kind::SHADOW_MESH;
             return out;
         }
 
@@ -1601,6 +1628,7 @@ impl Material {
             Self::Solid(_)
             | Self::VertexGradient
             | Self::PointField { .. }
+            | Self::ShadowMesh { .. }
             | Self::Image { .. }
             | Self::Mesh { .. }
             | Self::Glyph { .. }

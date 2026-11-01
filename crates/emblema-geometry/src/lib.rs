@@ -21,6 +21,7 @@
 pub mod dash;
 pub mod flatten;
 pub mod path;
+pub mod shadow;
 pub mod stroke;
 pub mod superellipse;
 pub mod tessellate;
@@ -28,6 +29,7 @@ pub mod transform;
 
 pub use flatten::{flatten, DEFAULT_TOLERANCE};
 pub use path::{Convexity, FillRule, Path, PathBuilder, Rect, Verb, MAX_COORDINATE};
+pub use shadow::{ambient_shadow_mesh, shadow_opacity, shadow_reach, ShadowMesh};
 pub use stroke::{LineCap, LineJoin, StrokeStyle};
 pub use tessellate::{Tessellator, VertexBuffers};
 pub use transform::{

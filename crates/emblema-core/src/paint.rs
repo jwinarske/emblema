@@ -707,6 +707,12 @@ pub struct Paint {
     /// drawn the way the specification says, with the fill laid across
     /// everything the blur reaches and blurred coverage composited onto it.
     ///
+    /// A solid fill of a convex path in the default style takes upstream's own
+    /// route instead, where no analytic shape covers it: a shadow mesh, its
+    /// falloff carried on the vertices (`docs/non-parity.md` section 7). That
+    /// approximates the Gaussian rather than being it, as upstream's does; a
+    /// concave path is blurred through the layer on both sides.
+    ///
     /// Two things still take a solid color only, and neither is about blurring.
     /// A glyph run tints one color by its own nature, so a gradient over one is
     /// refused here exactly as it is when nothing is blurred. And a mesh

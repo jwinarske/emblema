@@ -71,7 +71,7 @@
   layer-composed-filter-under-scale            5      6       48      108       4     0
   atlas-turned-sprites                         1      1       16       24       1     0
   layer-resampled-by-its-matrix                2      6       32       78       1     0
-  shadow-cast-by-a-card                        4      5       60      150       3     0
+  shadow-cast-by-a-card                        1      2       87      270       0     0
   picture-drawn-into-a-picture                 3      4       52      132       2     0
   flood-fill-under-a-rotation                  1      3       15       24       0     0
   nine-patch-stretched                         1      1       36       54       1     0

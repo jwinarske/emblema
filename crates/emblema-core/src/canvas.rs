@@ -2542,6 +2542,9 @@ impl Canvas {
             return self.draw_effect_filtered(path, paint);
         }
         if paint.mask_blur > 0.0 {
+            if let Some(drawn) = self.shadow_mesh_blur(path, paint) {
+                return drawn.map(|()| self);
+            }
             return self.draw_masked(Masked::Path(path), paint);
         }
         if paint.anti_alias {
@@ -3895,6 +3898,76 @@ impl Canvas {
         let radius = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
         let material = self.rrect_blur_material(rect, radius, sigma, *color)?;
         Some((material, Self::pad_for_sigma(sigma)))
+    }
+
+    /// A blurred convex fill drawn as a shadow mesh, if this one can be.
+    ///
+    /// Upstream's route for every mask-blurred fill it has no analytic shape
+    /// for -- an oval that is not a circle, a rounded rectangle with unequal
+    /// corners, any other convex path -- and the one `drawShadow` takes for
+    /// them: `Canvas::AttemptDrawBlurredPathSource`, a mesh from
+    /// `ShadowPathGeometry` drawn through `ShadowVerticesContents`. A concave
+    /// path, or one of more than one contour, has no mesh and is blurred the
+    /// general way, as upstream blurs it.
+    ///
+    /// The same eligibility as the analytic rounded rectangle's, for the same
+    /// reasons, and one difference: a mesh is built per axis, so a transform
+    /// that scales the axes differently is no reason to refuse.
+    ///
+    /// `None` when this route does not apply; otherwise the draw's result.
+    fn shadow_mesh_blur(&mut self, path: &Path, paint: &Paint) -> Option<Result<()>> {
+        if !paint.is_visible() || self.clip.is_some_and(Scissor::is_empty) {
+            return None;
+        }
+        // The mesh reaches past the shape, so a mode that writes where its
+        // source is transparent would erase what is behind the falloff.
+        if !paint.blend.respects_coverage() {
+            return None;
+        }
+        if !paint.image_filter.is_identity()
+            || !matches!(paint.style, Style::Fill)
+            || paint.mask_blur_style != MaskBlurStyle::Normal
+        {
+            return None;
+        }
+        if !paint.mask_blur.is_finite() || paint.mask_blur <= 0.0 {
+            return None;
+        }
+        let shader = paint.effective_shader();
+        let Shader::Solid(color) = &*shader else {
+            return None;
+        };
+        let affine = self.transform.to_affine()?;
+        let scale = Vec2::new(
+            affine.matrix2.x_axis.length(),
+            affine.matrix2.y_axis.length(),
+        );
+        let reach = emblema_geometry::shadow_reach(paint.mask_blur, scale.x.max(scale.y));
+        let mesh = emblema_geometry::ambient_shadow_mesh(path, scale, reach)?;
+        if mesh.is_empty() {
+            return Some(Ok(()));
+        }
+        let to_clip = self.target.projection() * self.transform;
+        let vertices: Vec<Vertex> = mesh
+            .positions
+            .iter()
+            .zip(&mesh.gaussians)
+            .map(|(p, g)| {
+                let clip = to_clip.project_homogeneous(*p);
+                Vertex::projected([clip.x, clip.y, clip.z], [*g, 0.0])
+            })
+            .collect();
+        Some(self.batch.push_mesh(
+            &vertices,
+            &mesh.indices,
+            Material::ShadowMesh {
+                color: color.to_array(),
+            },
+            paint.color_filter,
+            paint.blend,
+            self.clip,
+            ClipState::content(self.depth),
+        ))
     }
 
     /// The material for a blurred rounded rectangle drawn without a blur pass.

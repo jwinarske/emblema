@@ -792,6 +792,22 @@ fn point_field_coverage(uv: vec2<f32>) -> vec4<f32> {
     return disc_coverage(uv, vec2<f32>(1.0, 1.0));
 }
 
+/// A shadow mesh's color at the Gaussian coefficient its vertices carry in
+/// `uv.x`: upstream's `IPHalfFractionToFastGaussianCDF`, the Abramowitz and
+/// Stegun approximation of erf taken over -2 to 2, so the coefficient's zero
+/// is nearly clear and its one nearly the whole color. Mapped here, per
+/// fragment, because the coefficient is what is linear across a triangle and
+/// the opacity is not.
+fn shadow_mesh_color(uv: vec2<f32>) -> vec4<f32> {
+    let x = uv.x * 4.0 - 2.0;
+    let a = abs(x);
+    let b = (0.278393 + (0.230389 + 0.078108 * a * a) * a) * a + 1.0;
+    let erf = sign(x) * (1.0 - 1.0 / (b * b * b * b));
+    let tint = paint.stops[0];
+    let alpha = tint.a * (1.0 + erf) * 0.5;
+    return vec4<f32>(tint.rgb * alpha, alpha);
+}
+
 /// The body both share: an implicit ellipse, differentiated into coverage.
 fn disc_coverage(point: vec2<f32>, axes: vec2<f32>) -> vec4<f32> {
     // The implicit function itself: zero on the curve, negative inside and
@@ -1513,6 +1529,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         case 8: { return ellipse_coverage(in.clip); }
         case 12: { return rrect_blur_coverage(in.clip); }
         case 13: { return point_field_coverage(in.uv); }
+        case 14: { return shadow_mesh_color(in.uv); }
         // Already premultiplied, like anything else sampled from a target, and
         // a weighted average of premultiplied colors is premultiplied.
         case 6: { return blur_along_axis(in.clip); }

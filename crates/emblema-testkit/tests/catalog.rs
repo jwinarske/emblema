@@ -1875,12 +1875,18 @@ fn a_shadow_does_not_care_which_way_its_caster_is_wound() {
         let a = render::<VulkanHal>(&mut ctx, &scene);
         let b = render::<VulkanHal>(&mut ctx, &other);
         let difference = compare(&a, &b).unwrap_or_else(|e| panic!("{}: {e}", scene.name));
+        // A level, and no outliers past it. A caster that is not an analytic
+        // shape is a shadow mesh, built in the path's own order as upstream's
+        // is, so wound the other way its triangles are laid differently and a
+        // pixel where two meet can round a level apart. The shadow itself --
+        // where it falls, how far, how dark -- is the same.
+        let one_level = Tolerance::new(1, 0.0);
         assert!(
-            difference.is_identical(),
+            accepts(&difference, one_level),
             "{} and {clockwise} are the same caster wound the other way and \
              drew different pictures: {}",
             scene.name,
-            difference.describe(Tolerance::new(0, 0.0))
+            difference.describe(one_level)
         );
         pairs += 1;
     }
