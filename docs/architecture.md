@@ -1,9 +1,11 @@
 # Architecture
 
-emblema is a tessellation-based 2D vector graphics renderer. It targets the
-full range of Linux-capable graphics hardware, from desktop discrete GPUs down
-to embedded SoCs driving panels directly through KMS with no compositor
-present.
+emblema is a 2D vector graphics renderer that tessellates paths on the CPU
+and needs no compute shaders; rounded rects, circles, ellipses and their
+blurred shadows are evaluated per pixel instead (Renderer internals, below),
+and glyphs are quads sampled from an atlas. It targets the full range of
+Linux-capable graphics hardware, from desktop discrete GPUs down to embedded
+SoCs driving panels directly through KMS with no compositor present.
 
 This document records the invariants that govern the codebase. Where a rule
 here conflicts with local convenience, the rule wins; several of them exist
@@ -13,9 +15,11 @@ because violating them is cheap today and a breaking redesign later.
 
 Four properties define the project against neighboring renderers:
 
-- **Tessellation-based, no compute shader requirement.** Runs correctly on
-  every Vulkan 1.1+ device and every GLES 3.0 device, including embedded GPUs
-  where compute is weak or driver support is immature.
+- **No compute shader requirement.** Paths are tessellated on the CPU and the
+  common shapes are evaluated in the fragment shader; the GPU only rasterizes
+  triangles. Runs correctly on every Vulkan 1.1+ device and every GLES 3.0
+  device, including embedded GPUs where compute is weak or driver support is
+  immature.
 - **Predictable frame times.** All pipelines are compiled ahead of time. No
   shader compilation jank, no driver-specific compute paths.
 - **First-class direct scanout.** Most 2D renderers assume a windowing system

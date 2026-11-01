@@ -1,4 +1,5 @@
-//! emblema: a tessellation-based 2D vector renderer.
+//! emblema: a 2D vector renderer that tessellates paths on the CPU and needs
+//! no compute shaders.
 //!
 //! ```no_run
 //! use emblema::{BackendPreference, Canvas, Color, Context, Extent2D, Paint, PixelFormat, Rect};
