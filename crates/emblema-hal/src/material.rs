@@ -82,21 +82,35 @@ pub mod layout {
     pub const FILTER_OFFSET: usize = 56;
     /// Which color filter, if any, and in which form its matrix is stated.
     ///
-    /// The second float holds the tint blend, and the last two hold the dither;
-    /// see [`DITHER`]. Four unrelated things share a slot because the slot is a
-    /// four-component vector whether or not anything fills it, and a fifth
-    /// vector would cost every draw sixteen bytes to carry three unused floats.
+    /// The second float holds the tint blend, the third the dither, and the
+    /// last the draw's opacity; see [`DITHER`] and [`OPACITY`]. Four unrelated
+    /// things share a slot because the slot is a four-component vector whether
+    /// or not anything fills it, and a fifth vector would cost every draw
+    /// sixteen bytes to carry three unused floats.
     pub const FILTER_PARAMS: usize = 60;
-    /// The dither amplitude, and whether the target encodes on write.
+    /// The dither amplitude, in the target's storage units, with zero meaning
+    /// no dithering.
     ///
-    /// Amplitude first, in the target's storage units, with zero meaning no
-    /// dithering; then a flag saying whether a step of that size is a step of
-    /// encoded value rather than of light. Both are written by the backend at
-    /// submission rather than by the recorder, because the target's format is
-    /// what decides them and a recording is made without one -- which is also
-    /// what keeps the color policy intact. The shader is handed two numbers and
-    /// still knows nothing about formats.
+    /// Written by the backend at submission rather than by the recorder,
+    /// because the target's format is what decides it and a recording is made
+    /// without one -- which is also what keeps the color policy intact. The
+    /// shader is handed a number and still knows nothing about formats.
+    ///
+    /// It once had a flag beside it, saying whether a step was one of encoded
+    /// value or of light. Upstream's rate is a single constant on encoded
+    /// values, this took it, and the flag was never written after; the float
+    /// it held is [`OPACITY`]'s.
     pub const DITHER: usize = 62;
+    /// What the tint blend's result is scaled by, before a color filter.
+    ///
+    /// The batch's to write, as the tint blend is: a material is a paint's
+    /// color, and this is how a draw that blends a color of its own into that
+    /// one fades. One for every other draw. See `BatchDraw::opacity`.
+    pub const OPACITY: usize = 63;
+
+    // Neither names a member of the block: the shader reads them as
+    // `filter_params.z` and `.w`, and these are where those land.
+    const _: () = assert!(DITHER == FILTER_PARAMS + 2 && OPACITY == FILTER_PARAMS + 3);
 }
 
 /// The number the shader reads for a tile mode.

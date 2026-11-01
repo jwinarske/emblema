@@ -235,6 +235,15 @@ pub struct BatchDraw {
     /// how the result then reaches the target -- these two colors are both in
     /// the shader, so this one needs no extension and every mode is available.
     pub tint_blend: BlendMode,
+    /// Scales what the tint blend produced, before any color filter.
+    ///
+    /// Where a paint's opacity goes when the draw blends a color of its own
+    /// into it: upstream fades a mesh or an atlas after the blend, by the
+    /// paint's alpha, so a sprite over its color under `SrcOver` fades as one
+    /// rather than showing its color through a sprite faded first. One for
+    /// every draw that carries no such color, and under `Modulate` the two
+    /// orders are the same product.
+    pub opacity: f32,
     /// Read the paint at this draw's texture coordinates rather than at the
     /// position of the fragment.
     ///
@@ -452,7 +461,10 @@ impl BatchDraw {
     /// material, the absence of a color filter, an identity tint, and the vertex colors
     /// the tint multiplies in, all four.
     pub fn splits_safely(&self, vertices: &[Vertex], indices: &[u32]) -> bool {
-        if self.filter != ColorFilter::None || self.tint_blend != BlendMode::Modulate {
+        if self.filter != ColorFilter::None
+            || self.tint_blend != BlendMode::Modulate
+            || self.opacity < 1.0
+        {
             return false;
         }
         // Premultiplied, and interpolated across the triangle -- so a single translucent
@@ -489,6 +501,7 @@ impl BatchDraw {
             && matches!(self.blend, BlendMode::Src | BlendMode::SrcOver)
             && self.filter == ColorFilter::None
             && self.tint_blend == BlendMode::Modulate
+            && self.opacity >= 1.0
             && !self.paint_at_texture_coords
             && matches!(self.material, Material::Solid(color) if color[3] >= 1.0)
             // Last, because it is the only test here that reads a buffer.
@@ -528,6 +541,7 @@ impl BatchDraw {
         let mut out = self.material.to_uniform();
         self.filter.pack_into(&mut out);
         out[crate::material::layout::FILTER_PARAMS + 1] = self.tint_blend.code();
+        out[crate::material::layout::OPACITY] = self.opacity;
         if self.paint_at_texture_coords {
             // `geometry.x`, which no gradient writes. See the field's own note
             // and the `paint_space` comment in the shader.
@@ -665,11 +679,13 @@ impl Batch {
             clip,
             stencil,
             BlendMode::Modulate,
+            1.0,
             false,
         )
     }
 
-    /// Append a mesh, saying how its vertex colors combine with the material.
+    /// Append a mesh, saying how its vertex colors combine with the material,
+    /// and what the result is faded by: see [`BatchDraw::opacity`].
     ///
     /// Separate from [`Self::push_mesh`] rather than an extra parameter on it,
     /// for the reason [`Self::push_clipped`] is separate: the mode is
@@ -687,6 +703,7 @@ impl Batch {
         clip: Option<Scissor>,
         stencil: ClipState,
         tint_blend: BlendMode,
+        opacity: f32,
         paint_at_texture_coords: bool,
     ) -> Result<()> {
         if clip.is_some_and(Scissor::is_empty) {
@@ -738,6 +755,7 @@ impl Batch {
                 && last.clip == clip
                 && last.stencil == stencil
                 && last.tint_blend == tint_blend
+                && last.opacity == opacity
                 && last.paint_at_texture_coords == paint_at_texture_coords
             {
                 last.index_count += indices.len() as u32;
@@ -754,6 +772,7 @@ impl Batch {
             clip,
             stencil,
             tint_blend,
+            opacity,
             paint_at_texture_coords,
         });
         Ok(())
@@ -1026,6 +1045,7 @@ mod tests {
             clip: None,
             stencil: ClipState::UNCLIPPED,
             tint_blend: BlendMode::Modulate,
+            opacity: 1.0,
             paint_at_texture_coords: false,
         }
     }
@@ -1076,6 +1096,42 @@ mod tests {
         let dither = crate::material::layout::DITHER;
         let packed = draw_of(wash()).to_uniform(crate::PixelFormat::Rgba16Float);
         assert_eq!(packed[dither], 0.0, "a float target was dithered");
+    }
+
+    /// Every draw packs its opacity, one unless it asked: the shader scales
+    /// every result by it, so a zero left there would draw nothing. A faded
+    /// draw neither merges with an unfaded one nor counts as covering what is
+    /// under it.
+    #[test]
+    fn a_draw_packs_its_opacity_and_a_faded_one_stays_apart() {
+        let opacity = crate::material::layout::OPACITY;
+        let eight_bit = crate::PixelFormat::Rgba8Unorm;
+        let solid = Material::solid([1.0; 4]);
+        let mut batch = Batch::new();
+        batch
+            .push(&TRI, &[0, 1, 2], solid.clone(), BlendMode::SrcOver)
+            .unwrap();
+        let tri = vec![Vertex::at([0.0, 0.0]); 3];
+        batch
+            .push_mesh_tinted(
+                &tri,
+                &[0, 1, 2],
+                solid,
+                ColorFilter::None,
+                BlendMode::SrcOver,
+                None,
+                ClipState::UNCLIPPED,
+                BlendMode::SrcOver,
+                0.5,
+                false,
+            )
+            .unwrap();
+        let draws = batch.draws();
+        assert_eq!(draws.len(), 2, "a faded draw merged with an unfaded one");
+        assert_eq!(draws[0].to_uniform(eight_bit)[opacity], 1.0);
+        assert_eq!(draws[1].to_uniform(eight_bit)[opacity], 0.5);
+        assert!(draws[0].occludes(&batch.vertices, &batch.indices));
+        assert!(!draws[1].occludes(&batch.vertices, &batch.indices));
     }
 
     #[test]

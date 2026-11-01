@@ -324,6 +324,7 @@ impl Renderer {
             paint.clip,
             paint.stencil,
             BlendMode::Modulate,
+            1.0,
             true,
         )
     }

@@ -18354,6 +18354,11 @@ fn a_sweep_measures_its_angle_from_the_positive_x_axis_as_upstream_does() {
 
 /// The shuffled quadrants, each sprite's color `color`, under `mode`.
 fn atlas_tinted(ctx: &mut Context, color: Color, mode: BlendMode) -> Vec<u8> {
+    atlas_tinted_at(ctx, color, mode, 1.0)
+}
+
+/// As [`atlas_tinted`], under a paint at `opacity`, over black.
+fn atlas_tinted_at(ctx: &mut Context, color: Color, mode: BlendMode, opacity: f32) -> Vec<u8> {
     let mut image = ctx
         .create_image(Extent2D::new(4, 4), PixelFormat::Rgba8Unorm)
         .expect("image");
@@ -18369,7 +18374,9 @@ fn atlas_tinted(ctx: &mut Context, color: Color, mode: BlendMode) -> Vec<u8> {
         .draw_atlas(
             &sprites,
             Extent2D::new(4, 4),
-            &Paint::image(0, Rect::from_size(128.0, 128.0)).with_tint_blend(mode),
+            &Paint::image(0, Rect::from_size(128.0, 128.0))
+                .with_tint_blend(mode)
+                .with_opacity(opacity),
         )
         .expect("atlas");
     let mut surface = ctx
@@ -18407,6 +18414,41 @@ fn an_atlas_blends_the_sprite_over_its_color_in_dart_uis_order() {
         pixel(&modulated, 32, 32),
         [255, 0, 0, 255],
         "yellow times magenta"
+    );
+}
+
+#[test]
+fn an_atlas_fades_after_its_blend() {
+    // Upstream's AtlasContents fades what the blend produced by the paint's
+    // alpha. Under `SrcOver` over an opaque magenta that is the sheet's
+    // yellow, faded: half of it over black. Fading the sprite first, as this
+    // did, let the magenta show through the half-faded sprite and left the
+    // result opaque.
+    let Some(mut ctx) = context() else { return };
+    let magenta = Color::srgb(1.0, 0.0, 1.0, 1.0);
+    let over = atlas_tinted_at(&mut ctx, magenta, BlendMode::SrcOver, 0.5);
+    close_enough(
+        pixel(&over, 32, 32),
+        [128, 128, 0, 255],
+        2,
+        "half the yellow",
+    );
+    close_enough(pixel(&over, 96, 96), [128, 0, 0, 255], 2, "half the red");
+    // `Dst` is the color alone, faded as well.
+    let dst = atlas_tinted_at(&mut ctx, magenta, BlendMode::Dst, 0.5);
+    close_enough(
+        pixel(&dst, 32, 32),
+        [128, 0, 128, 255],
+        2,
+        "half the magenta",
+    );
+    // Under `Modulate` the two orders are one product.
+    let modulated = atlas_tinted_at(&mut ctx, magenta, BlendMode::Modulate, 0.5);
+    close_enough(
+        pixel(&modulated, 32, 32),
+        [128, 0, 0, 255],
+        2,
+        "half of red",
     );
 }
 
