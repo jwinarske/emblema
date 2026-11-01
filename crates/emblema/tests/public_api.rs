@@ -5752,11 +5752,13 @@ fn the_backends_agree_on_a_layered_frame() {
 fn two_glyph_atlas() -> (Atlas, GlyphKey, GlyphKey) {
     let mut atlas = Atlas::new(64);
     let solid = GlyphKey {
+        subpixel: 0,
         font: 1,
         glyph: 1,
         size: 16,
     };
     let half = GlyphKey {
+        subpixel: 0,
         font: 1,
         glyph: 2,
         size: 16,
@@ -5919,6 +5921,7 @@ fn a_glyph_run_travels_with_the_transform_and_the_clip() {
 fn a_glyph_missing_from_the_atlas_is_refused() {
     let (atlas, solid, _) = two_glyph_atlas();
     let absent = GlyphKey {
+        subpixel: 0,
         font: 9,
         glyph: 9,
         size: 9,
@@ -6050,6 +6053,7 @@ fn a_glyph_run_is_correct_after_the_atlas_has_grown() {
     // The property is that none of it is visible: a glyph drawn from a grown
     // atlas lands exactly where the same glyph drawn from a small one did.
     let marker = GlyphKey {
+        subpixel: 0,
         font: 1,
         glyph: 1,
         size: 16,
@@ -6104,6 +6108,7 @@ fn a_glyph_run_is_correct_after_the_atlas_has_grown() {
         grown
             .insert(
                 GlyphKey {
+                    subpixel: 0,
                     font: 1,
                     glyph: filler,
                     size: 16,
@@ -6162,6 +6167,7 @@ fn a_glyph_run_is_correct_after_the_atlas_has_been_repacked() {
     // free to grow answers a full one by doubling and never repacks.
     let mut atlas = Atlas::with_limit(32, 32);
     let solid = GlyphKey {
+        subpixel: 0,
         font: 1,
         glyph: 1,
         size: 16,
@@ -6178,6 +6184,7 @@ fn a_glyph_run_is_correct_after_the_atlas_has_been_repacked() {
     while atlas
         .insert(
             GlyphKey {
+                subpixel: 0,
                 font: 1,
                 glyph: filler,
                 size: 16,
@@ -6201,6 +6208,7 @@ fn a_glyph_run_is_correct_after_the_atlas_has_been_repacked() {
     atlas
         .insert(
             GlyphKey {
+                subpixel: 0,
                 font: 1,
                 glyph: 999,
                 size: 16,
