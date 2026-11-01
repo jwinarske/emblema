@@ -8,10 +8,13 @@
 //! tested with no font anywhere in the tree, against bitmaps whose contents
 //! are known exactly.
 //!
+//! Subpixel positioning is a key, not a placement: [`GlyphKey::subpixel`] tells
+//! the atlas that coverage rasterized a quarter of a pixel along is a glyph of
+//! its own, and the caller who rasterized it there places it to match.
+//!
 //! Named here because this header claimed them and they would each change what
-//! a caller has to do: subpixel positioning, signed-distance-field coverage
-//! above a threshold size, and color glyphs drawn as image quads are **not
-//! implemented**. Nor is paging -- a full atlas is repacked and then doubled,
+//! a caller has to do: signed-distance-field coverage above a threshold size,
+//! and color glyphs drawn as image quads are **not implemented**. Nor is paging -- a full atlas is repacked and then doubled,
 //! which [`atlas`] explains and which was chosen over pages because a page
 //! boundary splits a glyph run into more than one draw.
 

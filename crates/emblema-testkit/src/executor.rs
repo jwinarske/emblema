@@ -310,6 +310,7 @@ fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()>
             let mut placed = Vec::with_capacity(run.glyphs.len());
             for (index, position) in &run.glyphs {
                 let key = emblema_text::GlyphKey {
+                    subpixel: 0,
                     font: 1,
                     glyph: *index as u16,
                     size: 16,
@@ -784,6 +785,7 @@ impl<H: Hal> Fixtures<H> {
                     let mut atlas = emblema_text::Atlas::new(side);
                     for index in 0..4u32 {
                         let key = emblema_text::GlyphKey {
+                            subpixel: 0,
                             font: 1,
                             glyph: index as u16,
                             size: 16,

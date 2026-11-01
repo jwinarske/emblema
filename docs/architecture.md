@@ -2832,10 +2832,13 @@ rather than in principle.
   one texture, with compaction and then doubling when it fills. Rasterization
   is out of scope and lives with the caller's font parser, which is what lets
   the atlas be tested against bitmaps whose contents are known exactly.
-  **Not implemented**, and named because this list claimed them: subpixel
-  quantization, SDF above a threshold size, COLR/CPAL color glyphs, and
-  paging — a page boundary would split a glyph run into more than one draw,
-  which is why growth was chosen over pages.
+  Subpixel quantization is the caller's, keyed here: `GlyphKey::subpixel`
+  names the bucket a glyph's coverage was rasterized at, so a glyph a quarter
+  of a pixel along is an entry of its own, as in Impeller's atlas.
+  **Not implemented**, and named because this list claimed them: SDF above a
+  threshold size, COLR/CPAL color glyphs, and paging — a page boundary would
+  split a glyph run into more than one draw, which is why growth was chosen
+  over pages.
 - **Color**: sRGB-encoded f32 throughout, in sRGB primaries with no range
   limit, with no transfer function between the API boundary and the target
   write. An sRGB render target is refused for every device rather than for

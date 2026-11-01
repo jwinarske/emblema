@@ -253,6 +253,7 @@ fn build_atlas() -> (Atlas, Vec<PositionedGlyph>) {
     let mut run = Vec::new();
     for i in 0..8u16 {
         let key = GlyphKey {
+            subpixel: 0,
             font: 1,
             glyph: i,
             size: 24,

@@ -71,11 +71,36 @@ impl AtlasRect {
 /// in whole pixels: a cache keyed by a float would miss on values that differ
 /// only in their last bit, and rasterizing at a rounded size is what a caller
 /// is doing anyway.
+///
+/// `subpixel` is the fractional position the coverage was rasterized at, as
+/// the caller buckets it: the same glyph a quarter of a pixel along is
+/// different coverage, and Impeller keys its atlas the same way, by a quarter
+/// across and a quarter down. The atlas only tells buckets apart; what one
+/// means, and placing the glyph to match, is the caller's. Zero for a glyph
+/// rasterized on a whole pixel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GlyphKey {
     pub font: u64,
     pub glyph: u16,
     pub size: u16,
+    pub subpixel: u8,
+}
+
+impl GlyphKey {
+    /// A glyph rasterized on a whole pixel.
+    pub fn new(font: u64, glyph: u16, size: u16) -> Self {
+        Self {
+            font,
+            glyph,
+            size,
+            subpixel: 0,
+        }
+    }
+
+    /// The same glyph at subpixel bucket `subpixel`.
+    pub fn at_subpixel(self, subpixel: u8) -> Self {
+        Self { subpixel, ..self }
+    }
 }
 
 /// A rasterized glyph, as a caller supplies it.
@@ -519,11 +544,7 @@ mod tests {
     }
 
     fn key(glyph: u16) -> GlyphKey {
-        GlyphKey {
-            font: 1,
-            glyph,
-            size: 16,
-        }
+        GlyphKey::new(1, glyph, 16)
     }
 
     #[test]
@@ -635,9 +656,10 @@ mod tests {
 
     #[test]
     fn glyphs_differing_only_in_font_or_size_are_distinct() {
-        // Glyph indices are per font, and a glyph rasterized at one size is not
-        // the same picture as at another. A key that ignored either would serve
-        // one glyph's coverage for another's.
+        // Glyph indices are per font, and a glyph rasterized at one size, or a
+        // quarter of a pixel along, is not the same picture as at another. A
+        // key that ignored any of them would serve one glyph's coverage for
+        // another's.
         let mut atlas = Atlas::new(64);
         let a = atlas.insert(key(1), &solid(8, 8, 255)).expect("a");
         let b = atlas
@@ -646,10 +668,16 @@ mod tests {
         let c = atlas
             .insert(GlyphKey { size: 32, ..key(1) }, &solid(8, 8, 255))
             .expect("c");
+        let d = atlas
+            .insert(key(1).at_subpixel(2), &solid(8, 8, 255))
+            .expect("d");
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_ne!(b, c);
-        assert_eq!(atlas.len(), 3);
+        assert_ne!(a, d);
+        assert_eq!(atlas.len(), 4);
+        assert_eq!(key(1).at_subpixel(0), key(1));
+        assert_eq!(GlyphKey::new(1, 1, 16), key(1));
     }
 
     #[test]

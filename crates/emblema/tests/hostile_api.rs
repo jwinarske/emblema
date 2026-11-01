@@ -273,7 +273,7 @@ proptest! {
         let glyphs: Vec<PositionedGlyph> = placements
             .into_iter()
             .map(|(position, size, id)| PositionedGlyph {
-                key: GlyphKey { font: 0, glyph: id as u16, size: 12 },
+                key: GlyphKey::new(0, id as u16, 12),
                 position,
                 size,
             })
