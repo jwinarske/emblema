@@ -343,10 +343,10 @@ sixteenth of the size, which is why it was worth having the reduction at all.
 The pictures agree: the reduction preserves light, checked at a deviation of
 twenty-four by the energy test, which takes this path.
 
-## 7. A blurred path that is not a rounded rectangle is blurred
+## 7. A blurred path upstream meshes is blurred here in its other styles
 
-**What differs.** Upstream has two ways of not running a blur pass. One is
-built here and one is not.
+**What differs.** Upstream has two ways of not running a blur pass, and both
+are built here; one is built for the default style only.
 
 - **A rounded rectangle**, all four corners sharing one circular radius:
   upstream's `AttemptDrawBlurredRRect` evaluates the blur in the fragment
@@ -355,25 +355,35 @@ built here and one is not.
   carries the shape that built it so a shadow reaches it too — `draw_shadow`
   takes a path, as `dart:ui` does, and upstream's `DlPath` answers the same
   question for the same reason.
-- **Any other shape**: upstream's `DrawPath` sends a filled, solid-colored,
-  positively-blurred path to `AttemptDrawBlurredPathSource`, which tessellates
-  a **shadow mesh** whose vertices carry the falloff. **Not built.** Here it
-  draws the shape into a layer and runs a separable Gaussian over it: one pass
-  for the content and two for the blur.
+- **Any other convex shape** — an oval that is not a circle, a rounded
+  rectangle with unequal corners, a caller's convex outline: upstream's
+  `DrawPath` sends a filled, solid-colored, positively-blurred path to
+  `AttemptDrawBlurredPathSource`, which builds a **shadow mesh** whose
+  vertices carry the falloff. **Built** for the default style:
+  `emblema_geometry::shadow` is `ShadowPathGeometry` step for step, and
+  `Material::ShadowMesh` maps its coefficients through the Gaussian's
+  integral as `shadow_vertices.frag` does. One draw, no pass.
 
-**Impact, measured on a Raspberry Pi 5's V3D, release build.** The bench frame's
-three shadows fall on rounded cards, so they now take the analytic route. The
-frame costs **21.224 ms through Vulkan and 20.409 through GLES**, against
-26.757 and 24.318 when they were blurred, and 18.928 and 17.676 with them left
-out entirely. So three shadows cost 7.8 ms as passes and 2.3 ms as draws, and
-the frame is five passes rather than fourteen.
+A concave path, or one of more than one contour, has no mesh upstream either
+and is blurred through a layer on both sides. What is left is the other three
+styles over a convex path: upstream clips the same mesh against the sharp
+shape, and here the general route builds them from a blurred layer, one pass
+for the content and two for the blur. The pictures differ by what the mesh
+approximates: for a shape thinner than twice the blur's reach upstream's mesh
+dims its umbra rather than convolving, and a blurred layer convolves.
 
-What is left is the shape this does not cover. A shadow under anything that is
-not a rounded rectangle — a rounded superellipse, a caller's outline, a glyph —
-still costs three passes, and the mesh is what upstream answers that with.
+**Impact, measured on a Raspberry Pi 5's V3D, release build**, when the
+rounded rectangle was built and the mesh not. The bench frame's three shadows
+fall on rounded cards, so they take the analytic route. The frame costs
+**21.224 ms through Vulkan and 20.409 through GLES**, against 26.757 and 24.318
+when they were blurred, and 18.928 and 17.676 with them left out entirely. So
+three shadows cost 7.8 ms as passes and 2.3 ms as draws, and the frame is five
+passes rather than fourteen. A shadow under an oval or a convex outline is now
+a draw too.
 
-The pictures agree either way, which is why [`parity.md`](parity.md) lists
-`maskFilter` and `drawShadow` as built. This is a difference in what they cost.
+Measured against upstream's own output, in fl-engine's shadows golden from
+`flutter_tester` with Impeller: around an oval's shadow, 19.70% of pixels
+differed with the layer and 4.29% with the mesh.
 
 ## 8. A blurred rectangle is symmetric here; upstream's is not
 

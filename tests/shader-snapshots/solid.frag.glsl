@@ -413,6 +413,16 @@ vec4 point_field_coverage(vec2 uv_6) {
     return _e4;
 }
 
+vec4 shadow_mesh_color(vec2 uv_7) {
+    float x_2 = ((uv_7.x * 4.0) - 2.0);
+    float a = abs(x_2);
+    float b = (((0.278393 + ((0.230389 + ((0.078108 * a) * a)) * a)) * a) + 1.0);
+    float erf = (sign(x_2) * (1.0 - (1.0 / (((b * b) * b) * b))));
+    vec4 tint_6 = _group_1_binding_0_fs.stops[0];
+    float alpha_5 = ((tint_6.w * (1.0 + erf)) * 0.5);
+    return vec4((tint_6.xyz * alpha_5), alpha_5);
+}
+
 vec4 blur_along_axis(vec3 clip_5) {
     vec4 total_1 = vec4(0.0);
     float weight_sum = 0.0;
@@ -449,11 +459,11 @@ vec4 blur_along_axis(vec3 clip_5) {
     return (_e61 / vec4(max(_e62, 1e-6)));
 }
 
-vec4 sample_or_nothing(vec2 uv_7) {
-    if ((any(lessThan(uv_7, vec2(0.0))) || any(greaterThan(uv_7, vec2(1.0))))) {
+vec4 sample_or_nothing(vec2 uv_8) {
+    if ((any(lessThan(uv_8, vec2(0.0))) || any(greaterThan(uv_8, vec2(1.0))))) {
         return vec4(0.0);
     }
-    vec4 _e15 = textureLod(_group_0_binding_0_fs, vec2(uv_7), 0.0);
+    vec4 _e15 = textureLod(_group_0_binding_0_fs, vec2(uv_8), 0.0);
     return _e15;
 }
 
@@ -753,10 +763,10 @@ vec4 filtered(vec4 premultiplied) {
     color = premultiplied;
     if (straight) {
         float _e25 = color.w;
-        float alpha_5 = max(_e25, 1e-6);
+        float alpha_6 = max(_e25, 1e-6);
         vec4 _e28 = color;
         float _e33 = color.w;
-        color = vec4((_e28.xyz / vec3(alpha_5)), _e33);
+        color = vec4((_e28.xyz / vec3(alpha_6)), _e33);
     }
     if ((kind > 2.5)) {
         if ((kind < 3.5)) {
@@ -784,20 +794,20 @@ vec4 filtered(vec4 premultiplied) {
     }
     if (straight) {
         float _e88 = out_2.w;
-        float a = clamp(_e88, 0.0, 1.0);
+        float a_1 = clamp(_e88, 0.0, 1.0);
         vec4 _e92 = out_2;
-        return vec4((_e92.xyz * a), a);
+        return vec4((_e92.xyz * a_1), a_1);
     }
     float _e97 = out_2.w;
-    float alpha_6 = clamp(_e97, 0.0, 1.0);
+    float alpha_7 = clamp(_e97, 0.0, 1.0);
     vec4 _e101 = out_2;
-    return vec4(((alpha_6 <= 0.0) ? vec3(0.0) : _e101.xyz), alpha_6);
+    return vec4(((alpha_7 <= 0.0) ? vec3(0.0) : _e101.xyz), alpha_7);
 }
 
 float ordered_dither(vec2 frag) {
-    uint x_2 = (uint(frag.x) % 8u);
-    uint y = (uint(frag.y) ^ x_2);
-    uint m_2 = (((((((y & 1u) << 5u) | ((x_2 & 1u) << 4u)) | ((y & 2u) << 2u)) | ((x_2 & 2u) << 1u)) | ((y & 4u) >> 1u)) | ((x_2 & 4u) >> 2u));
+    uint x_3 = (uint(frag.x) % 8u);
+    uint y = (uint(frag.y) ^ x_3);
+    uint m_2 = (((((((y & 1u) << 5u) | ((x_3 & 1u) << 4u)) | ((y & 2u) << 2u)) | ((x_3 & 2u) << 1u)) | ((y & 4u) >> 1u)) | ((x_3 & 4u) >> 2u));
     return ((float(m_2) * 0.015625) - 0.4921875);
 }
 
@@ -863,16 +873,16 @@ vec4 shade(VertexOutput in_3) {
                     float separation = _group_1_binding_0_fs.params.w;
                     float r0_ = _group_1_binding_0_fs.geometry.z;
                     float dr = _group_1_binding_0_fs.geometry.w;
-                    float a_1 = ((separation * separation) - (dr * dr));
-                    float b = ((_e107.x * separation) + (r0_ * dr));
+                    float a_2 = ((separation * separation) - (dr * dr));
+                    float b_1 = ((_e107.x * separation) + (r0_ * dr));
                     float c_6 = (dot(_e107, _e107) - (r0_ * r0_));
                     float magnitude = max((separation * separation), (dr * dr));
-                    if ((abs(a_1) > (magnitude * 1e-5))) {
-                        float disc = ((b * b) - (a_1 * c_6));
+                    if ((abs(a_2) > (magnitude * 1e-5))) {
+                        float disc = ((b_1 * b_1) - (a_2 * c_6));
                         if ((disc >= 0.0)) {
                             float root = sqrt(disc);
-                            float far = max(((b + root) / a_1), ((b - root) / a_1));
-                            float near = min(((b + root) / a_1), ((b - root) / a_1));
+                            float far = max(((b_1 + root) / a_2), ((b_1 - root) / a_2));
+                            float near = min(((b_1 + root) / a_2), ((b_1 - root) / a_2));
                             if (((r0_ + (far * dr)) >= 0.0)) {
                                 t_4 = far;
                                 covered = true;
@@ -884,8 +894,8 @@ vec4 shade(VertexOutput in_3) {
                             }
                         }
                     } else {
-                        if ((abs(b) > 1e-6)) {
-                            float only = (c_6 / (2.0 * b));
+                        if ((abs(b_1) > 1e-6)) {
+                            float only = (c_6 / (2.0 * b_1));
                             if (((r0_ + (only * dr)) >= 0.0)) {
                                 t_4 = only;
                                 covered = true;
@@ -924,33 +934,37 @@ vec4 shade(VertexOutput in_3) {
             vec4 _e205 = point_field_coverage(in_3.uv);
             return _e205;
         }
-        case 6: {
-            vec4 _e207 = blur_along_axis(in_3.clip);
+        case 14: {
+            vec4 _e207 = shadow_mesh_color(in_3.uv);
             return _e207;
         }
-        case 11: {
-            vec4 _e209 = morphology_along_axis(in_3.clip);
+        case 6: {
+            vec4 _e209 = blur_along_axis(in_3.clip);
             return _e209;
         }
-        case 10: {
-            vec4 _e211 = sample_mesh(in_3.uv);
+        case 11: {
+            vec4 _e211 = morphology_along_axis(in_3.clip);
             return _e211;
+        }
+        case 10: {
+            vec4 _e213 = sample_mesh(in_3.uv);
+            return _e213;
         }
         default: {
             break;
         }
     }
     if (((kind_1 > 4.5) && (kind_1 < 5.5))) {
-        vec4 _e221 = textureLod(_group_0_binding_0_fs, vec2(in_3.uv), 0.0);
-        float coverage_2 = _e221.x;
-        vec4 tint_6 = _group_1_binding_0_fs.stops[0];
-        float alpha_7 = (tint_6.w * coverage_2);
-        return vec4((tint_6.xyz * alpha_7), alpha_7);
+        vec4 _e223 = textureLod(_group_0_binding_0_fs, vec2(in_3.uv), 0.0);
+        float coverage_2 = _e223.x;
+        vec4 tint_7 = _group_1_binding_0_fs.stops[0];
+        float alpha_8 = (tint_7.w * coverage_2);
+        return vec4((tint_7.xyz * alpha_8), alpha_8);
     }
-    vec4 _e232 = color_2;
-    float _e235 = color_2.w;
-    float _e238 = color_2.w;
-    return vec4((_e232.xyz * _e235), _e238);
+    vec4 _e234 = color_2;
+    float _e237 = color_2.w;
+    float _e240 = color_2.w;
+    return vec4((_e234.xyz * _e237), _e240);
 }
 
 void main() {

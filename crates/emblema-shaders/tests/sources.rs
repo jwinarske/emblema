@@ -120,7 +120,7 @@ fn the_shader_answers_for_every_material_kind_and_no_others() {
     // from: these are `pub const f32` in a module, and a module is not
     // enumerable. The count is asserted below so that a constant added there
     // and not here is caught rather than silently uncovered.
-    let named: [(&str, f32); 14] = [
+    let named: [(&str, f32); 15] = [
         ("SOLID", kind::SOLID),
         ("LINEAR", kind::LINEAR),
         ("RADIAL", kind::RADIAL),
@@ -135,6 +135,7 @@ fn the_shader_answers_for_every_material_kind_and_no_others() {
         ("MORPHOLOGY", kind::MORPHOLOGY),
         ("ROUNDED_RECT_BLUR", kind::ROUNDED_RECT_BLUR),
         ("POINT_FIELD", kind::POINT_FIELD),
+        ("SHADOW_MESH", kind::SHADOW_MESH),
     ];
 
     let solid = sources()
