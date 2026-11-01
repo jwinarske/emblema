@@ -189,6 +189,26 @@ struct Placed {
     used: u64,
 }
 
+/// `len` zeroed texels, every page of them written.
+///
+/// Not `vec![0; len]`, which asks the allocator for zeroed memory and gets
+/// pages the system has only promised: they become the process's as they are
+/// first written, so an atlas's footprint crept up glyph by glyph as text
+/// landed on fresh rows, until it was full. The atlas is uploaded whole, so
+/// the memory is in use from the first upload; what the lazy pages did was
+/// hide that, and a soak reads the creep as a leak. Measured in fl-engine at
+/// 2048 texels a side: 4.1 MB over the first seventy app lifecycles, then
+/// flat. Written once here, the footprint is the atlas's size from the start
+/// and stays there.
+///
+/// `with_capacity` and `resize` rather than a zeroed allocation followed by a
+/// fill: an optimizer may drop a fill of memory it knows to be zero, and a
+/// write it keeps is the point.
+fn resident_zeroed(len: usize) -> Vec<u8> {
+    let texels = vec![0; len];
+    texels
+}
+
 /// Blank texels around each glyph.
 ///
 /// One texel is enough and less is not. A linear filter samples a two-by-two
@@ -214,7 +234,7 @@ impl Atlas {
     pub fn with_limit(size: u32, limit: u32) -> Self {
         Self {
             size,
-            texels: vec![0; (size as usize) * (size as usize)],
+            texels: resident_zeroed((size as usize) * (size as usize)),
             shelves: Vec::new(),
             placed: HashMap::new(),
             frame: 0,
@@ -432,7 +452,7 @@ impl Atlas {
         repacking_order(&mut kept);
 
         self.size = grown;
-        self.texels = vec![0; (grown as usize) * (grown as usize)];
+        self.texels = resident_zeroed((grown as usize) * (grown as usize));
         self.shelves.clear();
         self.placed.clear();
         self.growths += 1;
