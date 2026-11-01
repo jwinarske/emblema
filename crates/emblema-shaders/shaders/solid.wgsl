@@ -443,17 +443,35 @@ fn sampled(coord: vec2<f32>, texels: vec2<f32>, low: vec2<f32>, high: vec2<f32>)
     return textureSampleLevel(image_texture, image_sampler, snapped(coord), 0.0);
 }
 
-fn tile_uv(uv: vec2<f32>, tile: f32) -> vec2<f32> {
+/// One coordinate folded into the image by one axis's mode.
+fn tile_axis(t: f32, tile: f32) -> f32 {
     if (tile > 0.5 && tile < 1.5) {
         // Repeat.
-        return fract(uv);
+        return fract(t);
     }
     if (tile > 2.5) {
-        // Mirror, per axis: the same fold a gradient uses, applied to each
-        // component so a tiled image meets its neighbors on both edges.
-        return vec2<f32>(1.0) - abs(vec2<f32>(1.0) - (uv - 2.0 * floor(uv * 0.5)));
+        // Mirror: the same fold a gradient uses, so a tiled image meets its
+        // neighbors on both edges.
+        return 1.0 - abs(1.0 - (t - 2.0 * floor(t * 0.5)));
     }
-    return clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    return clamp(t, 0.0, 1.0);
+}
+
+/// A coordinate folded into the image, each axis by its own mode, as
+/// upstream's tiled texture contents fold them: `tile` is across, then down.
+fn tile_uv(uv: vec2<f32>, tile: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(tile_axis(uv.x, tile.x), tile_axis(uv.y, tile.y));
+}
+
+/// Whether a coordinate is outside the image along an axis that decals.
+///
+/// Per axis, so a decal across and a repeat down draws a column of copies and
+/// nothing beside it. Tested against the coordinate as given, since the tiled
+/// one is inside by construction.
+fn decaled(uv: vec2<f32>, tile: vec2<f32>) -> bool {
+    let decal = tile > vec2<f32>(1.5) & tile < vec2<f32>(2.5);
+    let outside = uv < vec2<f32>(0.0) | uv > vec2<f32>(1.0);
+    return any(decal & outside);
 }
 
 /// A texture read at coordinates the vertices carried, tinted and scaled.
@@ -463,19 +481,15 @@ fn tile_uv(uv: vec2<f32>, tile: f32) -> vec2<f32> {
 /// already said which part of the sheet each corner reads -- so this is the
 /// image path with everything the vertices already answered taken out.
 fn sample_mesh(uv: vec2<f32>) -> vec4<f32> {
-    let tile = paint.geometry.y;
+    let tile = paint.geometry.yz;
     var texel = sampled(
         tile_uv(uv, tile),
         uv * vec2<f32>(textureDimensions(image_texture)),
         vec2<f32>(0.0),
         vec2<f32>(1.0),
     );
-    if (tile > 1.5 && tile < 2.5) {
-        // Decal, tested against the coordinate as given, since the tiled one
-        // is inside by construction.
-        if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
-            texel = vec4<f32>(0.0);
-        }
+    if (decaled(uv, tile)) {
+        texel = vec4<f32>(0.0);
     }
     let tint = paint.stops[0];
     let premultiplied = vec4<f32>(tint.rgb * tint.a, tint.a);
@@ -486,7 +500,8 @@ fn sample_image(clip: vec3<f32>) -> vec4<f32> {
     // The same mapping a radial gradient uses, so an image lands correctly on a
     // target that is not square and under a transform that rotates or scales.
     let uv = to_gradient_space(clip);
-    let tile = paint.geometry.w;
+    // Across in the last slot, down in the second; see the packing.
+    let tile = paint.geometry.wy;
 
     var coord = tile_uv(uv, tile);
 
@@ -518,14 +533,9 @@ fn sample_image(clip: vec3<f32>) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(image_texture));
     let texels = (source.xy + uv * (source.zw - source.xy)) * size;
     var texel = sampled(coord, texels, low, high);
-    if (tile > 1.5 && tile < 2.5) {
-        // Decal: nothing outside the image's own bounds. Tested against the
-        // unclamped coordinate, since the clamped one is inside by
-        // construction.
-        let outside = any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0));
-        if (outside) {
-            texel = vec4<f32>(0.0);
-        }
+    if (decaled(uv, tile)) {
+        // Decal: nothing outside the image's own bounds along that axis.
+        texel = vec4<f32>(0.0);
     }
     // The tint, stated straight and premultiplied here so it can scale a texel
     // that already is: the color is multiplied by the tint's alpha as well as

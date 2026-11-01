@@ -758,8 +758,9 @@ pub enum Material {
         /// Straight color the sampled texel is multiplied by; white changes
         /// nothing.
         tint: [f32; 4],
-        /// What happens where a vertex names a coordinate outside the texture.
-        tile: TileMode,
+        /// What happens where a vertex names a coordinate outside the texture,
+        /// across and then down. See [`Material::Image`]'s.
+        tile: [TileMode; 2],
         /// How to read between texels.
         sampling: Sampling,
     },
@@ -787,7 +788,12 @@ pub enum Material {
         /// alpha would apply the alpha twice — invisible for an opaque image,
         /// and plain the moment one translucent image is drawn into another.
         alpha: f32,
-        tile: TileMode,
+        /// What happens outside the image, across and then down.
+        ///
+        /// Two because upstream has two: an image shader takes a horizontal
+        /// and a vertical mode, and its tiled texture contents fold and decal
+        /// each axis by its own. A decal along one axis only draws a band.
+        tile: [TileMode; 2],
         /// How to read between texels.
         sampling: Sampling,
         /// The part of the texture to draw, as `[u0, v0, u1, v1]` from zero to
@@ -1526,7 +1532,8 @@ impl Material {
         {
             out[layout::STOPS..layout::STOPS + 4].copy_from_slice(tint);
             out[layout::GEOMETRY] = *alpha;
-            out[layout::GEOMETRY + 1] = tile_code(*tile);
+            out[layout::GEOMETRY + 1] = tile_code(tile[0]);
+            out[layout::GEOMETRY + 2] = tile_code(tile[1]);
             out[layout::PARAMS] = 1.0;
             out[layout::PARAMS + 1] = kind::MESH;
             out[layout::PARAMS + 2] = sampling_code(*sampling);
@@ -1547,8 +1554,12 @@ impl Material {
             // that would otherwise travel as zeros on every image draw.
             out[layout::STOPS..layout::STOPS + 4].copy_from_slice(source);
             out[layout::STOPS + 4..layout::STOPS + 8].copy_from_slice(tint);
+            // The vertical mode in the slot a mapped kind leaves free. Not the
+            // first: that is the flag a batch sets for a paint read at texture
+            // coordinates, and it is the batch's to write.
+            out[layout::GEOMETRY + 1] = tile_code(tile[1]);
             out[layout::GEOMETRY + 2] = *alpha;
-            out[layout::GEOMETRY + 3] = tile_code(*tile);
+            out[layout::GEOMETRY + 3] = tile_code(tile[0]);
             out[layout::TO_LOCAL..layout::TO_LOCAL + 12].copy_from_slice(to_local);
             out[layout::PARAMS] = 1.0;
             out[layout::PARAMS + 1] = kind::IMAGE;
@@ -1681,6 +1692,40 @@ pub enum MaterialVariant {
 #[cfg(test)]
 mod tests {
 
+    /// Each axis's mode where the shader reads it: an image's across in the
+    /// last geometry float and down in the second, a mesh's in the second and
+    /// third. The first is the batch's flag, and neither writes it.
+    #[test]
+    fn an_image_and_a_mesh_pack_a_tile_mode_per_axis() {
+        let image = Material::Image {
+            to_local: linear_to_local([1.0, 0.0, 0.0, 1.0]),
+            slot: 0,
+            alpha: 0.5,
+            tile: [TileMode::Repeat, TileMode::Decal],
+            sampling: Sampling::Linear,
+            source: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0; 4],
+        }
+        .to_uniform();
+        assert_eq!(
+            &image[layout::GEOMETRY..layout::GEOMETRY + 4],
+            &[0.0, tile::DECAL, 0.5, tile::REPEAT]
+        );
+
+        let mesh = Material::Mesh {
+            slot: 0,
+            alpha: 0.5,
+            tint: [1.0; 4],
+            tile: [TileMode::Mirror, TileMode::Repeat],
+            sampling: Sampling::Linear,
+        }
+        .to_uniform();
+        assert_eq!(
+            &mesh[layout::GEOMETRY..layout::GEOMETRY + 3],
+            &[0.5, tile::MIRROR, tile::REPEAT]
+        );
+    }
+
     /// The enum carries upstream's numbers; the shader keeps its own, and
     /// reordering the enum to the first left the second alone.
     #[test]
@@ -1749,7 +1794,7 @@ mod tests {
             to_local: linear_to_local([1.0, 0.0, 0.0, 1.0]),
             slot: 3,
             alpha: 1.0,
-            tile: TileMode::Clamp,
+            tile: [TileMode::Clamp; 2],
             sampling,
             source: [0.0, 0.0, 1.0, 1.0],
             tint: [1.0; 4],

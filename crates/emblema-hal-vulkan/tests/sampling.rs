@@ -64,7 +64,7 @@ fn image_material() -> Material {
         to_local: across_the_target(0.5),
         slot: 0,
         alpha: 1.0,
-        tile: TileMode::Clamp,
+        tile: [TileMode::Clamp; 2],
         sampling: emblema_hal::Sampling::Linear,
         source: [0.0, 0.0, 1.0, 1.0],
         tint: [1.0, 1.0, 1.0, 1.0],

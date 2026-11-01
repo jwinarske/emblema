@@ -16363,7 +16363,7 @@ fn a_nine_patch_is_one_draw_and_the_same_picture_as_nine() {
                     slot: 0,
                     rect: destination,
                     alpha: 1.0,
-                    tile: TileMode::Clamp,
+                    tile: [TileMode::Clamp; 2],
                     source: Rect::new(
                         sx[column] / w,
                         sy[row] / h,

@@ -73,7 +73,11 @@ pub enum Shader {
         rect: Rect,
         /// Scales the sampled color, for drawing an image translucently.
         alpha: f32,
-        tile: TileMode,
+        /// What happens outside the image, across and then down: an image
+        /// can repeat along x and clamp along y, as dart:ui's `ImageShader`
+        /// and Impeller's tiled texture contents take them. Set both with
+        /// [`Paint::with_tile_mode`], or each with [`Paint::with_tile_modes`].
+        tile: [TileMode; 2],
         /// Which part of the image to draw, from zero to one in each axis.
         ///
         /// The whole image by default. Set it with [`Paint::with_source`], or
@@ -1008,7 +1012,7 @@ impl Paint {
                 slot,
                 rect,
                 alpha: 1.0,
-                tile: TileMode::default(),
+                tile: [TileMode::default(); 2],
                 source: Rect::new(0.0, 0.0, 1.0, 1.0),
                 tint: Color::WHITE,
                 sampling: Sampling::default(),
@@ -1031,8 +1035,8 @@ impl Paint {
     /// Ignored by a solid paint, which has no outside.
     pub fn with_tile_mode(mut self, tile: TileMode) -> Self {
         match &mut self.shader {
-            Shader::Image { tile: current, .. }
-            | Shader::LinearGradient { tile: current, .. }
+            Shader::Image { tile: current, .. } => *current = [tile; 2],
+            Shader::LinearGradient { tile: current, .. }
             | Shader::RadialGradient { tile: current, .. }
             | Shader::SweepGradient { tile: current, .. }
             | Shader::ConicalGradient { tile: current, .. } => *current = tile,
@@ -1040,6 +1044,22 @@ impl Paint {
             // no edge, and where a caller's program stops is the caller's
             // arithmetic rather than this renderer's.
             Shader::Solid(_) | Shader::RuntimeEffect { .. } => {}
+        }
+        self
+    }
+
+    /// What happens outside an image, one mode across and one down.
+    ///
+    /// A strip that repeats along its length and stops at its ends, say, which
+    /// one mode for both axes cannot state. dart:ui's `ImageShader` takes the
+    /// two separately, and Impeller samples each axis by its own; this is that.
+    ///
+    /// Ignored by paints that are not images. A gradient has one parameter to
+    /// fold, not two coordinates, and one mode is all it has upstream as well;
+    /// [`Paint::with_tile_mode`] is how it is set.
+    pub fn with_tile_modes(mut self, x: TileMode, y: TileMode) -> Self {
+        if let Shader::Image { tile, .. } = &mut self.shader {
+            *tile = [x, y];
         }
         self
     }
@@ -1231,5 +1251,37 @@ mod tests {
         assert!(Paint::stroke(Color::BLACK, 0.0).is_visible());
         assert!(!Paint::stroke(Color::BLACK, -1.0).is_visible());
         assert!(Paint::stroke(Color::BLACK, 0.5).is_visible());
+    }
+
+    #[test]
+    fn an_image_takes_a_tile_mode_per_axis_and_a_gradient_one() {
+        let tile_of = |paint: &Paint| match paint.shader {
+            Shader::Image { tile, .. } => tile,
+            _ => unreachable!("an image paint"),
+        };
+        let rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+        assert_eq!(tile_of(&Paint::image(0, rect)), [TileMode::Clamp; 2]);
+        let one = Paint::image(0, rect).with_tile_mode(TileMode::Mirror);
+        assert_eq!(tile_of(&one), [TileMode::Mirror; 2]);
+        let each = Paint::image(0, rect).with_tile_modes(TileMode::Repeat, TileMode::Decal);
+        assert_eq!(tile_of(&each), [TileMode::Repeat, TileMode::Decal]);
+
+        // A gradient has one mode, and the per-axis call leaves it alone.
+        let ramp = Paint::linear_gradient(
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+            vec![
+                GradientStop::new(Color::BLACK, 0.0),
+                GradientStop::new(Color::WHITE, 1.0),
+            ],
+        )
+        .with_tile_modes(TileMode::Repeat, TileMode::Decal);
+        assert!(matches!(
+            ramp.shader,
+            Shader::LinearGradient {
+                tile: TileMode::Clamp,
+                ..
+            }
+        ));
     }
 }
