@@ -805,6 +805,16 @@ impl GlesContext {
         }
     }
 
+    /// Link the program every draw uses, before any draw asks for it.
+    ///
+    /// The format and sample count make no difference here: this backend
+    /// draws with one program and sets blending and multisampling as state,
+    /// so there is one thing to build ahead whatever a frame turns out to be.
+    /// They are taken so a caller states the same intent to either backend.
+    pub fn prepare_pipelines(&mut self, _format: PixelFormat, _samples: u32) -> Result<()> {
+        self.ensure_program()
+    }
+
     fn ensure_program(&mut self) -> Result<()> {
         if self.program().is_some() {
             return Ok(());

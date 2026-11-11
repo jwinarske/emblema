@@ -54,6 +54,10 @@ impl HalContext for VulkanContext {
         VulkanContext::register_program(self, program)
     }
 
+    fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()> {
+        VulkanContext::prepare_pipelines(self, format, samples)
+    }
+
     fn submit_batch(
         &mut self,
         target: &mut VulkanTexture,

@@ -9,8 +9,8 @@ use crate::device::VulkanContext;
 use crate::resource::{backend_err, transition, vk_format, VulkanTexture};
 use ash::vk;
 use emblema_hal::{
-    Batch, BlendMode, ClipRole, Error, Extent2D, PassDescriptor, Result, TextureDescriptor,
-    TextureUsage,
+    Batch, BlendMode, ClipRole, Error, Extent2D, PassDescriptor, PixelFormat, Result,
+    TextureDescriptor, TextureUsage,
 };
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
@@ -113,6 +113,79 @@ impl PipelineCache {
 }
 
 impl VulkanContext {
+    /// Build the pipelines a frame into `format` needs first, before any frame
+    /// asks for them.
+    ///
+    /// A pipeline is otherwise built by the first draw that needs it, and on
+    /// some drivers that is where the shader is compiled: 1.8 seconds a sample
+    /// count on a Raspberry Pi 5's V3D with Mesa's shader cache empty, inside
+    /// whichever frame happens to be first. Calling this when the context is
+    /// made moves that cost to a moment the caller chooses -- a thread of its
+    /// own, while the rest of its startup runs -- as upstream builds its
+    /// pipelines when its context is created.
+    ///
+    /// What is built is the source-over pipeline at one sample and at
+    /// `samples`, with no stencil and in each role a clip gives it: the ones a
+    /// frame draws first, and the ones that compile the shader at each sample
+    /// count. Every other blend mode is left to its first use. A driver that
+    /// compiles once per sample count builds those in microseconds once these
+    /// exist; one that compiles every pipeline afresh, lavapipe at about 26 ms
+    /// each, would pay seconds for all of them on every start, for modes most
+    /// frames never use.
+    ///
+    /// `samples` is the count a canvas antialiases at, four unless it was
+    /// given another. One builds the single-sample set only. A count the
+    /// device does not support is refused here, as a pass at that count
+    /// would be.
+    pub fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()> {
+        if !samples.is_power_of_two() {
+            return Err(Error::Unsupported("sample count is not a power of two"));
+        }
+        if !self.capabilities().sample_counts.supports(samples) {
+            return Err(Error::Unsupported("sample count not supported by device"));
+        }
+        let format = vk_format(format);
+        let stencil = crate::stencil::stencil_format(self)?;
+        let counts: &[u32] = if samples > 1 { &[1, samples] } else { &[1] };
+        for &samples in counts {
+            for stencil in [None, Some(stencil)] {
+                // Compatible with the preserving and presenting passes of the
+                // same attachments, so the pipelines built here serve them too.
+                let render_pass = self.ensure_render_pass(RenderPassKey {
+                    format,
+                    clears: true,
+                    samples,
+                    presents: false,
+                    stencil,
+                })?;
+                let roles: &[ClipRole] = match stencil {
+                    None => &[ClipRole::Content],
+                    Some(_) => &[ClipRole::Content, ClipRole::Narrow, ClipRole::Widen],
+                };
+                for &role in roles {
+                    self.ensure_pipeline(
+                        PipelineKey {
+                            format,
+                            blend: BlendMode::SrcOver,
+                            samples,
+                            stencil,
+                            program: None,
+                            role,
+                        },
+                        render_pass,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// How many pipelines this context has built, by
+    /// [`VulkanContext::prepare_pipelines`] or by a draw's first use.
+    pub fn pipeline_count(&self) -> usize {
+        self.pipeline_cache().pipelines.len()
+    }
+
     /// Draw a single set of triangles. A convenience over [`Batch`].
     ///
     /// The material is in linear space with **straight alpha**; it is

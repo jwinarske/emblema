@@ -135,6 +135,28 @@ impl Context {
         }
     }
 
+    /// Build what the first frame into a surface of `format` would build,
+    /// ahead of it, for a frame that antialiases at `samples` (a canvas's
+    /// count, four unless it was given another).
+    ///
+    /// Where the backend compiles its shader on a pipeline's first use, that
+    /// use is otherwise a frame: on a Raspberry Pi 5 with Mesa's shader cache
+    /// empty, 1.8 seconds a sample count, in whichever frame is first. Call it
+    /// once the context is made, from the thread that will draw, while the
+    /// rest of startup runs. That moves the compile and does not shorten it:
+    /// where startup is quicker than the compile, run a step that prepares
+    /// and exits once, when an image is built or on first boot, and the
+    /// driver's own cache serves every process after. Drawing without it is
+    /// correct, only slower the first time.
+    pub fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()> {
+        match self {
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(ctx) => HalContext::prepare_pipelines(ctx, format, samples),
+            #[cfg(feature = "gles")]
+            Self::Gles(ctx) => HalContext::prepare_pipelines(ctx, format, samples),
+        }
+    }
+
     /// Register a fragment program a caller's own build produced.
     ///
     /// Returns the index to name it by, which is what goes into the `program`
