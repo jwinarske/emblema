@@ -20,8 +20,10 @@ Four properties define the project against neighboring renderers:
   triangles. Runs correctly on every Vulkan 1.1+ device and every GLES 3.0
   device, including embedded GPUs where compute is weak or driver support is
   immature.
-- **Predictable frame times.** All pipelines are compiled ahead of time. No
-  shader compilation jank, no driver-specific compute paths.
+- **Predictable frame times.** Shaders are compiled ahead of time, and the
+  pipelines a first frame needs can be built before it
+  (`Context::prepare_pipelines`), so no frame waits on a driver's compile. No
+  driver-specific compute paths.
 - **First-class direct scanout.** Most 2D renderers assume a windowing system
   exists. Here, rendering straight to a KMS plane with no compositor is a
   supported and tested configuration rather than an exercise left to the
@@ -1962,7 +1964,24 @@ submission walks its draws and ensures a pipeline for every distinct
 `(format, program, blend, samples, stencil, role)`, and they are kept in a
 `HashMap` for the life of the context. No `VkPipelineCache` is involved —
 `create_graphics_pipelines` is passed `vk::PipelineCache::null()` — so nothing
-is persisted to disk and a new process recompiles what it uses.
+is persisted to disk by this crate and a new process recompiles what it uses,
+unless the driver keeps a cache of its own, as Mesa does.
+
+That first use is a frame, and on some drivers it is where the shader is
+compiled. A Raspberry Pi 5's V3D, with Mesa's cache empty, takes 1.8 seconds a
+sample count; every other pipeline at that count then builds in microseconds.
+`prepare_pipelines(format, samples)` builds the source-over pipeline at one
+sample and at `samples`, with no stencil and in each clip role, before any
+frame, which is what pays those compiles. Building every key instead would buy
+nothing on V3D and cost lavapipe, which compiles each pipeline afresh at about
+26 ms, six seconds a context. The GLES backend has one program and links it.
+
+Building ahead moves the compile; it does not shorten it. A process that
+reaches its first frame sooner than the compile ends still waits for it, so
+a device's first start is paid where the caller can afford it: a step that
+prepares and exits, run once when an image is built or on first boot, fills
+the driver's cache for every process after. fl-engine's `fl-dart prepare` is
+one.
 
 All three of those were described here as the opposite before anybody read the
 code against them, which is worth leaving on the record: this file is the

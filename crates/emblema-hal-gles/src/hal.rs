@@ -52,6 +52,10 @@ impl HalContext for GlesContext {
         GlesContext::register_program(self, program)
     }
 
+    fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()> {
+        GlesContext::prepare_pipelines(self, format, samples)
+    }
+
     fn submit_batch(
         &mut self,
         target: &mut GlesTexture,

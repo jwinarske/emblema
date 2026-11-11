@@ -153,6 +153,16 @@ pub trait HalContext {
     /// list of scenes, would do exactly that.
     fn register_program(&mut self, program: &RuntimeProgram) -> Result<u32>;
 
+    /// Build what the first frame into `format` would otherwise build, ahead
+    /// of it, for a frame that antialiases at `samples`.
+    ///
+    /// Where a backend compiles its shader on first use, that first use is a
+    /// frame, and the compile can take seconds on a small board with an empty
+    /// shader cache. This lets a caller pay it when it chooses -- on a thread
+    /// of its own, during startup. Drawing without it is correct, only slower
+    /// the first time.
+    fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()>;
+
     /// Draw a batch into a target.
     ///
     /// A descriptor that preserves rather than clears composes several batches

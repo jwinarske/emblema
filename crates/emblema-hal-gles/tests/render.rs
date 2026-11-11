@@ -469,3 +469,25 @@ fn a_multisampled_pass_that_preserves_is_refused_with_both_remedies_named() {
     .expect("one sample makes it drawable");
     ctx.destroy_texture(tex);
 }
+
+#[test]
+fn a_prepared_context_draws_what_an_unprepared_one_does() {
+    // One program serves every draw here, so preparing links it and nothing
+    // else; what it must not do is leave state a first draw then trips over.
+    let Some(mut cold) = context() else { return };
+    let Some(mut warm) = context() else { return };
+    warm.prepare_pipelines(PixelFormat::Rgba8Unorm, 4)
+        .expect("prepare");
+    warm.prepare_pipelines(PixelFormat::Rgba8Unorm, 4)
+        .expect("prepare again");
+    let mut batch = Batch::new();
+    batch
+        .push(
+            &band(-0.5, 0.5),
+            &QUAD,
+            Material::solid([1.0, 0.0, 0.0, 0.5]),
+            BlendMode::SrcOver,
+        )
+        .expect("push");
+    assert_eq!(render(&mut warm, &batch), render(&mut cold, &batch));
+}

@@ -52,8 +52,10 @@ with the conditions they were taken under.
   triangles. Runs correctly on every Vulkan 1.1+ device and every GLES 3.0
   device, including embedded GPUs where compute is weak or driver support is
   immature.
-- **Predictable frame times.** All pipelines are compiled ahead of time — no
-  shader compilation jank, no driver-specific compute paths.
+- **Predictable frame times.** Shaders are compiled ahead of time, and the
+  pipelines a first frame needs can be built before it
+  (`Context::prepare_pipelines`), so no frame waits on a driver's compile; no
+  driver-specific compute paths.
 - **First-class direct scanout.** Most 2D renderers assume a windowing system
   exists. Here, rendering straight to a KMS plane with no compositor is a
   supported and tested configuration rather than an exercise left to the
