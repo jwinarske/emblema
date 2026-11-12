@@ -3652,12 +3652,32 @@ impl Canvas {
     /// lines that have to get the corner tangents right, and getting them
     /// slightly wrong shows as a corner that is subtly not round.
     ///
-    /// Analytic for a solid fill or stroke that asked for antialiasing, which is
-    /// what `analytic_rrect` admits. The field is implemented for this shape, a
-    /// plain rectangle, a circle and an oval.
+    /// **A fill is tessellated once the pass is multisampled**, and takes the
+    /// field until then. What the field buys is a pass left at one sample, and
+    /// since `draw_rect` started tessellating its fills on 2026-10-01 most frames
+    /// give that up early: one antialiased rectangle multisamples the pass. From
+    /// there on the field is evaluated across a whole quad for an edge four
+    /// samples would have given anyway, and at equal sample counts it was already
+    /// measured as the dearer route -- see `docs/architecture.md`.
     ///
-    /// Tessellation is the fallback: a gradient or image fill, an aliased fill, or
-    /// a square-cornered stroke goes to `draw_path`.
+    /// Measured 2026-11-12 on a Pi 5, interleaved, four runs a side: the cards
+    /// of `full frame, mixed content`, drawn over a multisampled ground, cost
+    /// 0.64 ms from the field and 0.29 tessellated, and the frame 14.46 against
+    /// 14.10. `docs/on-a-board.md` has the frames. Upstream tessellates the fill
+    /// too: `Canvas::DrawRoundRect` sends it to `RoundRectGeometry`, a
+    /// tessellated strip, unless `--impeller-use-sdfs` is passed, which it is
+    /// not by default.
+    ///
+    /// Before anything has multisampled the pass, the field stays. Tessellating
+    /// there would turn multisampling on for the whole pass, which is what the
+    /// field exists to avoid, and would make a frame drawn with no background
+    /// into a multisampled pass with nothing to clear to, which the backends
+    /// refuse.
+    ///
+    /// **A stroke stays on the field**, as `draw_rect`'s does, and for the
+    /// reason given there. Both routes need what `analytic_rrect` admits -- a
+    /// solid paint that asked for antialiasing -- and anything else goes to
+    /// `draw_path`.
     pub fn draw_rrect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> Result<&mut Self> {
         if rect.is_empty() {
             return Ok(self);
@@ -3668,8 +3688,10 @@ impl Canvas {
         if let Some((material, pad, drawn)) = self.analytic_rrect_blur_draw(rect, radius, paint) {
             return self.draw_analytic(rect.outset(pad), material, &drawn);
         }
-        if let Some((material, to_local)) = self.analytic_rrect(rect, radius, paint) {
-            return self.draw_analytic_local(rect, material, paint, to_local);
+        if matches!(paint.style, Style::Stroke(_)) || self.pass_samples() == 1 {
+            if let Some((material, to_local)) = self.analytic_rrect(rect, radius, paint) {
+                return self.draw_analytic_local(rect, material, paint, to_local);
+            }
         }
         let path = rect.to_rounded_path(radius);
         self.draw_path(&path, paint)
@@ -3684,12 +3706,12 @@ impl Canvas {
     /// [`Rect::to_rounded_path_with_radii`].
     ///
     /// Tessellated, always. The fragment-evaluated route [`Self::draw_rrect`]
-    /// can take is a signed distance to a shape with one circular radius, and
-    /// eight numbers is a different function rather than that one with more
-    /// arguments -- so a corner that differs from its neighbors costs the
-    /// tessellation a uniform one avoids. That is the whole of what this costs,
-    /// and it is why the uniform call is still the one to reach for: it is not
-    /// a worse spelling of this, it is the case that has a shader.
+    /// can take -- for a stroke, or a fill in a pass not yet multisampled -- is
+    /// a signed distance to a shape with one circular radius, and eight numbers
+    /// is a different function rather than that one with more arguments. So a
+    /// corner that differs from its neighbors is tessellated where a uniform
+    /// one might not be. A multisampled fill is tessellated either way, so
+    /// there the two calls cost the same.
     pub fn draw_rrect_with_radii(
         &mut self,
         rect: Rect,
@@ -3699,9 +3721,9 @@ impl Canvas {
         if rect.is_empty() {
             return Ok(self);
         }
-        // A caller who spells a uniform shape this way still gets the shader,
-        // which matters because the general call is the one a `dart:ui` port
-        // reaches for and most of what it is handed is uniform.
+        // A caller who spells a uniform shape this way still gets the route
+        // `draw_rrect` picks, which matters because the general call is the one
+        // a `dart:ui` port reaches for and most of what it is handed is uniform.
         if let Some(radius) = uniform_circular_radius(radii) {
             return self.draw_rrect(rect, radius, paint);
         }
@@ -7690,5 +7712,72 @@ mod tests {
             "a wide blur on a large target stopped reducing, which is what the tap \
              budget exists to avoid"
         );
+    }
+
+    /// Which route a rounded rectangle took is read off what it recorded:
+    /// the field is one quad, the tessellated outline is many vertices.
+    fn draw_rounded(canvas: &mut Canvas, paint: &Paint) {
+        canvas
+            .draw_rrect(Rect::new(10.3, 12.7, 90.1, 70.6), 12.0, paint)
+            .expect("a rounded rectangle");
+    }
+
+    /// A canvas whose pass is already multisampled: a background, and a fill
+    /// `draw_rect` tessellates with antialiasing, placed off the pixel grid.
+    fn multisampled() -> Canvas {
+        let mut canvas = canvas();
+        canvas.clear(Color::BLACK);
+        canvas
+            .draw_rect(
+                Rect::new(100.5, 100.5, 120.5, 120.5),
+                &Paint::fill(Color::WHITE),
+            )
+            .expect("a rectangle");
+        canvas
+    }
+
+    fn root_pass(canvas: Canvas) -> (u32, usize) {
+        let recording = canvas.finish();
+        let pass = recording.passes.last().expect("a root pass");
+        (pass.descriptor.samples, pass.batch.vertices().len())
+    }
+
+    /// A fill is tessellated once the pass is multisampled, and takes the field
+    /// before that. See `draw_rrect` for the measurement.
+    #[test]
+    fn a_rounded_fill_is_tessellated_once_the_pass_is_multisampled() {
+        let paint = Paint::fill(Color::WHITE);
+        let (_, rectangle) = root_pass(multisampled());
+
+        let mut after = multisampled();
+        draw_rounded(&mut after, &paint);
+        let (samples, vertices) = root_pass(after);
+        assert_eq!(samples, 4);
+        assert!(
+            vertices - rectangle > 4,
+            "tessellated, so more than a quad: {}",
+            vertices - rectangle
+        );
+
+        // Nothing has multisampled the pass, so the field keeps it at one
+        // sample, background or not.
+        let mut first = canvas();
+        first.clear(Color::BLACK);
+        draw_rounded(&mut first, &paint);
+        assert_eq!(root_pass(first), (1, 4));
+        let mut over_the_surface = canvas();
+        draw_rounded(&mut over_the_surface, &paint);
+        assert_eq!(root_pass(over_the_surface), (1, 4));
+    }
+
+    /// A stroke keeps the field in a pass that is already multisampled.
+    #[test]
+    fn a_rounded_stroke_keeps_the_field_in_a_multisampled_pass() {
+        let (_, rectangle) = root_pass(multisampled());
+        let mut canvas = multisampled();
+        draw_rounded(&mut canvas, &Paint::stroke(Color::WHITE, 3.0));
+        let (samples, vertices) = root_pass(canvas);
+        assert_eq!(samples, 4);
+        assert_eq!(vertices - rectangle, 4, "one quad from the field");
     }
 }

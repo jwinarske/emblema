@@ -727,6 +727,10 @@ impl Item {
 
     fn is_analytic(&self) -> bool {
         let shaped = match self.shape {
+            // Generous for a fill: `Canvas::draw_rrect` tessellates one drawn
+            // after something has multisampled the pass, which an item cannot
+            // see from here. The scene keeps the field's budget either way,
+            // and the corpus checks that still holds.
             crate::shape::Shape::RoundedRect { radius, .. } => radius > 0.0,
             crate::shape::Shape::Circle { radius, .. } => radius > 0.0,
             crate::shape::Shape::Oval { min, max } => max[0] > min[0] && max[1] > min[1],
@@ -2887,8 +2891,10 @@ pub fn corpus() -> Vec<Scene> {
         // color that was never premultiplied shows: at full alpha the two
         // conventions agree exactly. And deliberately mixed, because the two
         // routes premultiply in different lines -- a polygon goes through the
-        // one shared by solids and gradients, and the other two are evaluated
-        // per fragment and each end in their own.
+        // one shared by solids and gradients, and the circle is evaluated per
+        // fragment and ends in its own. The rounded rectangle took the field as
+        // well until 2026-11-12; drawn after the polygon has multisampled the
+        // pass, it is tessellated now, which `Canvas::draw_rrect` explains.
         Scene::new(
             "transparent-background",
             vec![
