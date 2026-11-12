@@ -1490,6 +1490,52 @@ the difference was never geometry.
 It also delivered `non-parity.md` 21 its occluders: the stacked frame now has eleven safe
 occluders out of twelve draws, where it had none.
 
+### A rounded rectangle's fill followed it, measured 2026-11-12
+
+Two binaries differing only in whether `draw_rrect` fills from the field or from
+triangles in a pass already multisampled, alternated four times a side in one session on
+the Pi 5 with `--skip llvmpipe --skip gles`. `throttled=0x0`, nothing else running.
+The governor was left at `ondemand`, since pinning it needed a password the session
+did not have; every row below is GPU-bound, which is the kind that did not move with
+the governor when that was measured, and each spread is under two tenths of a per
+cent.
+
+| Vulkan, V3D 7.1.7.0 | field | tessellated |
+|---|---|---|
+| frame, gradient ground | 10.790 ms | 10.789 |
+| frame, plus cards | 11.429 | **11.077** |
+| frame, plus shadows | 12.259 | **11.902** |
+| full frame, mixed content | 14.458 | **14.103** |
+| stacked interface | 4.729 | 4.726 |
+
+Medians of the four runs. The cards cost 0.64 ms from the field and 0.29 from
+triangles, and the stages above them carry the same 0.35 ms down. `stacked
+interface` has no rounded rectangle in it and is the control.
+
+What had kept the fill on the field was the pass it could leave at one sample,
+which the rectangle's flip above took away: since then one antialiased rectangle
+multisamples the pass, and the cards in this frame were already drawn into four
+samples on either route. Inside such a pass the field is the per-fragment
+evaluation without the saving, and the bench's own pair says what that is worth --
+the field at one sample is 1.96 times the triangles at four here, as it has been
+since 2026-09-30.
+
+The flip is only for a pass already multisampled. Before anything has turned
+multisampling on, the field is what keeps it off, so it stays: a frame of rounded
+rectangles alone still renders at one sample, and a frame with no background never
+becomes a multisampled pass with nothing to clear to, which the backends refuse.
+The bench's `distance field, 1 sample` row is that case and still reads 8.06 ms
+under the final rule, while the frame reads 14.08 and 14.12 in two runs. Strokes
+stay on the field throughout, as the rectangle's did.
+
+Upstream agrees. `Canvas::DrawRoundRect` in the pinned engine sends a fill to the
+SDF only behind `impeller_use_sdfs`, which defaults to false, and otherwise to
+`RoundRectGeometry`, whose position buffer is `Tessellator::FilledRoundRect`.
+
+What prompted it: a Flutter counter app's frame, at 1920x1080 on this board, spent
+7.5 of its 9.4 ms of GPU time on two full-frame rectangles that reached `draw_rrect`
+with a radius of zero and were drawn as fields.
+
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
 The `render` group turned GLES on, and the rows it produces are a trap the

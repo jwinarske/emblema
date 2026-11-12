@@ -1217,9 +1217,11 @@ mod tests {
         );
         assert_eq!(
             occluding(&frames::frame(frames::Frame::All)),
-            (0, 12),
-            "the mixed frame is rounded rectangles and a layer, and none of it \
-             occludes"
+            (3, 12),
+            "the mixed frame's three opaque cards, which are tessellated over a \
+             multisampled ground and so occlude; the rest is a gradient, shadows \
+             and a layer. If the first number falls to zero the rounded fill \
+             went back to the field"
         );
 
         // And the predicate is not vacuous in the other direction either: it still

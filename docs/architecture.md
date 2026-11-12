@@ -2448,11 +2448,13 @@ rather than in principle.
   convexity detection for a fan-fill fast path; Wang's-formula adaptive Bezier
   flattening with transform-aware scale.
 
-  A rounded rectangle asked for as an antialiased solid fill is drawn from a
-  distance field rather than triangles: two triangles' worth of geometry
-  whatever the radius, against an outline flattened to a tolerance, and an edge
-  that antialiases from the distance it already computes rather than from four
-  samples. Its geometry is in the shape's own space, with the same
+  A rounded rectangle asked for as an antialiased solid fill, in a pass
+  nothing has multisampled yet, is drawn from a distance field rather than
+  triangles; once something has, it is tessellated, since 2026-11-12 -- see
+  the paragraph after the rectangle's below. The field is two triangles' worth of geometry
+  whatever the radius, against an outline flattened to a tolerance, and an
+  edge that antialiases from the distance it already computes rather than
+  from four samples. Its geometry is in the shape's own space, with the same
   clip-to-local mapping the gradients carry, because a distance measured in
   clip space would round the corners by different amounts on each axis of a
   target that is not square. Anything else tessellates — a stroke is a
@@ -2510,6 +2512,20 @@ rather than in principle.
   is evaluated across a whole quad to a constant. Upstream draws a filled
   rectangle as a four-vertex strip too. `docs/on-a-board.md`, "A square
   rectangle was on the wrong route", has the frames and the control.
+
+  A filled rounded rectangle followed on 2026-11-12, once the pass is
+  multisampled. The case the field is kept for is a pass left at one sample,
+  and after the rectangle's flip most frames give that up early: one
+  antialiased rectangle multisamples the pass, and from there the field pays
+  its evaluation for an edge the samples would have given anyway -- which, at
+  equal sample counts, the tables below already said was the dearer route.
+  Interleaved on a Pi 5, the cards of `full frame, mixed content`, drawn over
+  a multisampled ground, cost 0.64 ms from the field and 0.29 tessellated.
+  Upstream tessellates the fill unless `--impeller-use-sdfs` is passed, which
+  it is not by default. Before anything has multisampled the pass the field
+  stays, so a frame of rounded rectangles alone still renders at one sample,
+  and a stroke keeps the field throughout. `docs/on-a-board.md`, "A rounded
+  rectangle's fill followed it", has the numbers.
 
   Where the time actually goes was measured rather than assumed, and it is not
   where the vertex counts suggest. At 1920×1080 with a hundred and sixty
