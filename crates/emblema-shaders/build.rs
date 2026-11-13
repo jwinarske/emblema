@@ -17,7 +17,16 @@
 //! Translation happens at build time so no shader compiler ships in the
 //! runtime and pipeline creation has nothing to parse.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+// The variant type, shared with the library so the two agree on what each
+// variant is and in what order they are laid out.
+include!("src/variant.rs");
+
+/// The source whose overrides make variants. Its whole form is emitted under
+/// its own name as every other shader's is, and the variants beside it.
+const VARIANT_SOURCE: &str = "solid";
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -54,10 +63,17 @@ fn main() {
             .file_stem()
             .and_then(|s| s.to_str())
             .expect("shader file name");
-        generated.push_str(&format!(
-            "    (\"{stem}.wgsl\", {}_SPV),\n",
-            stem.to_uppercase().replace('-', "_")
-        ));
+        let name = stem.to_uppercase().replace('-', "_");
+        generated.push_str(&format!("    (\"{stem}.wgsl\", {name}_SPV),\n"));
+        if stem == VARIANT_SOURCE {
+            for variant in SolidVariant::every() {
+                generated.push_str(&format!(
+                    "    (\"{stem}.wgsl {}\", {name}_VARIANT_SPV[{}]),\n",
+                    variant_label(variant),
+                    variant.index()
+                ));
+            }
+        }
     }
     generated.push_str("];\n");
 
@@ -110,30 +126,38 @@ fn compile(path: &Path) -> String {
         .validate(&module)
         .unwrap_or_else(|e| panic!("validating {}: {e}", path.display()));
 
-    let options = naga::back::spv::Options::default();
-    let words = naga::back::spv::write_vec(&module, &info, &options, None)
-        .unwrap_or_else(|e| panic!("spirv for {}: {e}", path.display()));
-
-    let name = path
+    let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .expect("shader file name")
-        .to_uppercase()
-        .replace('-', "_");
+        .expect("shader file name");
+    let name = stem.to_uppercase().replace('-', "_");
+
+    // Every override at its default: for `solid.wgsl` that is every part, and
+    // for a source with none it is the module as parsed. Nothing is pruned,
+    // so this form is what the source says, whole.
+    let (whole, whole_info) = resolve(&module, &info, &HashMap::new(), false, path);
+    let mut out = emit(&whole, &whole_info, stem, &name, path);
+
+    if stem == VARIANT_SOURCE {
+        out.push_str(&emit_variants(&module, &info, stem, &name, path));
+    }
+    out
+}
+
+/// The SPIR-V and the two GLSL stages for one resolved module.
+fn emit(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    stem: &str,
+    name: &str,
+    path: &Path,
+) -> String {
+    let words = spirv(module, info, path);
 
     let mut out = format!(
-        "/// SPIR-V for `{}.wgsl`, with entry points `vs_main` and `fs_main`.\npub static {}_SPV: &[u32] = &[\n",
-        path.file_stem().unwrap().to_string_lossy(),
-        name
+        "/// SPIR-V for `{stem}.wgsl`, with entry points `vs_main` and `fs_main`.\npub static {name}_SPV: &[u32] = &{};\n\n",
+        words_literal(&words)
     );
-    for chunk in words.chunks(8) {
-        out.push_str("    ");
-        for w in chunk {
-            out.push_str(&format!("{w:#010x}, "));
-        }
-        out.push('\n');
-    }
-    out.push_str("];\n\n");
 
     // GLSL ES needs one source per stage, unlike SPIR-V where both entry
     // points live in one module.
@@ -141,18 +165,333 @@ fn compile(path: &Path) -> String {
         (naga::ShaderStage::Vertex, "vs_main", "VS_GLSL"),
         (naga::ShaderStage::Fragment, "fs_main", "FS_GLSL"),
     ] {
-        let glsl = force_std140(write_glsl(&module, &info, stage, entry, path), path, stage);
+        let glsl = force_std140(write_glsl(module, info, stage, entry, path), path, stage);
         out.push_str(&format!(
-            "/// GLSL ES 300 for `{}.wgsl`, {} stage.\npub static {}_{}: &str = r####\"{}\"####;\n\n",
-            path.file_stem().unwrap().to_string_lossy(),
-            entry,
-            name,
-            suffix,
-            glsl
+            "/// GLSL ES 300 for `{stem}.wgsl`, {entry} stage.\npub static {name}_{suffix}: &str = r####\"{glsl}\"####;\n\n"
         ));
     }
 
     out
+}
+
+/// Every variant of the source, by [`SolidVariant::index`]: SPIR-V with both
+/// stages, and the fragment stage in GLSL. The vertex stage reads no override
+/// and is the same in each, so the whole form's GLSL serves them all.
+fn emit_variants(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    stem: &str,
+    name: &str,
+    path: &Path,
+) -> String {
+    let mut spirvs = String::new();
+    let mut fragments = String::new();
+    for (index, variant) in SolidVariant::every().enumerate() {
+        assert_eq!(index, variant.index(), "variants out of index order");
+        let constants = variant
+            .overrides()
+            .iter()
+            .map(|(name, on)| (name.to_string(), if *on { 1.0 } else { 0.0 }))
+            .collect();
+        let (pruned, pruned_info) = resolve(module, info, &constants, true, path);
+        let words = spirv(&pruned, &pruned_info, path);
+        let label = variant_label(variant);
+        spirvs.push_str(&format!(
+            "    // {label}\n    &{},\n",
+            words_literal(&words)
+        ));
+        let glsl = force_std140(
+            write_glsl(
+                &pruned,
+                &pruned_info,
+                naga::ShaderStage::Fragment,
+                "fs_main",
+                path,
+            ),
+            path,
+            naga::ShaderStage::Fragment,
+        );
+        fragments.push_str(&format!("    // {label}\n    r####\"{glsl}\"####,\n"));
+    }
+    format!(
+        "/// SPIR-V for each variant of `{stem}.wgsl`, by `SolidVariant::index`.\n\
+         pub static {name}_VARIANT_SPV: [&[u32]; {count}] = [\n{spirvs}];\n\n\
+         /// GLSL ES 300 for each variant of `{stem}.wgsl`, fragment stage, by\n\
+         /// `SolidVariant::index`.\n\
+         pub static {name}_VARIANT_FS_GLSL: [&str; {count}] = [\n{fragments}];\n\n",
+        count = SolidVariant::COUNT,
+    )
+}
+
+/// A variant as the generated file and the module table name it.
+fn variant_label(variant: SolidVariant) -> String {
+    let mut parts = vec![format!("{:?}", variant.kinds).to_lowercase()];
+    if variant.filters {
+        parts.push("filters".into());
+    }
+    if variant.tint_blends {
+        parts.push("tint blends".into());
+    }
+    format!("[{}]", parts.join(", "))
+}
+
+fn spirv(module: &naga::Module, info: &naga::valid::ModuleInfo, path: &Path) -> Vec<u32> {
+    let options = naga::back::spv::Options::default();
+    naga::back::spv::write_vec(module, info, &options, None)
+        .unwrap_or_else(|e| panic!("spirv for {}: {e}", path.display()))
+}
+
+/// SPIR-V words as an array literal.
+fn words_literal(words: &[u32]) -> String {
+    let mut out = String::from("[\n");
+    for chunk in words.chunks(8) {
+        out.push_str("    ");
+        for w in chunk {
+            out.push_str(&format!("{w:#010x}, "));
+        }
+        out.push('\n');
+    }
+    out.push(']');
+    out
+}
+
+/// Give every override its value and, when `prune` is set, take out what the
+/// values turned off.
+///
+/// A branch on an override is constant once the override has a value, and a
+/// driver would fold it -- but only after it had parsed, and in GLSL's case
+/// compiled, everything behind it, and the point of a variant is that it does
+/// not. So the branch is replaced by the side it takes here, and the functions
+/// nothing reaches any more are dropped, before a backend writes a word.
+fn resolve(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    constants: &naga::back::PipelineConstants,
+    prune: bool,
+    path: &Path,
+) -> (naga::Module, naga::valid::ModuleInfo) {
+    for name in constants.keys() {
+        assert!(
+            module
+                .overrides
+                .iter()
+                .any(|(_, o)| o.name.as_deref() == Some(name.as_str())),
+            "{}: no override named {name} to set",
+            path.display()
+        );
+    }
+    let (resolved, _) = naga::back::pipeline_constants::process_overrides(module, info, constants)
+        .unwrap_or_else(|e| panic!("resolving overrides in {}: {e}", path.display()));
+    let mut resolved = resolved.into_owned();
+    if prune {
+        let constants = resolved.constants.clone();
+        let globals = resolved.global_expressions.clone();
+        let mut taken = 0;
+        for (_, function) in resolved.functions.iter_mut() {
+            taken += take_constant_branches(
+                &mut function.body,
+                &function.expressions,
+                &constants,
+                &globals,
+            );
+        }
+        for entry in resolved.entry_points.iter_mut() {
+            let function = &mut entry.function;
+            taken += take_constant_branches(
+                &mut function.body,
+                &function.expressions,
+                &constants,
+                &globals,
+            );
+        }
+        // An override that guards nothing would make two variants the same
+        // shader under different names, which is a source that changed without
+        // the variants changing with it.
+        assert!(
+            taken >= module.overrides.len(),
+            "{}: {taken} branches on overrides for {} overrides",
+            path.display(),
+            module.overrides.len()
+        );
+        drop_unreached_functions(&mut resolved);
+        naga::compact::compact(&mut resolved);
+    }
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::PUSH_CONSTANT,
+    );
+    let info = validator
+        .validate(&resolved)
+        .unwrap_or_else(|e| panic!("validating a variant of {}: {e}", path.display()));
+    (resolved, info)
+}
+
+/// The value of a boolean an override resolved to, where `handle` is one.
+fn constant_bool(
+    handle: naga::Handle<naga::Expression>,
+    expressions: &naga::Arena<naga::Expression>,
+    constants: &naga::Arena<naga::Constant>,
+    globals: &naga::Arena<naga::Expression>,
+) -> Option<bool> {
+    let literal = match expressions[handle] {
+        naga::Expression::Constant(c) => &globals[constants[c].init],
+        ref other => other,
+    };
+    match literal {
+        naga::Expression::Literal(naga::Literal::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+/// Replace each `if` on a constant with the block it takes. Returns how many.
+fn take_constant_branches(
+    block: &mut naga::Block,
+    expressions: &naga::Arena<naga::Expression>,
+    constants: &naga::Arena<naga::Constant>,
+    globals: &naga::Arena<naga::Expression>,
+) -> usize {
+    let mut taken = 0;
+    for (statement, _) in block.span_iter_mut() {
+        if let naga::Statement::If {
+            condition,
+            accept,
+            reject,
+        } = statement
+        {
+            if let Some(value) = constant_bool(*condition, expressions, constants, globals) {
+                let kept = std::mem::take(if value { accept } else { reject });
+                *statement = naga::Statement::Block(kept);
+                taken += 1;
+            }
+        }
+        match statement {
+            naga::Statement::Block(inner) => {
+                taken += take_constant_branches(inner, expressions, constants, globals);
+            }
+            naga::Statement::If { accept, reject, .. } => {
+                taken += take_constant_branches(accept, expressions, constants, globals);
+                taken += take_constant_branches(reject, expressions, constants, globals);
+            }
+            naga::Statement::Switch { cases, .. } => {
+                for case in cases {
+                    taken +=
+                        take_constant_branches(&mut case.body, expressions, constants, globals);
+                }
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => {
+                taken += take_constant_branches(body, expressions, constants, globals);
+                taken += take_constant_branches(continuing, expressions, constants, globals);
+            }
+            _ => {}
+        }
+    }
+    taken
+}
+
+/// Every function a block calls, directly.
+fn calls(block: &naga::Block, out: &mut Vec<naga::Handle<naga::Function>>) {
+    for statement in block.iter() {
+        match statement {
+            naga::Statement::Call { function, .. } => out.push(*function),
+            naga::Statement::Block(inner) => calls(inner, out),
+            naga::Statement::If { accept, reject, .. } => {
+                calls(accept, out);
+                calls(reject, out);
+            }
+            naga::Statement::Switch { cases, .. } => {
+                for case in cases {
+                    calls(&case.body, out);
+                }
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => {
+                calls(body, out);
+                calls(continuing, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Point every call in a block at the function's new handle.
+fn renumber_calls(
+    block: &mut naga::Block,
+    map: &HashMap<naga::Handle<naga::Function>, naga::Handle<naga::Function>>,
+) {
+    for (statement, _) in block.span_iter_mut() {
+        match statement {
+            naga::Statement::Call { function, .. } => *function = map[function],
+            naga::Statement::Block(inner) => renumber_calls(inner, map),
+            naga::Statement::If { accept, reject, .. } => {
+                renumber_calls(accept, map);
+                renumber_calls(reject, map);
+            }
+            naga::Statement::Switch { cases, .. } => {
+                for case in cases {
+                    renumber_calls(&mut case.body, map);
+                }
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => {
+                renumber_calls(body, map);
+                renumber_calls(continuing, map);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn renumber_function(
+    function: &mut naga::Function,
+    map: &HashMap<naga::Handle<naga::Function>, naga::Handle<naga::Function>>,
+) {
+    renumber_calls(&mut function.body, map);
+    for (_, expression) in function.expressions.iter_mut() {
+        if let naga::Expression::CallResult(callee) = expression {
+            match map.get(callee) {
+                Some(kept) => *callee = *kept,
+                // The result of a call in a branch that was taken out: no
+                // statement makes or reads it any more, and compaction removes
+                // it. Until then it must not name a function that is gone.
+                None => *expression = naga::Expression::Literal(naga::Literal::Bool(false)),
+            }
+        }
+    }
+}
+
+/// Drop the functions no entry point reaches.
+///
+/// naga's own compaction keeps every function, on the assumption that all of
+/// them are used; after the branches above, most of a variant's are not.
+fn drop_unreached_functions(module: &mut naga::Module) {
+    let mut pending = Vec::new();
+    for entry in &module.entry_points {
+        calls(&entry.function.body, &mut pending);
+    }
+    let mut reached = HashSet::new();
+    while let Some(function) = pending.pop() {
+        if reached.insert(function) {
+            calls(&module.functions[function].body, &mut pending);
+        }
+    }
+
+    let mut old = std::mem::take(&mut module.functions);
+    let mut map = HashMap::new();
+    for (handle, function, span) in old.drain() {
+        if reached.contains(&handle) {
+            map.insert(handle, module.functions.append(function, span));
+        }
+    }
+    for (_, function) in module.functions.iter_mut() {
+        renumber_function(function, &map);
+    }
+    for entry in module.entry_points.iter_mut() {
+        renumber_function(&mut entry.function, &map);
+    }
 }
 
 /// Give the paint's uniform block an explicit `std140` layout.

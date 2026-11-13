@@ -471,3 +471,180 @@ fn the_shader_tells_every_color_filter_from_its_neighbors() {
         );
     }
 }
+
+/// Every material asks for the variant whose part guards its arm.
+///
+/// Two lists again with nothing making them agree: `Material::variant`, which
+/// picks the pipeline a draw is built with, and the override each arm of
+/// `shade` sits behind. A material sent to a variant without its arm falls
+/// through to a solid color -- on both backends alike, so no comparison
+/// between them would notice. This reads the arm's guard from the source and
+/// the kind from the packed material, so it holds for the kinds a scene
+/// happens not to draw.
+#[test]
+fn every_material_asks_for_the_variant_that_carries_its_arm() {
+    use emblema_hal::material::layout;
+    use emblema_hal::{Material, MaterialVariant, Sampling, Stop, TileMode};
+
+    let to_local = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let stops = || {
+        vec![
+            Stop::new([1.0, 0.0, 0.0, 1.0], 0.0),
+            Stop::new([0.0, 0.0, 1.0, 1.0], 1.0),
+        ]
+    };
+    let color = [0.2, 0.4, 0.6, 1.0];
+    // Every material the built-in shader draws. `Runtime` is not one: a
+    // caller's program replaces the fragment stage.
+    let materials = vec![
+        Material::Solid(color),
+        Material::VertexGradient,
+        Material::LinearGradient {
+            axis: [1.0, 0.0],
+            to_local,
+            stops: stops(),
+            ramp: None,
+            tile: TileMode::Clamp,
+        },
+        Material::RadialGradient {
+            to_local,
+            stops: stops(),
+            ramp: None,
+            tile: TileMode::Clamp,
+        },
+        Material::SweepGradient {
+            to_local,
+            start_angle: 0.0,
+            end_angle: 1.0,
+            stops: stops(),
+            ramp: None,
+            tile: TileMode::Clamp,
+        },
+        Material::ConicalGradient {
+            to_local,
+            start_radius: 0.0,
+            radius_delta: 1.0,
+            separation: 1.0,
+            stops: stops(),
+            ramp: None,
+            tile: TileMode::Clamp,
+        },
+        Material::Mesh {
+            slot: 0,
+            alpha: 1.0,
+            tint: [1.0; 4],
+            tile: [TileMode::Clamp; 2],
+            sampling: Sampling::Linear,
+        },
+        Material::Image {
+            to_local,
+            slot: 0,
+            alpha: 1.0,
+            tile: [TileMode::Clamp; 2],
+            sampling: Sampling::Linear,
+            source: [0.0, 0.0, 1.0, 1.0],
+            tint: [1.0; 4],
+        },
+        Material::RoundedRect {
+            color,
+            half_size: [1.0, 1.0],
+            to_local,
+            radius: 0.5,
+            outer_radius: 0.5,
+            stroke: 0.0,
+        },
+        Material::RoundedRectBlur {
+            color,
+            to_local,
+            adjust: [0.0, 0.0],
+            r1: 0.5,
+            exponent: 2.0,
+            s_inv: 1.0,
+            min_edge: 1.0,
+            scale: 1.0,
+        },
+        Material::Ellipse {
+            color,
+            half_size: [1.0, 1.0],
+            to_local,
+            stroke: 0.0,
+        },
+        Material::Blur {
+            to_local,
+            slot: 0,
+            step: [1.0, 0.0],
+            sigma: 1.0,
+        },
+        Material::Morphology {
+            to_local,
+            slot: 0,
+            step: [1.0, 0.0],
+            radius: 1.0,
+            dilate: true,
+        },
+        Material::Glyph { color, slot: 0 },
+        Material::PointField { color },
+        Material::ShadowMesh { color },
+    ];
+
+    let solid = sources()
+        .into_iter()
+        .find(|(name, _)| name == "solid.wgsl")
+        .expect("solid.wgsl");
+    let body = without_comments(&solid.1);
+    let dispatch = body
+        .split_once("fn shade(")
+        .expect("solid.wgsl has a `shade`")
+        .1;
+    let dispatch = dispatch.split_once("\nfn ").map_or(dispatch, |(d, _)| d);
+
+    // The override an arm of the switch sits behind, written as
+    // `case 7: { if (SHAPES) {`; `None` for a kind with no arm there, which is
+    // a core kind answered ahead of the switch.
+    let guard = |code: i32| -> Option<String> {
+        let (_, arm) = dispatch.split_once(&format!("case {code}:"))?;
+        let arm = arm.trim_start().strip_prefix('{')?.trim_start();
+        let condition = arm.strip_prefix("if (")?;
+        let (name, _) = condition.split_once(')')?;
+        Some(name.trim().to_owned())
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    for material in &materials {
+        let code = material.to_uniform()[layout::PARAMS + 1].round() as i32;
+        let want = match material.variant() {
+            MaterialVariant::Core => None,
+            MaterialVariant::Image => Some("IMAGES"),
+            MaterialVariant::Mesh => Some("MESHES"),
+            MaterialVariant::Shape => Some("SHAPES"),
+            MaterialVariant::Pass => Some("PASSES"),
+            MaterialVariant::Runtime => panic!("{material:?} is drawn by a caller's program"),
+        };
+        let found = guard(code);
+        assert_eq!(
+            found.as_deref(),
+            want,
+            "{material:?} (kind {code}) asks for {:?}, and its arm in `shade` is behind {found:?}",
+            material.variant()
+        );
+        seen.insert(code);
+    }
+    // One material for every kind the renderer has, so a kind added without a
+    // material above fails here rather than going unchecked.
+    const MATERIAL: &str = include_str!("../../emblema-hal/src/material.rs");
+    let declared = MATERIAL
+        .split_once("pub mod kind {")
+        .expect("a `kind` module")
+        .1
+        .split_once("\n}")
+        .expect("the end of it")
+        .0
+        .matches("pub const ")
+        .count();
+    assert_eq!(
+        seen.len(),
+        declared,
+        "`emblema_hal::material::kind` declares {declared} kinds and this test draws {}",
+        seen.len()
+    );
+}

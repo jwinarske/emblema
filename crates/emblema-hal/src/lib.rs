@@ -69,8 +69,8 @@ pub struct RuntimeProgram {
 }
 
 pub use material::{
-    ColorFilter, ColorForm, Gamma, Material, MaterialVariant, Sampling, Stop, TileMode,
-    MATERIAL_FLOATS, MAX_EFFECT_TEXTURES, MAX_STOPS, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
+    ColorFilter, ColorForm, Gamma, Material, MaterialVariant, Sampling, ShaderVariant, Stop,
+    TileMode, MATERIAL_FLOATS, MAX_EFFECT_TEXTURES, MAX_STOPS, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
 };
 pub use resource::{
     mip_levels_for, BufferDescriptor, BufferUsage, TextureDescriptor, TextureUsage,

@@ -527,6 +527,31 @@ impl BatchDraw {
             .all(|&i| vertices.get(i as usize).is_some_and(|v| v.color == WHITE))
     }
 
+    /// The parts of the built-in shader this draw needs, which a backend keys
+    /// its pipeline by.
+    ///
+    /// A filter counts when there is one, whatever it does: the shader tells
+    /// none from the rest by its code alone, and an identity matrix is still a
+    /// matrix it applies. The tint blend counts when it is anything but
+    /// `Modulate`, the mode the shader handles without the blend function.
+    /// A caller's program replaces the fragment stage, so for one only the
+    /// material counts, and every such draw asks for the same variant.
+    pub fn shader_variant(&self) -> crate::ShaderVariant {
+        let material = self.material.variant();
+        if material == crate::MaterialVariant::Runtime {
+            return crate::ShaderVariant {
+                material,
+                filters: false,
+                tint_blends: false,
+            };
+        }
+        crate::ShaderVariant {
+            material,
+            filters: !matches!(self.filter, ColorFilter::None),
+            tint_blends: self.tint_blend != BlendMode::Modulate,
+        }
+    }
+
     /// The uniform block this draw's shader reads.
     ///
     /// The material and the filter are packed together because the shader
@@ -863,15 +888,16 @@ impl Batch {
 
     /// How many times a pipeline will be bound when this batch is recorded.
     ///
-    /// Consecutive draws sharing a blend mode reuse the bound pipeline, so this
-    /// counts transitions rather than draws.
+    /// Consecutive draws sharing a blend mode, a shader variant and a program
+    /// reuse the bound pipeline, so this counts transitions rather than draws.
     pub fn pipeline_binds(&self) -> usize {
         let mut binds = 0;
-        let mut current: Option<BlendMode> = None;
+        let mut current = None;
         for draw in &self.draws {
-            if current != Some(draw.blend) {
+            let wanted = (draw.blend, draw.shader_variant(), draw.material.program());
+            if current != Some(wanted) {
                 binds += 1;
-                current = Some(draw.blend);
+                current = Some(wanted);
             }
         }
         binds

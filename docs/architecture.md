@@ -1961,27 +1961,43 @@ the fence waiter.
 
 Pipelines are compiled **lazily, on first use**, not at context creation: each
 submission walks its draws and ensures a pipeline for every distinct
-`(format, program, blend, samples, stencil, role)`, and they are kept in a
-`HashMap` for the life of the context. No `VkPipelineCache` is involved —
-`create_graphics_pipelines` is passed `vk::PipelineCache::null()` — so nothing
-is persisted to disk by this crate and a new process recompiles what it uses,
-unless the driver keeps a cache of its own, as Mesa does.
+`(format, program, blend, samples, stencil, role, shader variant)`, and they are
+kept in a `HashMap` for the life of the context. No `VkPipelineCache` is
+involved — `create_graphics_pipelines` is passed `vk::PipelineCache::null()` —
+so nothing is persisted to disk by this crate and a new process recompiles what
+it uses, unless the driver keeps a cache of its own, as Mesa does.
+
+The shader variant is which parts of `solid.wgsl` a pipeline is built with
+(`ShaderVariant`, from `BatchDraw::shader_variant`): the core every variant
+has — a solid color, the gradients and glyphs — plus at most one of images,
+meshes, shapes or the blur and morphology passes, and whether the draw filters
+its color and blends its tint by a mode other than `Modulate`. Each part is
+behind an `override` in the source, and the build step emits twenty
+translations with the parts each turns off taken out, branches and the
+functions only they reached, so a driver compiles what a pipeline can run and
+nothing else. The GLES backend links a program per variant the same way, on
+first use, and a second form of one for an advanced blend.
 
 That first use is a frame, and on some drivers it is where the shader is
-compiled. A Raspberry Pi 5's V3D, with Mesa's cache empty, takes 1.8 seconds a
-sample count; every other pipeline at that count then builds in microseconds.
-`prepare_pipelines(format, samples)` builds the source-over pipeline at one
-sample and at `samples`, with no stencil and in each clip role, before any
-frame, which is what pays those compiles. Building every key instead would buy
-nothing on V3D and cost lavapipe, which compiles each pipeline afresh at about
-26 ms, six seconds a context. The GLES backend has one program and links it.
+compiled. Until 2026-11-13 every pipeline compiled the whole shader, and a
+Raspberry Pi 5's V3D, with Mesa's cache empty, took 1.8 seconds a sample count
+for it; an RK3566's Mali-G52 about five, under Vulkan or GLES. What
+`prepare_pipelines` builds now takes 60 ms at one sample on the Pi and 113 ms
+at one and four, and on the RK3566 0.27 s and 0.5 to 0.58 s through Vulkan and
+0.33 s through GLES; a variant a frame
+never draws with is never compiled. `prepare_pipelines(format, samples)` builds
+the source-over pipeline with the core variant at one sample and at `samples`,
+with no stencil and in each clip role, before any frame. Building every key
+instead would cost lavapipe, which compiles each pipeline afresh at about 26 ms,
+seconds a context for keys most frames never use. The GLES backend links the
+core variant's program.
 
 Building ahead moves the compile; it does not shorten it. A process that
 reaches its first frame sooner than the compile ends still waits for it, so
 a device's first start is paid where the caller can afford it: a step that
 prepares and exits, run once when an image is built or on first boot, fills
 the driver's cache for every process after. fl-engine's `fl-dart prepare` is
-one.
+one; with the variants it pays 0.18 s on the Pi, against 3.6 before.
 
 All three of those were described here as the opposite before anybody read the
 code against them, which is worth leaving on the record: this file is the
@@ -2127,8 +2143,9 @@ looks like a binding that never happened. Each sampler is pointed at its unit
 once at link time, since that value is program state rather than something a draw
 sets.
 
-**A program is a pipeline, not a material kind.** Every material today shares
-one fragment shader and picks its behavior by branching on a kind. A runtime
+**A program is a pipeline, not a material kind.** Every built-in material shares
+one fragment shader source and picks its behavior by branching on a kind, in
+whichever variant of it its draw needs. A runtime
 effect replaces that shader, so it is a property of the pipeline instead: the
 pipeline key names the program, the context holds the registered ones, and a
 draw carries which it uses. This is the first thing in this renderer to make
@@ -2418,11 +2435,13 @@ half of that entry.
 One departure from upstream sits inside it, in the correction that pulls in a
 long axis; see `non-parity.md`.
 
-**Specialization is not implemented.** The intent is one set of declarations in
-the WGSL source mapping to spec constants on Vulkan and bounded build-time macro
-permutations on GLES; there are no spec constants anywhere yet, and the fragment
-stage dispatches on a material kind at runtime instead — a chain of comparisons
-every fragment walks, which is the cost specialization would remove.
+**Specialization is by build-time variant, since 2026-11-13.** One set of
+`override` declarations in the WGSL source selects the parts a pipeline carries,
+and the build step resolves them into twenty translations for both backends,
+pruned rather than left for a driver to fold; there are no spec constants, which
+naga cannot emit, and no GLSL macros. Within a variant the fragment stage still
+dispatches on the material kind at runtime, among the few kinds that variant
+carries.
 
 That cost has a number now, and it is not the comparisons. Adding the blurred
 rounded rectangle above — one dispatch arm and three functions, two of them
@@ -2441,6 +2460,14 @@ draw, does.
 So the price of an uber-shader is paid by every draw whenever any material gets
 more expensive, and it is the argument for specialization stated in device time
 rather than in principle.
+
+The variants paid it back on the same board. With every draw built from the
+variant it needs, the bench's GPU rows on the Pi 5 came down 12 to 36 percent
+through Vulkan and 34 to 62 through GLES, four alternating runs a side with no
+overlap on any row: the mixed frame 14.04 ms to 9.72 on Vulkan and 19.70 to 9.49
+on GLES. The core variant still runs at two threads on V3D, as the whole shader
+did; it is 743 instructions and 110 uniforms against 3,376 and 527. See
+[`on-a-board.md`](on-a-board.md).
 
 ## Renderer internals
 

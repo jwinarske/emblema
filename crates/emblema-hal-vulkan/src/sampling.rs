@@ -2,12 +2,12 @@
 //!
 //! # Why every draw binds a texture
 //!
-//! The shader is one program serving every material kind, so it declares the
-//! texture and sampler whether a given draw samples them or not. Vulkan wants
-//! every descriptor a pipeline statically uses to be bound, and "statically
-//! uses" does not care that the branch reading it is unreachable for a solid
-//! fill. The alternatives are a pipeline variant per material kind, which
-//! multiplies the cache by four to avoid one binding, or leaving the descriptor
+//! Every pipeline is built against one layout, whichever variant of the shader
+//! it compiles, so the layout declares the texture and sampler whether a given
+//! draw samples them or not. Vulkan wants every descriptor a pipeline
+//! statically uses to be bound, and a variant that samples nothing still shares
+//! the layout of one that does. The alternatives are a layout per variant, which
+//! multiplies descriptor sets to avoid one binding, or leaving the descriptor
 //! unbound, which is invalid. So a draw that samples nothing binds a one-pixel
 //! placeholder instead.
 //!

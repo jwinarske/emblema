@@ -8,10 +8,12 @@
 
 use crate::context::GlesContext;
 use emblema_hal::{
-    Batch, BlendMode, ClipRole, ClipState, Error, Extent2D, PassDescriptor, PixelFormat, Result,
-    Scissor, TextureDescriptor,
+    Batch, BlendMode, ClipRole, ClipState, Error, Extent2D, MaterialVariant, PassDescriptor,
+    PixelFormat, Result, Scissor, ShaderVariant, TextureDescriptor,
 };
+use emblema_shaders::{SolidKinds, SolidVariant};
 use glow::HasContext;
+use std::collections::HashMap;
 
 /// A color texture and, where it is one, the framebuffer that renders into it.
 pub struct GlesTexture {
@@ -71,20 +73,17 @@ const PAINT_BINDING: u32 = 0;
 /// Bytes one draw's paint occupies, before the padding alignment adds.
 const MATERIAL_BYTES: usize = emblema_hal::MATERIAL_FLOATS * 4;
 
-/// The compiled solid-color program and the vertex state it draws with.
+/// The built-in shader's programs and the vertex state they draw with.
 pub(crate) struct SolidProgram {
-    pub(crate) program: glow::Program,
-    /// The same program, allowed to be blended by an advanced equation.
+    /// One program per shader variant and form, linked by the first draw that
+    /// needs it. The form is whether an advanced equation may blend it; see
+    /// `with_advanced_blend` for why that is a second object rather than the
+    /// only one.
     ///
-    /// `None` on a device without the extension. See `with_advanced_blend` for
-    /// why this is a second object rather than the only one.
-    pub(crate) advanced: Option<glow::Program>,
-    /// The sampler the image paint reads.
-    ///
-    /// The translator combines WGSL's separate texture and sampler into one
-    /// GLSL sampler, named for the texture's group and binding, so that name is
-    /// part of the contract rather than an implementation detail.
-    pub(crate) image: Option<glow::UniformLocation>,
+    /// Per variant because linking the whole shader cost about five seconds on
+    /// an RK3566's Mali-G52 with the shader cache empty, and the core variant
+    /// most of a frame draws with about one.
+    pub(crate) programs: HashMap<(SolidVariant, bool), glow::Program>,
     pub(crate) vao: glow::VertexArray,
     pub(crate) vertices: glow::Buffer,
     pub(crate) indices: glow::Buffer,
@@ -276,6 +275,14 @@ impl GlesContext {
         }
         self.capabilities().check_blend_modes(batch)?;
         self.ensure_program()?;
+        for draw in batch.draws() {
+            if draw.material.program().is_none() {
+                self.ensure_variant(
+                    solid_variant(draw.shader_variant()),
+                    draw.blend.is_advanced(),
+                )?;
+            }
+        }
         // Read before the context is borrowed for the draw loop below.
         let blend_barrier = self.blend_barrier();
 
@@ -379,7 +386,6 @@ impl GlesContext {
             }
 
             let program = self.program().expect("ensured above");
-            gl.use_program(Some(program.program));
             gl.bind_vertex_array(Some(program.vao));
 
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(program.vertices));
@@ -436,7 +442,7 @@ impl GlesContext {
             // Which program is bound, tracked like the blend and the scissor:
             // a run of draws sharing one costs a single call, and switching is
             // the direct analog of binding a different pipeline.
-            let mut bound_program: Option<(Option<u32>, bool)> = None;
+            let mut bound_program: Option<(Option<u32>, ShaderVariant, bool)> = None;
             let mut stencil_state: Option<ClipState> = None;
             let mut bound_texture: Option<[Option<u32>; emblema_hal::MAX_EFFECT_TEXTURES]> = None;
             for (index, draw) in batch.draws().iter().enumerate() {
@@ -516,35 +522,41 @@ impl GlesContext {
                         gl.bind_texture(glow::TEXTURE_2D, Some(texture));
                     }
                     gl.active_texture(glow::TEXTURE0);
-                    if let Some(location) = &program.image {
-                        gl.uniform_1_i32(Some(location), 0);
-                    }
                     bound_texture = Some(wanted);
                 }
 
-                // Which program, and which of its two forms. An advanced
-                // equation needs the qualified one; everything else needs the
-                // plain one, which is not the same picture on this driver.
-                let wanted = (draw.material.program(), draw.blend.is_advanced());
+                // Which program, which variant of the built-in one, and which
+                // of its two forms. An advanced equation needs the qualified
+                // form; everything else needs the plain one, which is not the
+                // same picture on this driver.
+                let wanted = (
+                    draw.material.program(),
+                    draw.shader_variant(),
+                    draw.blend.is_advanced(),
+                );
                 if bound_program != Some(wanted) {
-                    let pair =
-                        match wanted.0 {
-                            Some(id) => *self.runtime_programs.get(id as usize).ok_or(
+                    let object = match wanted.0 {
+                        Some(id) => {
+                            let pair = *self.runtime_programs.get(id as usize).ok_or(
                                 Error::Unsupported(
                                     "a draw names a runtime program that was never registered",
                                 ),
-                            )?,
-                            None => (program.program, program.advanced),
-                        };
-                    let object = if wanted.1 {
-                        // Reached only when the capability is on, which is what
-                        // built the second form; submission refused the batch
-                        // otherwise.
-                        pair.1.ok_or(Error::Unsupported(
-                            "an advanced blend mode on a program with no blend-qualified form",
-                        ))?
-                    } else {
-                        pair.0
+                            )?;
+                            if wanted.2 {
+                                // Reached only when the capability is on, which
+                                // is what built the second form; submission
+                                // refused the batch otherwise.
+                                pair.1.ok_or(Error::Unsupported(
+                                    "an advanced blend mode on a program with no blend-qualified form",
+                                ))?
+                            } else {
+                                pair.0
+                            }
+                        }
+                        None => *program
+                            .programs
+                            .get(&(solid_variant(wanted.1), wanted.2))
+                            .expect("ensured above"),
                     };
                     gl.use_program(Some(object));
                     bound_program = Some(wanted);
@@ -805,24 +817,66 @@ impl GlesContext {
         }
     }
 
-    /// Link the program every draw uses, before any draw asks for it.
+    /// Link the program most draws use, before any draw asks for it: the
+    /// core variant ([`ShaderVariant::CORE`]: solid colors, gradients and
+    /// glyphs) in its plain form. Every other variant and the form an advanced
+    /// blend needs are linked by the first draw that uses them.
     ///
-    /// The format and sample count make no difference here: this backend
-    /// draws with one program and sets blending and multisampling as state,
-    /// so there is one thing to build ahead whatever a frame turns out to be.
-    /// They are taken so a caller states the same intent to either backend.
+    /// The format and sample count make no difference here: this backend sets
+    /// blending and multisampling as state, so a program serves every format
+    /// and count. They are taken so a caller states the same intent to either
+    /// backend.
     pub fn prepare_pipelines(&mut self, _format: PixelFormat, _samples: u32) -> Result<()> {
-        self.ensure_program()
+        self.ensure_program()?;
+        self.ensure_variant(solid_variant(ShaderVariant::CORE), false)
     }
 
+    /// The buffers and vertex state every built-in program draws with.
     fn ensure_program(&mut self) -> Result<()> {
         if self.program().is_some() {
             return Ok(());
         }
-        let advanced = self.capabilities().advanced_blend;
-        let built = build_program(self.raw_gl(), advanced)?;
+        let built = build_solid_state(self.raw_gl())?;
         self.set_program(built);
         Ok(())
+    }
+
+    /// One variant of the built-in program, in the form `advanced` names.
+    fn ensure_variant(&mut self, variant: SolidVariant, advanced: bool) -> Result<()> {
+        let key = (variant, advanced);
+        if self
+            .program()
+            .expect("ensured before any variant")
+            .programs
+            .contains_key(&key)
+        {
+            return Ok(());
+        }
+        let linked = build_solid_program(self.raw_gl(), variant, advanced)?;
+        self.program_mut()
+            .expect("ensured before any variant")
+            .programs
+            .insert(key, linked);
+        Ok(())
+    }
+}
+
+/// The translation of the built-in shader that carries a variant's parts.
+///
+/// A caller's program does not reach here: it replaces the built-in fragment
+/// stage, so no variant of it is linked for one.
+fn solid_variant(variant: ShaderVariant) -> SolidVariant {
+    let kinds = match variant.material {
+        MaterialVariant::Core | MaterialVariant::Runtime => SolidKinds::Core,
+        MaterialVariant::Image => SolidKinds::Images,
+        MaterialVariant::Mesh => SolidKinds::Meshes,
+        MaterialVariant::Shape => SolidKinds::Shapes,
+        MaterialVariant::Pass => SolidKinds::Passes,
+    };
+    SolidVariant {
+        kinds,
+        filters: variant.filters,
+        tint_blends: variant.tint_blends,
     }
 }
 
@@ -1172,6 +1226,68 @@ pub(crate) fn build_runtime_program(
     fragment: &str,
     advanced_blend: bool,
 ) -> Result<glow::Program> {
+    // A caller's source rather than this project's, so the log is the whole of
+    // what they have to go on.
+    let program = link(gl, fragment, advanced_blend, "a runtime program")?;
+    // Each sampler the program declares, pointed at the texture unit this
+    // backend binds that image to. Set once here rather than per draw because
+    // a sampler's value is program state and survives being unbound -- and
+    // because it has to be set at all: GLES defaults every sampler to unit
+    // zero, so a program declaring two would read one texture twice and look
+    // like a binding that never happened.
+    // SAFETY: a context is current, and the program was linked by it.
+    unsafe {
+        gl.use_program(Some(program));
+        for index in 0..emblema_hal::MAX_EFFECT_TEXTURES {
+            if let Some(location) = gl.get_uniform_location(program, &sampler_name(index)) {
+                gl.uniform_1_i32(Some(&location), index as i32);
+            }
+        }
+        gl.use_program(None);
+    }
+    Ok(program)
+}
+
+/// One variant of the built-in program, plain or qualified for an advanced
+/// blend.
+fn build_solid_program(
+    gl: &glow::Context,
+    variant: SolidVariant,
+    advanced_blend: bool,
+) -> Result<glow::Program> {
+    // A failure here means the translated source is wrong, which is a
+    // build-time problem surfacing at runtime; the log is the only way to tell
+    // which line.
+    let program = link(
+        gl,
+        variant.fragment_glsl(),
+        advanced_blend,
+        "the built-in shader",
+    )?;
+    // The sampler the image paint reads, on unit zero. The translator combines
+    // WGSL's separate texture and sampler into one GLSL sampler, named for the
+    // texture's group and binding, so that name is part of the contract rather
+    // than an implementation detail. A variant that samples nothing has none.
+    // SAFETY: a context is current, and the program was linked by it.
+    unsafe {
+        if let Some(location) = gl.get_uniform_location(program, "_group_0_binding_0_fs") {
+            gl.use_program(Some(program));
+            gl.uniform_1_i32(Some(&location), 0);
+            gl.use_program(None);
+        }
+    }
+    Ok(program)
+}
+
+/// Compile this renderer's vertex stage and `fragment`, link them, and point
+/// the paint's block at the binding every program shares. `what` names the
+/// fragment's source in an error.
+fn link(
+    gl: &glow::Context,
+    fragment: &str,
+    advanced_blend: bool,
+    what: &str,
+) -> Result<glow::Program> {
     let qualified;
     let fragment = if advanced_blend {
         qualified = with_advanced_blend(fragment)?;
@@ -1203,11 +1319,9 @@ pub(crate) fn build_runtime_program(
                 let log = gl.get_shader_info_log(shader);
                 gl.delete_shader(shader);
                 cleanup(gl, program, &shaders);
-                // A caller's source rather than this project's, so the log is
-                // the whole of what they have to go on.
                 return Err(Error::Backend {
                     backend: "gles",
-                    detail: format!("a runtime program failed to compile: {log}"),
+                    detail: format!("{what} failed to compile: {log}"),
                 });
             }
             gl.attach_shader(program, shader);
@@ -1219,86 +1333,7 @@ pub(crate) fn build_runtime_program(
             cleanup(gl, program, &shaders);
             return Err(Error::Backend {
                 backend: "gles",
-                detail: format!("a runtime program failed to link: {log}"),
-            });
-        }
-        for shader in &shaders {
-            gl.detach_shader(program, *shader);
-            gl.delete_shader(*shader);
-        }
-        // The paint's block, at the same binding point the built-in program
-        // uses, so one buffer feeds both.
-        let block = gl
-            .get_uniform_block_index(program, PAINT_BLOCK)
-            .ok_or(Error::Backend {
-                backend: "gles",
-                detail: format!("a runtime program has no {PAINT_BLOCK} uniform block"),
-            })?;
-        gl.uniform_block_binding(program, block, PAINT_BINDING);
-
-        // Each sampler the program declares, pointed at the texture unit this
-        // backend binds that image to. Set once here rather than per draw
-        // because a sampler's value is program state and survives being
-        // unbound -- and because it has to be set at all: GLES defaults every
-        // sampler to unit zero, so a program declaring two would read one
-        // texture twice and look like a binding that never happened.
-        gl.use_program(Some(program));
-        for index in 0..emblema_hal::MAX_EFFECT_TEXTURES {
-            if let Some(location) = gl.get_uniform_location(program, &sampler_name(index)) {
-                gl.uniform_1_i32(Some(&location), index as i32);
-            }
-        }
-        gl.use_program(None);
-        Ok(program)
-    }
-}
-
-fn build_program(gl: &glow::Context, advanced_blend: bool) -> Result<SolidProgram> {
-    let fragment = emblema_shaders::SOLID_FS_GLSL.to_owned();
-    // SAFETY: a context is current; every object is deleted on the failure
-    // paths below.
-    unsafe {
-        let program = gl
-            .create_program()
-            .map_err(|e| gl_err("create_program", &e))?;
-
-        let mut shaders = Vec::new();
-        for (stage, source) in [
-            (glow::VERTEX_SHADER, emblema_shaders::SOLID_VS_GLSL),
-            (glow::FRAGMENT_SHADER, fragment.as_str()),
-        ] {
-            let shader = match gl.create_shader(stage) {
-                Ok(s) => s,
-                Err(e) => {
-                    cleanup(gl, program, &shaders);
-                    return Err(gl_err("create_shader", &e));
-                }
-            };
-            gl.shader_source(shader, source);
-            gl.compile_shader(shader);
-            if !gl.get_shader_compile_status(shader) {
-                let log = gl.get_shader_info_log(shader);
-                gl.delete_shader(shader);
-                cleanup(gl, program, &shaders);
-                // A compile failure means the translated source is wrong, which
-                // is a build-time problem surfacing at runtime; the log is the
-                // only way to tell which line.
-                return Err(Error::Backend {
-                    backend: "gles",
-                    detail: format!("shader compilation failed: {log}"),
-                });
-            }
-            gl.attach_shader(program, shader);
-            shaders.push(shader);
-        }
-
-        gl.link_program(program);
-        if !gl.get_program_link_status(program) {
-            let log = gl.get_program_info_log(program);
-            cleanup(gl, program, &shaders);
-            return Err(Error::Backend {
-                backend: "gles",
-                detail: format!("program link failed: {log}"),
+                detail: format!("{what} failed to link: {log}"),
             });
         }
         for shader in &shaders {
@@ -1315,57 +1350,54 @@ fn build_program(gl: &glow::Context, advanced_blend: bool) -> Result<SolidProgra
         // A missing block is an error rather than an optional location: every
         // draw reads a paint, so a program without one would draw whatever
         // uninitialized memory happened to be bound.
-        let block = gl
-            .get_uniform_block_index(program, PAINT_BLOCK)
-            .ok_or(Error::Backend {
+        let Some(block) = gl.get_uniform_block_index(program, PAINT_BLOCK) else {
+            gl.delete_program(program);
+            return Err(Error::Backend {
                 backend: "gles",
-                detail: format!("the compiled program has no {PAINT_BLOCK} uniform block"),
-            })?;
+                detail: format!("{what} has no {PAINT_BLOCK} uniform block"),
+            });
+        };
         gl.uniform_block_binding(program, block, PAINT_BINDING);
+        Ok(program)
+    }
+}
 
-        // Naga names a combined sampler after the texture's group and binding
-        // rather than after the WGSL variable, so this is the generated name
-        // and not `image_texture`.
-        let image = gl.get_uniform_location(program, "_group_0_binding_0_fs");
-
+/// The vertex array and buffers every built-in program draws with. The
+/// programs themselves are linked per variant, by the first draw that needs
+/// each.
+fn build_solid_state(gl: &glow::Context) -> Result<SolidProgram> {
+    // SAFETY: a context is current; every object is deleted on the failure
+    // paths below.
+    unsafe {
         let vao = gl
             .create_vertex_array()
             .map_err(|e| gl_err("create_vertex_array", &e))?;
-        let vertices = gl
-            .create_buffer()
-            .map_err(|e| gl_err("create_buffer", &e))?;
-        let indices = gl
-            .create_buffer()
-            .map_err(|e| gl_err("create_buffer", &e))?;
-
-        let paints = gl
-            .create_buffer()
-            .map_err(|e| gl_err("create_buffer", &e))?;
-        // Queried once with the program rather than per submission: it is a
-        // property of the implementation and cannot change under a context.
+        let buffers = (|| {
+            Ok::<_, Error>((
+                gl.create_buffer()
+                    .map_err(|e| gl_err("create_buffer", &e))?,
+                gl.create_buffer()
+                    .map_err(|e| gl_err("create_buffer", &e))?,
+                gl.create_buffer()
+                    .map_err(|e| gl_err("create_buffer", &e))?,
+            ))
+        })();
+        let (vertices, indices, paints) = match buffers {
+            Ok(b) => b,
+            Err(e) => {
+                gl.delete_vertex_array(vao);
+                return Err(e);
+            }
+        };
+        // Queried once rather than per submission: it is a property of the
+        // implementation and cannot change under a context.
         let alignment = (gl
             .get_parameter_i32(glow::UNIFORM_BUFFER_OFFSET_ALIGNMENT)
             .max(1)) as usize;
         let paint_stride = MATERIAL_BYTES.div_ceil(alignment) * alignment;
 
-        // The second form, built here so that an advanced blend costs a
-        // program switch rather than a compile. It shares the vertex stage and
-        // every buffer with the first; only the fragment source differs, by the
-        // two lines `with_advanced_blend` inserts.
-        let advanced = if advanced_blend {
-            Some(build_runtime_program(
-                gl,
-                emblema_shaders::SOLID_FS_GLSL,
-                true,
-            )?)
-        } else {
-            None
-        };
-
         Ok(SolidProgram {
-            program,
-            advanced,
-            image,
+            programs: HashMap::new(),
             vao,
             vertices,
             indices,

@@ -9,8 +9,8 @@ use crate::device::VulkanContext;
 use crate::resource::{backend_err, transition, vk_format, VulkanTexture};
 use ash::vk;
 use emblema_hal::{
-    Batch, BlendMode, ClipRole, Error, Extent2D, PassDescriptor, PixelFormat, Result,
-    TextureDescriptor, TextureUsage,
+    Batch, BlendMode, ClipRole, Error, Extent2D, MaterialVariant, PassDescriptor, PixelFormat,
+    Result, ShaderVariant, TextureDescriptor, TextureUsage,
 };
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
@@ -66,6 +66,30 @@ pub(crate) struct PipelineKey {
     /// so a clip stack of any depth costs three pipelines rather than three per
     /// level. Only the operation differs between them, and that is baked in.
     pub(crate) role: ClipRole,
+    /// Which parts of the built-in shader this pipeline compiles. A draw with
+    /// a program of its own asks for the same one whatever its paint, since
+    /// only the vertex stage is taken from it.
+    pub(crate) shader: ShaderVariant,
+}
+
+/// The translation of the built-in shader that carries a variant's parts.
+///
+/// A caller's program keeps only the vertex stage, which every variant shares,
+/// so it takes the smallest.
+pub(crate) fn solid_variant(variant: ShaderVariant) -> emblema_shaders::SolidVariant {
+    use emblema_shaders::SolidKinds;
+    let kinds = match variant.material {
+        MaterialVariant::Core | MaterialVariant::Runtime => SolidKinds::Core,
+        MaterialVariant::Image => SolidKinds::Images,
+        MaterialVariant::Mesh => SolidKinds::Meshes,
+        MaterialVariant::Shape => SolidKinds::Shapes,
+        MaterialVariant::Pass => SolidKinds::Passes,
+    };
+    emblema_shaders::SolidVariant {
+        kinds,
+        filters: variant.filters,
+        tint_blends: variant.tint_blends,
+    }
 }
 
 /// Cached pipeline objects, built on demand and held for the context's life.
@@ -117,18 +141,19 @@ impl VulkanContext {
     /// asks for them.
     ///
     /// A pipeline is otherwise built by the first draw that needs it, and on
-    /// some drivers that is where the shader is compiled: 1.8 seconds a sample
-    /// count on a Raspberry Pi 5's V3D with Mesa's shader cache empty, inside
-    /// whichever frame happens to be first. Calling this when the context is
-    /// made moves that cost to a moment the caller chooses -- a thread of its
-    /// own, while the rest of its startup runs -- as upstream builds its
-    /// pipelines when its context is created.
+    /// some drivers that is where the shader is compiled, inside whichever
+    /// frame happens to be first. Calling this when the context is made moves
+    /// that cost to a moment the caller chooses -- a thread of its own, while
+    /// the rest of its startup runs -- as upstream builds its pipelines when
+    /// its context is created.
     ///
-    /// What is built is the source-over pipeline at one sample and at
-    /// `samples`, with no stencil and in each role a clip gives it: the ones a
-    /// frame draws first, and the ones that compile the shader at each sample
-    /// count. Every other blend mode is left to its first use. A driver that
-    /// compiles once per sample count builds those in microseconds once these
+    /// What is built is the source-over pipeline with the core shader variant
+    /// ([`ShaderVariant::CORE`]: solid colors, gradients and glyphs) at one
+    /// sample and at `samples`, with no stencil and in each role a clip gives
+    /// it: the ones a frame draws first, and the ones that compile that
+    /// variant at each sample count. Every other blend mode and variant is
+    /// left to its first use. A driver that compiles once per variant and
+    /// sample count builds the other blend modes in microseconds once these
     /// exist; one that compiles every pipeline afresh, lavapipe at about 26 ms
     /// each, would pay seconds for all of them on every start, for modes most
     /// frames never use.
@@ -171,6 +196,7 @@ impl VulkanContext {
                             stencil,
                             program: None,
                             role,
+                            shader: ShaderVariant::CORE,
                         },
                         render_pass,
                     )?;
@@ -279,6 +305,7 @@ impl VulkanContext {
                     format,
                     program: draw.material.program(),
                     blend: draw.blend,
+                    shader: draw.shader_variant(),
                     samples: pass.samples,
                     stencil: stencil_format,
                     role: draw.stencil.role,
@@ -490,6 +517,7 @@ impl VulkanContext {
                             format,
                             program: draw.material.program(),
                             blend: draw.blend,
+                            shader: draw.shader_variant(),
                             samples: pass.samples,
                             stencil: stencil_format,
                             role: draw.stencil.role,
@@ -652,6 +680,7 @@ impl VulkanContext {
                     format,
                     program: draw.material.program(),
                     blend: draw.blend,
+                    shader: draw.shader_variant(),
                     samples: 1,
                     stencil: stencil_format,
                     role: draw.stencil.role,
@@ -784,6 +813,7 @@ impl VulkanContext {
                         format,
                         program: draw.material.program(),
                         blend: draw.blend,
+                        shader: draw.shader_variant(),
                         samples: 1,
                         stencil: stencil_format,
                         role: draw.stencil.role,
@@ -1200,7 +1230,7 @@ fn build_pipeline(
     // replaces what a fragment does with a paint, not how geometry reaches
     // clip space, and letting it replace the latter would mean every effect
     // restating a convention it has no reason to know.
-    let module_info = vk::ShaderModuleCreateInfo::default().code(emblema_shaders::SOLID_SPV);
+    let module_info = vk::ShaderModuleCreateInfo::default().code(solid_variant(key.shader).spirv());
     let module = unsafe { device.create_shader_module(&module_info, None) }
         .map_err(|e| backend_err("create_shader_module", e))?;
     let fragment_module = match fragment {
