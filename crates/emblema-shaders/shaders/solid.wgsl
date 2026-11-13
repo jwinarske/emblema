@@ -75,11 +75,39 @@ struct Paint {
 @group(1) @binding(0) var<uniform> paint: Paint;
 
 // One texture per draw. Always bound, even for a paint that does not sample it:
-// the alternative is a pipeline variant per material kind, and a binding a
-// pipeline declares but no draw supplies is invalid however unreachable the
-// branch that would have read it.
+// every pipeline is built against one layout, whichever of the parts below it
+// was built with, and a binding a pipeline declares but no draw supplies is
+// invalid however unreachable the branch that would have read it.
 @group(0) @binding(0) var image_texture: texture_2d<f32>;
 @group(0) @binding(1) var image_sampler: sampler;
+
+// Which of this shader's optional parts a pipeline is built with. Each draw
+// asks for the set its material, filter and tint blend need, and the build
+// step emits one translation per set with the rest taken out, so a driver
+// compiles only what a pipeline can reach.
+//
+// One shader holding every part cost a driver seconds with its shader cache
+// empty: 1.8 a compile on a Raspberry Pi 5's V3D and about 5 on an RK3566's
+// Mali-G52, under Vulkan or GLES, against 40 to 220 ms for a solid color, the
+// gradients and glyphs alone. V3D retries register allocation at fewer
+// threads and with optimizations off, so its cost was the whole shader
+// compiled four times.
+//
+// Every one defaults to true, which is the whole shader: the form the tests
+// read and the one nothing has to choose for. The images, meshes, shapes and
+// passes parts are exclusive in practice, since a draw has one material, and
+// no set the renderer asks for turns on more than one of them.
+override IMAGES: bool = true;
+override MESHES: bool = true;
+// Rounded rectangles, ellipses, a rounded rectangle's blur, point fields and
+// shadow meshes.
+override SHAPES: bool = true;
+// A blur or a morphology pass.
+override PASSES: bool = true;
+// A color filter, any but none.
+override FILTERS: bool = true;
+// A tint blend other than `Modulate`.
+override TINT_BLENDS: bool = true;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -1373,17 +1401,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // does not enter that function at all: it carries twenty-nine modes and the
     // non-separable tail behind them, and every fragment of every draw was
     // going through it to arrive at one multiply.
-    var tinted: vec4<f32>;
-    if (tint_mode == 13) {
-        tinted = in.tint * shaded;
-    } else {
-        tinted = blend_tint(tint_mode, shaded, in.tint);
+    var tinted = in.tint * shaded;
+    if (TINT_BLENDS) {
+        if (tint_mode != 13) {
+            tinted = blend_tint(tint_mode, shaded, in.tint);
+        }
     }
     // Faded after the blend and before the filter, as upstream's atlas and
     // vertices contents fade by the paint's alpha. One for a draw without a
     // color of its own; the paint's opacity is in its material then.
     tinted = tinted * paint.filter_params.w;
-    return dithered(filtered(tinted), in.position.xy);
+    if (FILTERS) {
+        tinted = filtered(tinted);
+    }
+    return dithered(tinted, in.position.xy);
 }
 
 /// The color this paint produces, premultiplied, before any filter.
@@ -1515,9 +1546,14 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // sweep arm tests only a lower bound and would otherwise claim this kind
     // as well. Returned directly, since a sampled texel is premultiplied
     // already and the conversion below would apply alpha a second time.
+    //
+    // Each arm past the core is behind the part that carries it. A pipeline
+    // built without that part is never given a draw of its kind, so the
+    // fall-through to a solid color below is unreachable rather than a
+    // fallback.
     switch i32(kind + 0.5) {
         // 4
-        case 4: { return sample_image(in.clip); }
+        case 4: { if (IMAGES) { return sample_image(in.clip); } }
         // 7, 8 -- the analytic shape fields
         // The one arm that takes its space from the vertex when asked. A
         // rounded rectangle carried its clip-to-local mapping in the material,
@@ -1525,20 +1561,20 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         // cost a draw each; the mapping rides on `uv` instead when
         // `geometry.x` says so, and then they merge. The select is on this arm
         // rather than hoisted, so every other material still runs it no times.
-        case 7: { return rounded_rect_coverage(rounded_rect_space(in)); }
-        case 8: { return ellipse_coverage(in.clip); }
-        case 12: { return rrect_blur_coverage(in.clip); }
-        case 13: { return point_field_coverage(in.uv); }
-        case 14: { return shadow_mesh_color(in.uv); }
+        case 7: { if (SHAPES) { return rounded_rect_coverage(rounded_rect_space(in)); } }
+        case 8: { if (SHAPES) { return ellipse_coverage(in.clip); } }
+        case 12: { if (SHAPES) { return rrect_blur_coverage(in.clip); } }
+        case 13: { if (SHAPES) { return point_field_coverage(in.uv); } }
+        case 14: { if (SHAPES) { return shadow_mesh_color(in.uv); } }
         // Already premultiplied, like anything else sampled from a target, and
         // a weighted average of premultiplied colors is premultiplied.
-        case 6: { return blur_along_axis(in.clip); }
+        case 6: { if (PASSES) { return blur_along_axis(in.clip); } }
         // Premultiplied for the same reason, and an extremum of premultiplied
         // colors taken channel by channel is one too: no channel can come out
         // above an alpha that no sample had.
-        case 11: { return morphology_along_axis(in.clip); }
+        case 11: { if (PASSES) { return morphology_along_axis(in.clip); } }
         // Already premultiplied, like anything else sampled from a texture.
-        case 10: { return sample_mesh(in.uv); }
+        case 10: { if (MESHES) { return sample_mesh(in.uv); } }
         default: {}
     }
     // Every one of these is bounded on both sides, so each arm claims its own

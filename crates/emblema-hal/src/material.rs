@@ -1712,23 +1712,75 @@ impl Material {
         }
     }
 
-    /// Which shader variant this needs, for keying a pipeline.
+    /// Which of the built-in shader's material arms this draws with.
     ///
-    /// Every variant lives in one program today, selected by a uniform, so this
-    /// exists for the moment a material needs its own pipeline rather than
-    /// pretending that moment has arrived.
+    /// A pipeline is built with the arm its draws need and no other, so a
+    /// driver compiles a fraction of the shader for each; see
+    /// [`ShaderVariant`]. Exhaustive on purpose: a new material has to say
+    /// where it is drawn, and the shader has to guard its arm by the same part.
     pub fn variant(&self) -> MaterialVariant {
         match self {
-            Self::Solid(_) => MaterialVariant::Solid,
-            _ => MaterialVariant::Gradient,
+            Self::Solid(_)
+            | Self::VertexGradient
+            | Self::LinearGradient { .. }
+            | Self::RadialGradient { .. }
+            | Self::SweepGradient { .. }
+            | Self::ConicalGradient { .. }
+            | Self::Glyph { .. } => MaterialVariant::Core,
+            Self::Image { .. } => MaterialVariant::Image,
+            Self::Mesh { .. } => MaterialVariant::Mesh,
+            Self::RoundedRect { .. }
+            | Self::RoundedRectBlur { .. }
+            | Self::Ellipse { .. }
+            | Self::PointField { .. }
+            | Self::ShadowMesh { .. } => MaterialVariant::Shape,
+            Self::Blur { .. } | Self::Morphology { .. } => MaterialVariant::Pass,
+            Self::Runtime { .. } => MaterialVariant::Runtime,
         }
     }
 }
 
+/// Which arm of the built-in shader a material is drawn by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialVariant {
-    Solid,
-    Gradient,
+    /// A solid color, a gradient or a glyph: what every variant carries.
+    Core,
+    Image,
+    Mesh,
+    /// Rounded rectangles, ellipses, a rounded rectangle's blur, point fields
+    /// and shadow meshes.
+    Shape,
+    /// A blur or a morphology pass.
+    Pass,
+    /// A caller's program, which replaces the built-in fragment stage.
+    Runtime,
+}
+
+/// The parts of the built-in shader one draw needs: its material's arm, and
+/// whether it filters its color and blends its tint by a mode other than
+/// `Modulate`.
+///
+/// A backend builds a pipeline per variant. The shader holding every part cost
+/// seconds to compile on some drivers with their caches empty -- 1.8 on a
+/// Raspberry Pi 5's V3D, about 5 on an RK3566's Mali-G52 -- and a frame of
+/// solid colors, gradients and text needs a variant that compiles in tens of
+/// milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderVariant {
+    pub material: MaterialVariant,
+    pub filters: bool,
+    pub tint_blends: bool,
+}
+
+impl ShaderVariant {
+    /// A solid color, a gradient or a glyph, unfiltered and tinted by
+    /// `Modulate`: what most of a frame draws with, and what a backend
+    /// prepares ahead of the first frame.
+    pub const CORE: ShaderVariant = ShaderVariant {
+        material: MaterialVariant::Core,
+        filters: false,
+        tint_blends: false,
+    };
 }
 
 #[cfg(test)]
@@ -2078,10 +2130,10 @@ mod tests {
     }
 
     #[test]
-    fn every_gradient_kind_reports_the_same_variant() {
-        // They share one program, selected by a uniform, so keying a pipeline
-        // on the kind would create three identical pipelines.
-        assert_eq!(Material::solid([0.0; 4]).variant(), MaterialVariant::Solid);
+    fn a_solid_color_and_every_gradient_report_the_core_variant() {
+        // They share the core of the shader, selected by a uniform, so keying
+        // a pipeline on the kind would create identical pipelines.
+        assert_eq!(Material::solid([0.0; 4]).variant(), MaterialVariant::Core);
         for material in [
             Material::LinearGradient {
                 axis: [1.0, 0.0],
@@ -2097,7 +2149,7 @@ mod tests {
                 ramp: None,
             },
         ] {
-            assert_eq!(material.variant(), MaterialVariant::Gradient);
+            assert_eq!(material.variant(), MaterialVariant::Core);
         }
     }
 }

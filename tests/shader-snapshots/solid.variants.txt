@@ -1,0 +1,60 @@
+SolidVariant { kinds: Core, filters: false, tint_blends: false }
+  spirv 3383 words, fnv1a fc68425c5ed05f86
+  glsl  2433 words, fnv1a af08ddf67b365979
+SolidVariant { kinds: Core, filters: false, tint_blends: true }
+  spirv 5420 words, fnv1a 1d28f63ef0b31c0f
+  glsl  4040 words, fnv1a 591e9cdb822a2250
+SolidVariant { kinds: Core, filters: true, tint_blends: false }
+  spirv 6187 words, fnv1a 993a2c47aa86a442
+  glsl  4651 words, fnv1a 3968aaee4f25cf25
+SolidVariant { kinds: Core, filters: true, tint_blends: true }
+  spirv 6224 words, fnv1a 4103e6f6f481cc62
+  glsl  4684 words, fnv1a ae0d7bbbd9dc6163
+SolidVariant { kinds: Images, filters: false, tint_blends: false }
+  spirv 5051 words, fnv1a 672c89169ef096d5
+  glsl  3792 words, fnv1a 750d9f0c049e069d
+SolidVariant { kinds: Images, filters: false, tint_blends: true }
+  spirv 7066 words, fnv1a 641d67204eebf4b8
+  glsl  5402 words, fnv1a 4eaaa3af3f41cc56
+SolidVariant { kinds: Images, filters: true, tint_blends: false }
+  spirv 7833 words, fnv1a fc83684dfcb935e8
+  glsl  6013 words, fnv1a 37d728c09b0060bd
+SolidVariant { kinds: Images, filters: true, tint_blends: true }
+  spirv 7870 words, fnv1a 26fa21fda7cbc638
+  glsl  6046 words, fnv1a ca9e750753d84839
+SolidVariant { kinds: Meshes, filters: false, tint_blends: false }
+  spirv 4845 words, fnv1a 0570282142fbb739
+  glsl  3622 words, fnv1a b5e4e8de74010e76
+SolidVariant { kinds: Meshes, filters: false, tint_blends: true }
+  spirv 6860 words, fnv1a 978ba91ba6f7a24a
+  glsl  5233 words, fnv1a f09127d21a0ff79c
+SolidVariant { kinds: Meshes, filters: true, tint_blends: false }
+  spirv 7627 words, fnv1a 1e0827e409d95685
+  glsl  5844 words, fnv1a 624f1107640b9a65
+SolidVariant { kinds: Meshes, filters: true, tint_blends: true }
+  spirv 7664 words, fnv1a f6059094e2bfc11a
+  glsl  5877 words, fnv1a fb1008a75c106c93
+SolidVariant { kinds: Shapes, filters: false, tint_blends: false }
+  spirv 5142 words, fnv1a 44c5f165d0e44801
+  glsl  3858 words, fnv1a b1002bd79737dc73
+SolidVariant { kinds: Shapes, filters: false, tint_blends: true }
+  spirv 7175 words, fnv1a 48297867e95de0f4
+  glsl  5465 words, fnv1a cfdee1e95669f452
+SolidVariant { kinds: Shapes, filters: true, tint_blends: false }
+  spirv 7942 words, fnv1a 6613e46752914fb8
+  glsl  6074 words, fnv1a 4cd7cdd27dcb1a8c
+SolidVariant { kinds: Shapes, filters: true, tint_blends: true }
+  spirv 7979 words, fnv1a f0f4620a391e73a1
+  glsl  6107 words, fnv1a 170221ac03739fdc
+SolidVariant { kinds: Passes, filters: false, tint_blends: false }
+  spirv 4131 words, fnv1a ec0e88227ccb2a36
+  glsl  3087 words, fnv1a a19f7b6f195dbc84
+SolidVariant { kinds: Passes, filters: false, tint_blends: true }
+  spirv 6161 words, fnv1a de0b486406c52ba5
+  glsl  4694 words, fnv1a 97e1a2905a92213b
+SolidVariant { kinds: Passes, filters: true, tint_blends: false }
+  spirv 6928 words, fnv1a 06f3f6458ba04786
+  glsl  5305 words, fnv1a aaae892dfab3180c
+SolidVariant { kinds: Passes, filters: true, tint_blends: true }
+  spirv 6965 words, fnv1a 0b03f746bc44854a
+  glsl  5338 words, fnv1a 9bd61e98a41eebda

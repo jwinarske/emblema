@@ -19,6 +19,13 @@ struct VertexOutput {
     vec2 uv;
     vec4 tint;
 };
+const bool IMAGES = true;
+const bool MESHES = true;
+const bool SHAPES = true;
+const bool PASSES = true;
+const bool FILTERS = true;
+const bool TINT_BLENDS = true;
+
 layout(location = 0) in vec3 _p2vs_location0;
 layout(location = 1) in vec2 _p2vs_location1;
 layout(location = 2) in vec4 _p2vs_location2;
@@ -43,15 +50,10 @@ vec2 tile_gradient(float t_1, float tile) {
 float cubic_weight(float x) {
     float t_5 = abs(x);
     if ((t_5 < 1.0)) {
-        float cubic_1 = ((12.0 - (9.0 * 0.33333334)) - (6.0 * 0.33333334));
-        float square = ((-18.0 + (12.0 * 0.33333334)) + (6.0 * 0.33333334));
-        return ((((((cubic_1 * t_5) + square) * t_5) * t_5) + (6.0 - (2.0 * 0.33333334))) / 6.0);
+        return ((((((7.0 * t_5) + -12.0) * t_5) * t_5) + 5.3333335) / 6.0);
     }
     if ((t_5 < 2.0)) {
-        float cubic_2 = (-(0.33333334) - (6.0 * 0.33333334));
-        float square_1 = ((6.0 * 0.33333334) + (30.0 * 0.33333334));
-        float linear = ((-12.0 * 0.33333334) - (48.0 * 0.33333334));
-        return (((((((cubic_2 * t_5) + square_1) * t_5) + linear) * t_5) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
+        return (((((((-2.3333333 * t_5) + 12.0) * t_5) + -20.0) * t_5) + 10.666667) / 6.0);
     }
     return 0.0;
 }

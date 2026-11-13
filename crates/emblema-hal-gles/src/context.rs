@@ -572,6 +572,10 @@ impl GlesContext {
         self.program = Some(program);
     }
 
+    pub(crate) fn program_mut(&mut self) -> Option<&mut crate::render::SolidProgram> {
+        self.program.as_mut()
+    }
+
     /// The EGL entry points, display, context and config.
     ///
     /// Handed out for a presentation target to build a surface with. Grouped
@@ -633,9 +637,8 @@ impl Drop for GlesContext {
             // SAFETY: the context is still current here, and nothing else holds
             // these objects.
             unsafe {
-                self.gl.delete_program(program.program);
-                if let Some(advanced) = program.advanced {
-                    self.gl.delete_program(advanced);
+                for linked in program.programs.values() {
+                    self.gl.delete_program(*linked);
                 }
                 self.gl.delete_vertex_array(program.vao);
                 self.gl.delete_buffer(program.vertices);

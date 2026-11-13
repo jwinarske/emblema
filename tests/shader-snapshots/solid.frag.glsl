@@ -19,6 +19,13 @@ struct VertexOutput {
     vec2 uv;
     vec4 tint;
 };
+const bool IMAGES = true;
+const bool MESHES = true;
+const bool SHAPES = true;
+const bool PASSES = true;
+const bool FILTERS = true;
+const bool TINT_BLENDS = true;
+
 layout(std140) uniform Paint_block_0Fragment { Paint _group_1_binding_0_fs; };
 
 uniform highp sampler2D _group_0_binding_0_fs;
@@ -130,15 +137,10 @@ vec2 snapped(vec2 coord) {
 float cubic_weight(float x) {
     float t_5 = abs(x);
     if ((t_5 < 1.0)) {
-        float cubic_1 = ((12.0 - (9.0 * 0.33333334)) - (6.0 * 0.33333334));
-        float square = ((-18.0 + (12.0 * 0.33333334)) + (6.0 * 0.33333334));
-        return ((((((cubic_1 * t_5) + square) * t_5) * t_5) + (6.0 - (2.0 * 0.33333334))) / 6.0);
+        return ((((((7.0 * t_5) + -12.0) * t_5) * t_5) + 5.3333335) / 6.0);
     }
     if ((t_5 < 2.0)) {
-        float cubic_2 = (-(0.33333334) - (6.0 * 0.33333334));
-        float square_1 = ((6.0 * 0.33333334) + (30.0 * 0.33333334));
-        float linear = ((-12.0 * 0.33333334) - (48.0 * 0.33333334));
-        return (((((((cubic_2 * t_5) + square_1) * t_5) + linear) * t_5) + ((8.0 * 0.33333334) + (24.0 * 0.33333334))) / 6.0);
+        return (((((((-2.3333333 * t_5) + 12.0) * t_5) + -20.0) * t_5) + 10.666667) / 6.0);
     }
     return 0.0;
 }
@@ -862,7 +864,7 @@ vec4 shade(VertexOutput in_3) {
                 float start_angle = _group_1_binding_0_fs.geometry.z;
                 float _e78 = _group_1_binding_0_fs.geometry.w;
                 float sweep = max((_e78 - start_angle), 1e-6);
-                float angle = (atan(-(_e70.y), -(_e70.x)) + (6.2831855 * 0.5));
+                float angle = (atan(-(_e70.y), -(_e70.x)) + 3.1415927);
                 float _e96 = _group_1_binding_0_fs.params.z;
                 vec2 _e97 = tile_gradient(((angle - start_angle) / sweep), _e96);
                 vec4 _e99 = gradient_color(_e97.x, count_2);
@@ -914,57 +916,84 @@ vec4 shade(VertexOutput in_3) {
     }
     switch(int((kind_1 + 0.5))) {
         case 4: {
-            vec4 _e197 = sample_image(in_3.clip);
-            return _e197;
+            if (IMAGES) {
+                vec4 _e198 = sample_image(in_3.clip);
+                return _e198;
+            }
+            break;
         }
         case 7: {
-            vec3 _e198 = rounded_rect_space(in_3);
-            vec4 _e199 = rounded_rect_coverage(_e198);
-            return _e199;
+            if (SHAPES) {
+                vec3 _e200 = rounded_rect_space(in_3);
+                vec4 _e201 = rounded_rect_coverage(_e200);
+                return _e201;
+            }
+            break;
         }
         case 8: {
-            vec4 _e201 = ellipse_coverage(in_3.clip);
-            return _e201;
+            if (SHAPES) {
+                vec4 _e204 = ellipse_coverage(in_3.clip);
+                return _e204;
+            }
+            break;
         }
         case 12: {
-            vec4 _e203 = rrect_blur_coverage(in_3.clip);
-            return _e203;
+            if (SHAPES) {
+                vec4 _e207 = rrect_blur_coverage(in_3.clip);
+                return _e207;
+            }
+            break;
         }
         case 13: {
-            vec4 _e205 = point_field_coverage(in_3.uv);
-            return _e205;
+            if (SHAPES) {
+                vec4 _e210 = point_field_coverage(in_3.uv);
+                return _e210;
+            }
+            break;
         }
         case 14: {
-            vec4 _e207 = shadow_mesh_color(in_3.uv);
-            return _e207;
+            if (SHAPES) {
+                vec4 _e213 = shadow_mesh_color(in_3.uv);
+                return _e213;
+            }
+            break;
         }
         case 6: {
-            vec4 _e209 = blur_along_axis(in_3.clip);
-            return _e209;
+            if (PASSES) {
+                vec4 _e216 = blur_along_axis(in_3.clip);
+                return _e216;
+            }
+            break;
         }
         case 11: {
-            vec4 _e211 = morphology_along_axis(in_3.clip);
-            return _e211;
+            if (PASSES) {
+                vec4 _e219 = morphology_along_axis(in_3.clip);
+                return _e219;
+            }
+            break;
         }
         case 10: {
-            vec4 _e213 = sample_mesh(in_3.uv);
-            return _e213;
+            if (MESHES) {
+                vec4 _e222 = sample_mesh(in_3.uv);
+                return _e222;
+            }
+            break;
         }
         default: {
             break;
         }
     }
     if (((kind_1 > 4.5) && (kind_1 < 5.5))) {
-        vec4 _e223 = textureLod(_group_0_binding_0_fs, vec2(in_3.uv), 0.0);
-        float coverage_2 = _e223.x;
+        vec4 _e232 = textureLod(_group_0_binding_0_fs, vec2(in_3.uv), 0.0);
+        float coverage_2 = _e232.x;
         vec4 tint_7 = _group_1_binding_0_fs.stops[0];
         float alpha_8 = (tint_7.w * coverage_2);
         return vec4((tint_7.xyz * alpha_8), alpha_8);
     }
-    vec4 _e234 = color_2;
-    float _e237 = color_2.w;
-    float _e240 = color_2.w;
-    return vec4((_e234.xyz * _e237), _e240);
+    vec4 _e243 = color_2;
+    float _e246 = color_2.w;
+    float _e249 = color_2.w;
+    return vec4((_e243.xyz * _e246), _e249);
 }
 
 void main() {
@@ -973,19 +1002,24 @@ void main() {
     vec4 _e1 = shade(in_);
     float _e5 = _group_1_binding_0_fs.filter_params.y;
     int tint_mode = int((_e5 + 0.5));
-    if ((tint_mode == 13)) {
-        tinted = (in_.tint * _e1);
-    } else {
-        vec4 _e15 = blend_tint(tint_mode, _e1, in_.tint);
-        tinted = _e15;
+    tinted = (in_.tint * _e1);
+    if (TINT_BLENDS) {
+        if ((tint_mode != 13)) {
+            vec4 _e16 = blend_tint(tint_mode, _e1, in_.tint);
+            tinted = _e16;
+        }
     }
-    vec4 _e16 = tinted;
-    float _e20 = _group_1_binding_0_fs.filter_params.w;
-    tinted = (_e16 * _e20);
-    vec4 _e22 = tinted;
-    vec4 _e23 = filtered(_e22);
-    vec4 _e26 = dithered(_e23, in_.position.xy);
-    _fs2p_location0 = _e26;
+    vec4 _e17 = tinted;
+    float _e21 = _group_1_binding_0_fs.filter_params.w;
+    tinted = (_e17 * _e21);
+    if (FILTERS) {
+        vec4 _e24 = tinted;
+        vec4 _e25 = filtered(_e24);
+        tinted = _e25;
+    }
+    vec4 _e26 = tinted;
+    vec4 _e29 = dithered(_e26, in_.position.xy);
+    _fs2p_location0 = _e29;
     return;
 }
 

@@ -168,3 +168,33 @@ fn the_translated_spirv_is_what_it_was() {
         &digest(emblema_shaders::EFFECT_TWO_IMAGES_SPV),
     );
 }
+
+/// The variants of the renderer's shader, summarized: both targets of each.
+///
+/// Digests rather than text, because each is the whole form above with the
+/// branches its overrides turn off taken out by the build step, and twenty
+/// copies of that text would bury a review rather than serve one. What this
+/// pins is that the taking-out did not change: a naga upgrade that resolves
+/// overrides differently, or a change to the pruning, moves a line here.
+#[test]
+fn the_translated_variants_are_what_they_were() {
+    let mut out = String::new();
+    for variant in emblema_shaders::SolidVariant::every() {
+        let glsl: Vec<u32> = variant
+            .fragment_glsl()
+            .as_bytes()
+            .chunks(4)
+            .map(|c| {
+                let mut word = [0u8; 4];
+                word[..c.len()].copy_from_slice(c);
+                u32::from_le_bytes(word)
+            })
+            .collect();
+        out.push_str(&format!(
+            "{variant:?}\n  spirv {}  glsl  {}",
+            digest(variant.spirv()),
+            digest(&glsl)
+        ));
+    }
+    check("solid.variants.txt", &out);
+}

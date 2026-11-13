@@ -1536,6 +1536,103 @@ What prompted it: a Flutter counter app's frame, at 1920x1080 on this board, spe
 7.5 of its 9.4 ms of GPU time on two full-frame rectangles that reached `draw_rrect`
 with a radius of zero and were drawn as fields.
 
+### The whole shader, compiled four times, and the variants that replaced it, measured 2026-11-13
+
+With Mesa's shader cache empty, the first pipeline at each sample count took
+V3D 1.8 s to build, so 3.6 s inside an app's first frames, and `fl-dart prepare`
+existed to pay it once on a fresh board. `V3D_DEBUG=perf,shaderdb` says where it
+went. The fragment stage was 3,376 instructions and 527 uniforms, and V3D's
+compiler keeps the first register allocation that fits without spilling,
+retrying from four threads down:
+
+| attempt | result | time |
+|---|---|---|
+| 4 threads, default | allocation fails | ~410 ms, the front end included |
+| 4 threads, pressure-raising optimizations off | fails | ~230 ms |
+| 2 threads, default | 119 spills, rejected | ~840 ms |
+| 2 threads, those optimizations off | fits | ~330 ms |
+
+No one part was responsible. Taking out one material arm at a time saved at most
+half a second (images, whose cubic filter reads sixteen taps, then meshes); the
+color filter and the tint's blend modes, in the tail every fragment runs, were as
+heavy as any arm; and even a near-minimal shader stayed at two threads. Split
+instead, a solid color with the gradients and glyphs compiled in 40 to 60 ms.
+
+An RK3566's Mali-G52 (Radxa Zero 3, Mesa 24.2) took about five seconds for the
+same shader through PanVK at each sample count, and five through GLES, which
+links once whatever the count.
+
+So `solid.wgsl` carries six `override` flags now -- images, meshes, shapes,
+passes, filters, tint blends -- each guarding a branch, and the build step
+resolves them into twenty variants with the branches turned off taken out and
+the functions only they reached dropped. Every draw is built with the variant
+its material, filter and tint blend need (`BatchDraw::shader_variant`), and
+`prepare_pipelines` builds the core one.
+
+Cold, Mesa's cache disabled, whole `run-app` wall time for five frames at
+1920x1080 with a PNG written, three alternating runs a side:
+
+| Pi 5, V3D, Vulkan | before | variants |
+|---|---|---|
+| text | 3.69 to 3.72 s | 0.55 |
+| counter | 1.95 to 1.97 | 0.31 |
+| material | 1.94 to 1.95 | 0.20 |
+| rounded | 1.95 to 2.06 | 0.20 |
+| `fl-dart prepare` | 3.59 to 3.62 | 0.18 |
+
+| RK3566, Mali-G52, GLES | before | variants |
+|---|---|---|
+| text | 6.27 to 6.68 s | 2.05 to 2.19 |
+| counter | 6.58 to 8.65 | 1.77 to 1.90 |
+| material | 6.33 to 7.31 | 1.11 to 1.24 |
+| rounded | 6.49 to 7.52 | 1.17 to 1.26 |
+| `fl-dart prepare` | 6.03 to 6.13 | 0.43 to 0.47 |
+
+Every PNG is identical between the two builds on both boards. The RK3566 rows
+are through GLES because PanVK on this board's kernel fails at the first draw,
+as the G52 section below records; its pipeline builds still time cleanly, and
+`prepare_pipelines` there came to 0.27 s at one sample against about five.
+Warm, the runs are unchanged or slightly faster.
+
+**The frames got faster too.** `xtask bench --skip llvmpipe`, four alternating
+runs a side, medians, and every row's two clusters apart:
+
+| row | Vulkan before | variants | GLES before | variants |
+|---|---|---|---|---|
+| distance field, 1 sample | 8.056 | 6.383 | 13.376 | 6.762 |
+| tessellated, 4 samples | 4.106 | 2.833 | 7.904 | 4.900 |
+| tessellated, 1 sample | 3.324 | 2.362 | 6.583 | 2.524 |
+| frame, gradient ground | 10.779 | 6.933 | 15.467 | 6.857 |
+| frame, plus cards | 11.069 | 7.119 | 16.035 | 7.049 |
+| full frame, mixed content | 14.041 | 9.717 | 19.703 | 9.489 |
+| stacked interface | 4.707 | 3.050 | 8.526 | 5.262 |
+| concave, 72 points | 1.875 | 1.515 | 3.406 | 1.736 |
+
+That is 12 to 36 percent through Vulkan and 34 to 62 through GLES. The core
+variant still runs at two threads, as the whole shader did; what changed is a
+program of 743 instructions and 110 uniforms in place of 3,376 and 527. Which of
+those the board was paying for -- the uniform stream, the instruction cache, the
+branches -- is not separated here. "And a smaller shader is not a faster one",
+above, found that size alone predicts nothing; this change is faster on every
+row through both APIs.
+
+**And GLES's advanced blends came right on this board.** All 512 catalog and
+corpus scenes were hashed before and after on each backend. On the workstation's
+RADV and on the RK3566 nothing moved. On the Pi, Vulkan did not move and 40 GLES
+scenes did, every one an advanced blend mode, some by a channel's whole range.
+The before is the wrong side: `blend_modes` run on the board fails
+`advanced_blending_is_coherent_within_a_batch_on_gles` before, with overlay, hue
+and luminosity far from their equations, and passes all nine tests after, 29 of
+29 modes matching. The state around an advanced draw barely changed -- its
+blend, its barrier and its buffers are as they were; the image sampler's unit is
+now set once when a program is linked rather than as textures are bound -- and
+the program it draws with did: the whole shader's blend-qualified form before,
+the variant's now. Which of those V3D's GLES was getting wrong has not been
+reduced.
+
+The variants add about 0.9 MB of SPIR-V and GLSL to a binary built with both
+backends; fl-dart, Vulkan only, grew by 0.85 MB.
+
 ### Mesa's GLES arrived on this board and is still not wanted in the baseline
 
 The `render` group turned GLES on, and the rows it produces are a trap the

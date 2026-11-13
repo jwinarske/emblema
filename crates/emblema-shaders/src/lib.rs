@@ -12,6 +12,22 @@
 
 include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 
+mod variant;
+pub use variant::{SolidKinds, SolidVariant};
+
+impl SolidVariant {
+    /// This variant's SPIR-V, both stages.
+    pub fn spirv(self) -> &'static [u32] {
+        SOLID_VARIANT_SPV[self.index()]
+    }
+
+    /// This variant's fragment stage in GLSL ES 300. The vertex stage is
+    /// [`SOLID_VS_GLSL`] for every variant.
+    pub fn fragment_glsl(self) -> &'static str {
+        SOLID_VARIANT_FS_GLSL[self.index()]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -128,6 +144,58 @@ mod tests {
                  a `var` first, as the rest of {name} does.",
                 found.len()
             );
+        }
+    }
+
+    /// Each variant carries the functions its parts need and none of the
+    /// others'.
+    ///
+    /// A variant is only worth having if the parts it turns off are gone from
+    /// what a driver compiles; resolved but left in, they would cost every
+    /// driver the seconds the variants exist to save, and every picture would
+    /// still be right. So this reads the GLSL each variant ships for the
+    /// function that roots each part.
+    #[test]
+    fn each_variant_carries_only_the_parts_it_names() {
+        use super::{SolidKinds, SolidVariant};
+        type Wanted = fn(SolidVariant) -> bool;
+        let parts: [(&str, Wanted); 6] = [
+            ("sample_image(", |v: SolidVariant| {
+                v.kinds == SolidKinds::Images
+            }),
+            ("sample_mesh(", |v: SolidVariant| {
+                v.kinds == SolidKinds::Meshes
+            }),
+            ("rounded_rect_coverage(", |v: SolidVariant| {
+                v.kinds == SolidKinds::Shapes
+            }),
+            ("blur_along_axis(", |v: SolidVariant| {
+                v.kinds == SolidKinds::Passes
+            }),
+            ("filtered(", |v: SolidVariant| v.filters),
+            // The blend filter calls the tint's blend function, so a variant
+            // that filters carries it whether or not it blends a tint.
+            ("blend_tint(", |v: SolidVariant| v.tint_blends || v.filters),
+        ];
+        let mut seen = 0;
+        for variant in SolidVariant::every() {
+            let glsl = variant.fragment_glsl();
+            for (function, wanted) in parts {
+                let declared = glsl.contains(&format!("vec4 {function}"));
+                assert_eq!(
+                    declared,
+                    wanted(variant),
+                    "{variant:?}: `{function}` is {} its GLSL",
+                    if declared { "in" } else { "missing from" }
+                );
+            }
+            seen += 1;
+        }
+        assert_eq!(seen, SolidVariant::COUNT);
+        // And the whole form keeps everything, since it is the one the tests
+        // read as the source.
+        for (function, _) in parts {
+            assert!(super::SOLID_FS_GLSL.contains(&format!("vec4 {function}")));
         }
     }
 }
