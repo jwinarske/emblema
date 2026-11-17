@@ -164,7 +164,12 @@ impl PixelFormat {
         match self {
             Self::Rgba8Unorm | Self::Rgba8UnormSrgb => Some(Fourcc::ABGR8888),
             Self::Bgra8Unorm | Self::Bgra8UnormSrgb => Some(Fourcc::ARGB8888),
-            Self::Rgb10A2Unorm => Some(Fourcc::XRGB2101010),
+            // Red is in the low ten bits, as Vulkan's `A2B10G10R10` pack and
+            // GL's `2_10_10_10_REV` put it, and DRM names a packed format
+            // from its high bits down: `XB30`. `XR30` is the other order,
+            // and a buffer of this scanned out under that name has its red
+            // and blue exchanged.
+            Self::Rgb10A2Unorm => Some(Fourcc::XBGR2101010),
             // Neither is anything a display controller scans out: one is an
             // intermediate precision and the other is coverage rather than
             // color. Returning nothing is what keeps both out of negotiation.
@@ -191,6 +196,8 @@ impl Fourcc {
     pub const XBGR8888: Self = Self::new(*b"XB24");
     pub const XRGB2101010: Self = Self::new(*b"XR30");
     pub const ARGB2101010: Self = Self::new(*b"AR30");
+    pub const XBGR2101010: Self = Self::new(*b"XB30");
+    pub const ABGR2101010: Self = Self::new(*b"AB30");
 
     /// The code as its four characters, for logging.
     pub const fn to_bytes(self) -> [u8; 4] {

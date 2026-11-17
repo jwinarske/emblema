@@ -50,7 +50,7 @@ fn fourcc() -> impl Strategy<Value = Fourcc> {
     prop_oneof![
         Just(Fourcc::ARGB8888),
         Just(Fourcc::XRGB8888),
-        Just(Fourcc::XRGB2101010),
+        Just(Fourcc::XBGR2101010),
     ]
 }
 
