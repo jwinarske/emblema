@@ -3626,8 +3626,8 @@ in turn, a framebuffer the output never imported being refused, a frame carrying
 layers, a sixty-frame run that holds its resource counts flat, a storm of
 resizes that holds the same counts across repeated modesets, and the three in
 `writeback.rs` that read back what the controller composited. The crate holds
-forty-eight tests in all: twelve taking DRM master, twelve against the stand-in,
-five over the `IN_FORMATS` parser and nineteen unit. That is what it has, which
+forty-nine tests in all: twelve taking DRM master, twelve against the stand-in,
+five over the `IN_FORMATS` parser and twenty unit. That is what it has, which
 is a different claim from what a board ran -- the figures for that are dated,
 in `docs/on-a-board.md`. They skip
 where there is no card, which is what CI is -- its runners load no such module,
