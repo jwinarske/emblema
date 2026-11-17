@@ -710,7 +710,7 @@ fn pixel_format_for(fourcc: emblema_hal::Fourcc) -> Result<PixelFormat> {
     Ok(match fourcc {
         f if f == Fourcc::ARGB8888 || f == Fourcc::XRGB8888 => PixelFormat::Bgra8Unorm,
         f if f == Fourcc::ABGR8888 || f == Fourcc::XBGR8888 => PixelFormat::Rgba8Unorm,
-        f if f == Fourcc::XRGB2101010 || f == Fourcc::ARGB2101010 => PixelFormat::Rgb10A2Unorm,
+        f if f == Fourcc::XBGR2101010 || f == Fourcc::ABGR2101010 => PixelFormat::Rgb10A2Unorm,
         _ => {
             return Err(Error::Unsupported(
                 "negotiation chose a format the renderer cannot target",
@@ -756,11 +756,25 @@ mod format_tests {
     }
 
     #[test]
+    fn ten_bit_scanout_with_red_high_has_no_render_format() {
+        // The renderer's ten-bit format keeps red in the low bits, which is
+        // XB30. Taking XR30 for it scans out with red and blue exchanged,
+        // as it did on a Raspberry Pi 5.
+        for fourcc in [Fourcc::XRGB2101010, Fourcc::ARGB2101010] {
+            assert!(pixel_format_for(fourcc).is_err());
+        }
+        assert_eq!(
+            PixelFormat::Rgb10A2Unorm.fourcc(),
+            Some(Fourcc::XBGR2101010)
+        );
+    }
+
+    #[test]
     fn ten_bit_scanout_is_left_linear() {
         // There is no sRGB variant of it to choose, and deep color scanout
         // generally carries its transfer function out of band -- so assuming
         // one here would be the same mistake pointing the other way.
-        for fourcc in [Fourcc::XRGB2101010, Fourcc::ARGB2101010] {
+        for fourcc in [Fourcc::XBGR2101010, Fourcc::ABGR2101010] {
             assert_eq!(
                 pixel_format_for(fourcc).expect("supported"),
                 PixelFormat::Rgb10A2Unorm

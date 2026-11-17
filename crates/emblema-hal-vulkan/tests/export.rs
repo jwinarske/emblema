@@ -92,7 +92,7 @@ fn an_exported_image_carries_a_descriptor_and_a_real_layout() {
     let format = match chosen.fourcc {
         f if f == emblema_hal::Fourcc::ARGB8888 => PixelFormat::Bgra8Unorm,
         f if f == emblema_hal::Fourcc::ABGR8888 => PixelFormat::Rgba8Unorm,
-        f if f == emblema_hal::Fourcc::XRGB2101010 => PixelFormat::Rgb10A2Unorm,
+        f if f == emblema_hal::Fourcc::XBGR2101010 => PixelFormat::Rgb10A2Unorm,
         other => panic!("unexpected negotiated format {other}"),
     };
 

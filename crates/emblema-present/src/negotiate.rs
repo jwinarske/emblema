@@ -41,8 +41,8 @@ impl std::fmt::Display for Negotiated {
 /// eight-bit orders. Opaque variants sit alongside their alpha counterparts
 /// because a scanout plane frequently offers only one of the pair.
 pub const PREFERRED_FORMATS: &[Fourcc] = &[
-    Fourcc::XRGB2101010,
-    Fourcc::ARGB2101010,
+    Fourcc::XBGR2101010,
+    Fourcc::ABGR2101010,
     Fourcc::ARGB8888,
     Fourcc::XRGB8888,
     Fourcc::ABGR8888,
@@ -188,21 +188,21 @@ mod tests {
     fn a_higher_bit_depth_is_preferred_when_both_sides_offer_it() {
         let render = [
             set(Fourcc::ARGB8888, &[VENDOR_TILED]),
-            set(Fourcc::XRGB2101010, &[VENDOR_TILED]),
+            set(Fourcc::XBGR2101010, &[VENDOR_TILED]),
         ];
         let scanout = [
-            set(Fourcc::XRGB2101010, &[VENDOR_TILED]),
+            set(Fourcc::XBGR2101010, &[VENDOR_TILED]),
             set(Fourcc::ARGB8888, &[VENDOR_TILED]),
         ];
 
         let chosen = negotiate(&render, &scanout, PREFERRED_FORMATS).expect("negotiated");
-        assert_eq!(chosen.fourcc, Fourcc::XRGB2101010);
+        assert_eq!(chosen.fourcc, Fourcc::XBGR2101010);
     }
 
     #[test]
     fn a_format_only_one_side_offers_is_skipped_rather_than_chosen() {
         let render = [
-            set(Fourcc::XRGB2101010, &[VENDOR_TILED]),
+            set(Fourcc::XBGR2101010, &[VENDOR_TILED]),
             set(Fourcc::ARGB8888, &[VENDOR_TILED]),
         ];
         // The scanout plane cannot do ten-bit, which is the common case.
