@@ -7,6 +7,136 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.0 — 2026-11-17
+
+A hundred and five merges past 0.2.0. Most of them are one of three things:
+what a Flutter engine needs of this renderer and did not have, what a first
+frame costs on a board, and four boards' worth of drivers that disagreed with
+the specification in ways that had to be named before they could be worked
+around. The number moves to 0.3 because the first of those changed public types
+and changed what several draws produce.
+
+### What a draw produces, where it differed from upstream
+
+Each of these was found porting `dart:ui` onto this renderer, and each
+**changes pixels** for a caller that reached the case.
+
+**Blend modes and tile modes are numbered as upstream numbers them.**
+`BlendMode` is `#[repr(u8)]` with Impeller's and `dart:ui`'s discriminants,
+which moves `Multiply` to 24; `TileMode` is clamp, repeat, mirror, decal, where
+`Decal` and `Mirror` were exchanged. Nothing here read either discriminant, so
+nothing drew wrongly, but a port converting by position got a neighboring mode
+with no error to say so.
+
+**A shadow falls in device pixels.** `draw_shadow` translated by the elevation
+in local units, so under a scale of two the shadow landed twice as far down and
+under a rotation it fell along the rotated axis. Upstream pre-concatenates the
+translation, and now so does this.
+
+**A colored, blurred rounded rectangle is premultiplied.** The analytic route
+returned a straight color under a fractional alpha. Black hides that entirely,
+which is why the shadow tests had passed.
+
+**A sweep gradient measures its angle from the positive X axis**, in one turn,
+so a direction before the start is below zero and the tile mode decides it. It
+agreed with upstream only for a sweep starting at zero.
+
+**A tint blends the paint over the per-vertex or per-sprite color**, the order
+`dart:ui` states for `drawVertices` and `drawAtlas`. **And an atlas or a mesh
+fades after that blend**, not before: `BatchDraw::opacity` carries the paint's
+alpha to where upstream applies it.
+
+**A paint's opacity reaches every shader**, as `dart:ui`'s alpha does.
+
+**A blurred convex path is a shadow mesh.** An oval that is not a circle, a
+rounded rectangle with unequal corners and any other convex outline were drawn
+into a blurred layer in three passes. `emblema_geometry::shadow` builds
+upstream's mesh instead.
+
+### New
+
+**A shader takes a local transform.** `Paint::with_shader_transform` places an
+image or a gradient by a full matrix, perspective row kept, as `dart:ui`'s
+`ImageShader` and `Gradient` do.
+
+**An image tiles each axis by its own mode.** `Shader::Image`,
+`Material::Image` and `Material::Mesh` carry `tile: [x, y]`;
+`with_tile_modes(x, y)` sets each and `with_tile_mode` still sets both.
+
+**A glyph key carries its subpixel bucket.** `GlyphKey::subpixel` keeps two
+offsets of one glyph apart in the atlas. What a bucket means is the caller's.
+
+**A context can be pointed at one GPU.** `DevicePreference::Uuid` and
+`DevicePreference::RenderNode` name a device the way a compositor names it, so
+a host that shares frames with one renders on the same card.
+
+**`VulkanTexture::assume_layout`** lets a caller that wrote a texture with its
+own Vulkan work say which layout it left the image in. It records no barrier.
+
+**A GBM display target and a GBM scanout ring.** `DisplayTarget::Gbm` gets a
+GLES display from a render node, for the vendor stacks that have no surfaceless
+platform, and `DrmScanoutTarget::with_gbm` presents from buffers GBM allocates,
+for a device that cannot allocate its own. `ScanoutOutput::device_fd` is the
+seam, defaulted. Behind the `gbm` feature, because drmkit-gbm's toolchain floor
+is above this workspace's 1.85.
+
+**`prepare_pipelines`** builds the pipelines a first frame needs before it.
+
+### What a frame costs
+
+**The built-in shader is compiled per variant**, with what a draw cannot reach
+taken out: twenty variants of `solid.wgsl` for both backends, picked by
+`BatchDraw::shader_variant`. On a Raspberry Pi 5 with an empty shader cache,
+`prepare_pipelines` went from 3.6 s to 113 ms, and the frames are faster too:
+the bench rows came down 12 to 36 per cent through Vulkan and 34 to 62 through
+GLES. An RK3566's first frames went from six to eight seconds to one or two.
+
+**A rounded fill is tessellated once the pass is multisampled**, and keeps the
+distance field before that. A filled rectangle is tessellated; a stroked one is
+still evaluated.
+
+**An atlas owns its memory from the start**, so its footprint no longer creeps
+up as glyphs arrive and reads as a leak in a soak.
+
+### Fixed
+
+**Ten-bit scanout had its red and blue exchanged.** `Rgb10A2Unorm` is Vulkan's
+`A2B10G10R10` and was named `XR30` to KMS, where its bits are `XB30`. It scans
+out as `XBGR2101010` now, and `XR30` has no render format. Found by reading a
+frame back from a Raspberry Pi 5's card.
+
+**A resize against a real display controller works.** `reconfigure` rebuilt the
+ring at any extent and the present after it failed with `ENOSPC`.
+
+**Export describes every plane the modifier declares**, not plane zero alone,
+so a device's own multi-plane export can be imported again.
+
+**Whether a device exports a sync_file, and which formats it exports as a
+dma-buf, is asked of the device** and no longer read off its extension list.
+Both were wrong on a Vivante GC7000UL and one on an older llvmpipe.
+
+**A finite width of 3.4e38 no longer becomes an extent of `u32::MAX`.** A layer
+whose region widens past what an extent can hold is refused.
+
+**The Vulkan backend runs on a Vivante GC7000UL.** Two defects in that driver
+are stepped around without changing a pixel: its shader compiler crashed on a
+composite built from a value parameter, and it took `VK_REMAINING_MIP_LEVELS`
+for a literal count.
+
+### What the suite checks
+
+A writeback connector is asked what the display controller composited, and the
+answer is compared with an offscreen render. A resize storm, a soak of the
+scanout ring and of the corpus, an oracle for the ear clipper, an allocation
+ceiling on the hostile-input tests, and one lock across the test binaries that
+take a card.
+
+### Known, and recorded rather than worked around
+
+Two instabilities in GLES advanced blending on Mesa drivers, reduced as far as
+a reproducer in C, and what five vendor stacks do with the export queries, are
+in `docs/on-a-board.md` with their measurements.
+
 ## 0.2.0 — 2026-10-05
 
 The first release under the `emblema` names. `impeller-rs 0.1.0` and its thirteen
