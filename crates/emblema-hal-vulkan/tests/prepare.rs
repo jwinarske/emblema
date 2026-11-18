@@ -148,3 +148,69 @@ fn an_unusable_sample_count_is_refused_and_builds_nothing() {
     assert!(ctx.prepare_pipelines(PixelFormat::Rgba8Unorm, 128).is_err());
     assert_eq!(ctx.pipeline_count(), 0);
 }
+
+/// No validation message at or above a warning, the context's whole life.
+fn assert_clean(ctx: &VulkanContext) {
+    let bad: Vec<_> = ctx
+        .validation_messages()
+        .into_iter()
+        .filter(|m| m.severity >= ValidationSeverity::Warning)
+        .collect();
+    assert!(bad.is_empty(), "validation: {bad:?}");
+}
+
+#[test]
+fn what_the_driver_compiled_is_taken_by_a_later_context() {
+    let Some(mut first) = context() else { return };
+    assert!(
+        first.pipeline_cache_data().expect("data").is_empty(),
+        "a context that built nothing has nothing to keep"
+    );
+    first
+        .prepare_pipelines(PixelFormat::Rgba8Unorm, 1)
+        .expect("prepare");
+    let saved = first.pipeline_cache_data().expect("data");
+    assert!(!saved.is_empty());
+    let drawn = render(&mut first, &plain(), 1);
+    assert_clean(&first);
+
+    let Some(mut second) = context() else { return };
+    let taken = second.load_pipeline_cache(&saved).expect("load");
+    // A driver that keeps nothing says so with less than a header (lavapipe
+    // gives 20 bytes), and that is not a cache to hand back to it.
+    assert_eq!(taken, saved.len() >= 32, "{} bytes", saved.len());
+    // Loaded is not built: the pipelines are still made, from what was kept.
+    assert_eq!(second.pipeline_count(), 0);
+    assert_eq!(render(&mut second, &plain(), 1), drawn);
+    assert_clean(&second);
+}
+
+#[test]
+fn what_is_not_this_device_s_cache_is_left_alone() {
+    let Some(mut first) = context() else { return };
+    first
+        .prepare_pipelines(PixelFormat::Rgba8Unorm, 1)
+        .expect("prepare");
+    let saved = first.pipeline_cache_data().expect("data");
+    let drawn = render(&mut first, &plain(), 1);
+
+    if saved.len() < 32 {
+        eprintln!("skipping: this driver keeps no pipeline cache");
+        return;
+    }
+    let Some(mut ctx) = context() else { return };
+    assert!(!ctx.load_pipeline_cache(&[]).expect("empty"));
+    assert!(!ctx.load_pipeline_cache(&[0xff; 31]).expect("short"));
+    assert!(!ctx.load_pipeline_cache(&[0xff; 4096]).expect("noise"));
+    // Another build of the driver: its UUID differs.
+    let mut other = saved.clone();
+    other[16] ^= 0xff;
+    assert!(!ctx.load_pipeline_cache(&other).expect("another driver"));
+    // Another device.
+    let mut other = saved;
+    other[12] ^= 0xff;
+    assert!(!ctx.load_pipeline_cache(&other).expect("another device"));
+    // Nothing refused has been handed to the driver, and it draws as before.
+    assert_eq!(render(&mut ctx, &plain(), 1), drawn);
+    assert_clean(&ctx);
+}

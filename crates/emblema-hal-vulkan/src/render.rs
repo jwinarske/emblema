@@ -102,6 +102,9 @@ pub(crate) struct PipelineCache {
     pub(crate) layout: Option<vk::PipelineLayout>,
     pub(crate) render_passes: HashMap<RenderPassKey, vk::RenderPass>,
     pub(crate) pipelines: HashMap<PipelineKey, vk::Pipeline>,
+    /// The driver's own cache, which every pipeline is built through: null
+    /// until the first is built or a saved one is loaded (`compiled.rs`).
+    pub(crate) driver: vk::PipelineCache,
 }
 
 impl PipelineCache {
@@ -129,10 +132,14 @@ impl PipelineCache {
             if let Some(layout) = self.layout {
                 device.destroy_pipeline_layout(layout, None);
             }
+            if self.driver != vk::PipelineCache::null() {
+                device.destroy_pipeline_cache(self.driver, None);
+            }
         }
         self.pipelines.clear();
         self.render_passes.clear();
         self.layout = None;
+        self.driver = vk::PipelineCache::null();
     }
 }
 
@@ -1070,7 +1077,15 @@ impl VulkanContext {
             Some(id) => Some(self.runtime_program(id)?.to_vec()),
             None => None,
         };
-        let pipeline = build_pipeline(&device, key, render_pass, layout, fragment.as_deref())?;
+        let cache = self.driver_cache()?;
+        let pipeline = build_pipeline(
+            &device,
+            cache,
+            key,
+            render_pass,
+            layout,
+            fragment.as_deref(),
+        )?;
         self.pipeline_cache_mut().pipelines.insert(key, pipeline);
         Ok(())
     }
@@ -1373,6 +1388,7 @@ fn build_pipeline_layout(
 
 fn build_pipeline(
     device: &ash::Device,
+    cache: vk::PipelineCache,
     key: PipelineKey,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
@@ -1568,8 +1584,7 @@ fn build_pipeline(
         .render_pass(render_pass)
         .subpass(0);
 
-    let created =
-        unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) };
+    let created = unsafe { device.create_graphics_pipelines(cache, &[info], None) };
 
     // The shader modules are only needed during creation.
     unsafe { device.destroy_shader_module(module, None) };
