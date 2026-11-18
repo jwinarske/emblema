@@ -1984,10 +1984,22 @@ covers that case at one sample and at four.
 Pipelines are compiled **lazily, on first use**, not at context creation: each
 submission walks its draws and ensures a pipeline for every distinct
 `(format, program, blend, samples, stencil, role, shader variant)`, and they are
-kept in a `HashMap` for the life of the context. No `VkPipelineCache` is
-involved — `create_graphics_pipelines` is passed `vk::PipelineCache::null()` —
-so nothing is persisted to disk by this crate and a new process recompiles what
-it uses, unless the driver keeps a cache of its own, as Mesa does.
+kept in a `HashMap` for the life of the context.
+
+Every one is built through a `VkPipelineCache` the context makes at its first use
+(`compiled.rs`). Nothing is persisted to disk by this crate, but a caller can:
+`VulkanContext::pipeline_cache_data` gives the driver's bytes and
+`load_pipeline_cache` takes them back in a later process, before anything is
+built. Mesa keeps a cache of its own and gains little; IMG's driver keeps
+nothing, and on a PowerVR BXE-4-32 a pipeline's first build is most of a
+second, in whichever frame first draws with it: a button's first highlight
+arrived after the pointer had left. With the bytes of one earlier run loaded
+the longest frame of the same input went from 792 ms to 11, and the eight
+pipelines `prepare_pipelines` builds from 1,577 ms to 335. Bytes are refused,
+and `false` returned, unless they begin with the header of this device and
+this driver build: they come from a file, and the specification's promise that
+a driver checks them itself is not one to test with a crash inside it.
+`what_is_not_this_device_s_cache_is_left_alone` holds that.
 
 The shader variant is which parts of `solid.wgsl` a pipeline is built with
 (`ShaderVariant`, from `BatchDraw::shader_variant`): the core every variant

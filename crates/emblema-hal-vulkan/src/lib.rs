@@ -12,6 +12,7 @@
 //! API stays available alongside for bring-up and for tests that need Vulkan
 //! specifics.
 
+mod compiled;
 pub mod device;
 pub mod external;
 pub mod fence;
@@ -24,6 +25,7 @@ pub mod sampling;
 pub mod stencil;
 pub mod validation;
 
+pub use compiled::PIPELINE_CACHE_LIMIT;
 pub use device::{ContextConfig, DevicePreference, FrameSync, VulkanContext};
 pub use fence::VulkanFence;
 pub use hal::VulkanHal;
