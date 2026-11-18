@@ -1,9 +1,8 @@
 //! The transient stencil attachment clipping is built on.
 //!
-//! Allocated per submission rather than cached, matching the multisample
-//! buffer: both are written during a pass and never read again, and both will
-//! move into the frame's resource pool once one exists. Caching either now
-//! would mean writing invalidation rules before anything needs them.
+//! Made by the first submission that clips at a size and sample count, and
+//! kept for the next: see `kept.rs`. Like the multisample buffer it is
+//! written during a pass and never read again, so nothing carries over in it.
 //!
 //! # Why not a `VulkanTexture`
 //!

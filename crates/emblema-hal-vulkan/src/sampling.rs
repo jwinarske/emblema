@@ -101,10 +101,9 @@ pub fn create_sampler(device: &ash::Device) -> Result<vk::Sampler> {
 
 /// Descriptor sets and image views for one submission.
 ///
-/// Built per submission and torn down with it, matching the multisample and
-/// stencil buffers: the alternative is a cache keyed by texture identity, whose
-/// invalidation rule has to answer what happens when a caller destroys a
-/// texture a set still points at.
+/// Built per submission and torn down with it: the alternative is a cache
+/// keyed by texture identity, whose invalidation rule has to answer what
+/// happens when a caller destroys a texture a set still points at.
 pub struct Bindings {
     /// `None` where the batch samples nothing and only the context's
     /// placeholder set is needed, which costs no allocation at all.

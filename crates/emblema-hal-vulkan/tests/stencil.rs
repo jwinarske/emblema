@@ -355,6 +355,65 @@ fn a_stencil_clip_works_multisampled() {
     assert_eq!(bounds(&pixels), Some(Scissor::new(6, 4, 14, 21)));
 }
 
+/// A clip of `clip` with the whole target drawn inside it.
+fn clipped(clip: [[f32; 2]; 4]) -> Batch {
+    let mut batch = Batch::new();
+    batch
+        .push_with(
+            &clip,
+            &QUAD,
+            Material::solid(WHITE),
+            ColorFilter::None,
+            BlendMode::Src,
+            None,
+            ClipState::narrow(0),
+        )
+        .expect("clip");
+    batch
+        .push_with(
+            &FULL,
+            &QUAD,
+            Material::solid(WHITE),
+            ColorFilter::None,
+            BlendMode::Src,
+            None,
+            ClipState::content(1),
+        )
+        .expect("content");
+    batch
+}
+
+#[test]
+fn a_pass_s_buffers_are_kept_and_carry_nothing_over() {
+    let Some(mut ctx) = context() else { return };
+    if !ctx.capabilities().sample_counts.supports(4) {
+        eprintln!("skipping: 4x not supported");
+        return;
+    }
+    // The multisample and stencil buffers outlive the submission that made
+    // them and are the next one's. Nothing may carry over in either: a clip
+    // left in the stencil would cut the next frame to the last one's shape,
+    // and color left in the multisample buffer would show through it.
+    let one = clipped(rect(6.0, 4.0, 20.0, 25.0));
+    let other = clipped(rect(2.0, 10.0, 30.0, 14.0));
+    assert_eq!(ctx.pass_buffers_kept(), 0);
+    let first = render(&mut ctx, &one, 4);
+    assert_eq!(ctx.pass_buffers_kept(), 2, "one color, one stencil");
+
+    let between = render(&mut ctx, &other, 4);
+    assert_eq!(bounds(&between), Some(Scissor::new(2, 10, 28, 4)));
+    assert_eq!(render(&mut ctx, &one, 4), first);
+    assert_eq!(ctx.pass_buffers_kept(), 2, "the same two, used three times");
+
+    // Another sample count is another stencil buffer, and no color buffer.
+    render(&mut ctx, &one, 1);
+    assert_eq!(ctx.pass_buffers_kept(), 3);
+
+    ctx.release_pass_buffers();
+    assert_eq!(ctx.pass_buffers_kept(), 0);
+    assert_eq!(render(&mut ctx, &one, 4), first);
+}
+
 #[test]
 fn a_clip_stack_deeper_than_the_stencil_is_refused() {
     let Some(mut ctx) = context() else { return };

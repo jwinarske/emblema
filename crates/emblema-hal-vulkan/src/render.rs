@@ -384,11 +384,16 @@ impl VulkanContext {
             .map_err(|e| backend_err("create_image_view", e))?;
 
         // The multisample buffer is transient: rendered into, resolved out of,
-        // and discarded. Allocating it per submission is wasteful and will move
-        // into the frame's resource pool once one exists; keeping it here for
-        // now avoids a cache whose invalidation rules nothing yet needs.
+        // and discarded. So is the stencil buffer. Neither is made here unless
+        // the last submissions left none that fits: see `crate::kept`.
+        let color_key = crate::kept::ColorKey {
+            extent,
+            format: target.format(),
+            samples: pass.samples,
+        };
         let multisample = if pass.is_multisampled() {
-            match self.create_multisample_buffer(target, pass.samples) {
+            let kept = self.kept_color.take(&color_key);
+            match kept.map_or_else(|| self.create_multisample_buffer(target, pass.samples), Ok) {
                 Ok(ms) => Some(ms),
                 Err(e) => {
                     unsafe { device.destroy_image_view(view, None) };
@@ -399,20 +404,29 @@ impl VulkanContext {
             None
         };
 
-        // Matches the multisample buffer in lifetime and in reason: written
-        // during the pass, never read afterwards, discarded at the end.
-        let stencil = match stencil_format {
-            Some(format) => match crate::stencil::create(self, extent, pass.samples, format) {
-                Ok(buffer) => Some(buffer),
-                Err(e) => {
-                    unsafe { device.destroy_image_view(view, None) };
-                    if let Some((tex, ms_view)) = multisample {
-                        unsafe { device.destroy_image_view(ms_view, None) };
-                        self.destroy_texture(tex);
+        let stencil_key = stencil_format.map(|format| crate::kept::StencilKey {
+            extent,
+            format,
+            samples: pass.samples,
+        });
+        let stencil = match stencil_key {
+            Some(key) => {
+                let kept = self.kept_stencil.take(&key);
+                let made = kept.map_or_else(
+                    || crate::stencil::create(self, extent, pass.samples, key.format),
+                    Ok,
+                );
+                match made {
+                    Ok(buffer) => Some(buffer),
+                    Err(e) => {
+                        unsafe { device.destroy_image_view(view, None) };
+                        if let Some(ms) = multisample {
+                            self.keep_color(color_key, ms);
+                        }
+                        return Err(e);
                     }
-                    return Err(e);
                 }
-            },
+            }
             None => None,
         };
 
@@ -435,12 +449,11 @@ impl VulkanContext {
             Ok(fb) => fb,
             Err(e) => {
                 unsafe { device.destroy_image_view(view, None) };
-                if let Some((tex, ms_view)) = multisample {
-                    unsafe { device.destroy_image_view(ms_view, None) };
-                    self.destroy_texture(tex);
+                if let Some(ms) = multisample {
+                    self.keep_color(color_key, ms);
                 }
-                if let Some(stencil) = stencil {
-                    stencil.destroy(self);
+                if let (Some(key), Some(stencil)) = (stencil_key, stencil) {
+                    self.keep_stencil(key, stencil);
                 }
                 return Err(backend_err("create_framebuffer", e));
             }
@@ -538,12 +551,13 @@ impl VulkanContext {
             device.destroy_framebuffer(framebuffer, None);
             device.destroy_image_view(view, None);
         }
-        if let Some((tex, ms_view)) = multisample {
-            unsafe { device.destroy_image_view(ms_view, None) };
-            self.destroy_texture(tex);
+        // Kept for the next submission, which in a frame loop is this one
+        // again. Whatever the outcome: the buffers are sound either way.
+        if let Some(ms) = multisample {
+            self.keep_color(color_key, ms);
         }
-        if let Some(stencil) = stencil {
-            stencil.destroy(self);
+        if let (Some(key), Some(stencil)) = (stencil_key, stencil) {
+            self.keep_stencil(key, stencil);
         }
 
         if outcome.is_ok() {
@@ -555,7 +569,28 @@ impl VulkanContext {
         outcome
     }
 
-    /// Allocate a transient multisample color buffer matching `target`.
+    /// Keep a multisample buffer no submission is using, freeing the one it
+    /// pushes out.
+    fn keep_color(&mut self, key: crate::kept::ColorKey, buffer: (VulkanTexture, vk::ImageView)) {
+        if let Some((texture, view)) = self.kept_color.put(key, buffer) {
+            // SAFETY: a kept buffer is in no submission.
+            unsafe { self.raw_device().destroy_image_view(view, None) };
+            self.destroy_texture(texture);
+        }
+    }
+
+    /// Keep a stencil buffer no submission is using, freeing the one it pushes
+    /// out.
+    fn keep_stencil(
+        &mut self,
+        key: crate::kept::StencilKey,
+        buffer: crate::stencil::StencilBuffer,
+    ) {
+        if let Some(old) = self.kept_stencil.put(key, buffer) {
+            old.destroy(self);
+        }
+    }
+
     /// The stencil format this submission needs, or `None` if it needs none.
     ///
     /// Resolved once per submission rather than per draw so that every key
