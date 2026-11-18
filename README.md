@@ -292,13 +292,9 @@ defect is visible at all.
 
 ## Releases
 
-`emblema 0.3.0` is on crates.io, as are the thirteen crates it is assembled
+`emblema 0.3.1` is on crates.io, as are the thirteen crates it is assembled
 from. [`CHANGELOG.md`](https://github.com/jwinarske/emblema/blob/main/CHANGELOG.md)
 says what changed since `0.2.0`, the first release under this name.
-
-**The prepared release is `0.3.1`, and until it is pushed the dependency below
-will not resolve.** `cargo xtask release` prints the order it goes up in and
-what each step needs.
 
 ```toml
 [dependencies]
