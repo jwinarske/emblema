@@ -7,6 +7,40 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.3 — 2026-11-18
+
+One merge past 0.3.2: what a pipeline's first build costs where the driver
+keeps nothing.
+
+### What a first draw costs
+
+**Pipelines are built through a cache a caller can keep.** A pipeline is
+compiled by the driver the first time it is built. Mesa keeps what it compiled
+on disk by itself; IMG's driver keeps nothing, and on a VisionFive 2 -- a
+PowerVR BXE-4-32 -- each first build is most of a second, in whichever frame
+first draws with it, in every run: a button's first highlight arrived after the
+pointer had left. Every pipeline is now built through a `VkPipelineCache` the
+context makes at its first use, and its contents can be read out and handed
+back in a later process. On that board, with one earlier run's bytes loaded,
+the longest frame of a pointer moved onto a button and clicked went from
+792 ms to 11, and the eight pipelines `prepare_pipelines` builds from 1,577 ms
+to 335.
+
+This crate reads and writes no files: where the bytes are kept is the
+caller's.
+
+### New
+
+**`VulkanContext::pipeline_cache_data`** gives what the driver has compiled for
+the context's pipelines, as the driver's own bytes.
+
+**`VulkanContext::load_pipeline_cache`** takes those bytes back, before the
+first pipeline is built for it to matter, and says whether it did. Bytes are
+handed to the driver only if they begin with the header of this device and
+this driver build and are no longer than **`PIPELINE_CACHE_LIMIT`**; a driver
+update makes an older cache one that is refused, and so is the 20 bytes
+lavapipe gives for a cache it does not keep.
+
 ## 0.3.2 — 2026-11-18
 
 One merge past 0.3.1, and the rest of what a frame costs on a small GPU: the
