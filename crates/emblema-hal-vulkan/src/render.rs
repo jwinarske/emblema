@@ -687,12 +687,17 @@ impl VulkanContext {
         textures: &[&VulkanTexture],
         sync: crate::device::FrameSync<'_>,
     ) -> Result<crate::fence::VulkanFence> {
-        if pass.is_multisampled() {
-            // The transient multisample buffer would have to outlive the
-            // submission too. Supporting it means putting it in the fence
-            // alongside the rest, which is worth doing when a caller needs it.
+        if !pass.samples.is_power_of_two() {
+            return Err(Error::Unsupported("sample count is not a power of two"));
+        }
+        if !self.capabilities().sample_counts.supports(pass.samples) {
+            return Err(Error::Unsupported("sample count not supported by device"));
+        }
+        if pass.is_multisampled() && pass.clear.is_none() {
+            // As the waiting form refuses it, and for its reason.
             return Err(Error::Unsupported(
-                "deferred submission of a multisampled pass",
+                "a multisampled pass must clear: give the pass a clear color, \
+                 or draw it at one sample",
             ));
         }
         let format = vk_format(target.format());
@@ -704,7 +709,7 @@ impl VulkanContext {
         let pass_key = RenderPassKey {
             format,
             clears: pass.clear.is_some(),
-            samples: 1,
+            samples: pass.samples,
             presents: sync.presents,
             stencil: stencil_format,
         };
@@ -716,7 +721,7 @@ impl VulkanContext {
                     program: draw.material.program(),
                     blend: draw.blend,
                     shader: draw.shader_variant(),
-                    samples: 1,
+                    samples: pass.samples,
                     stencil: stencil_format,
                     role: draw.stencil.role,
                 },
@@ -782,6 +787,24 @@ impl VulkanContext {
         if let Some(materials) = fence.materials.take() {
             materials.destroy(&self.raw_device().clone());
         }
+        // The GPU is done with them, and the next submission's are these.
+        let mut pass_buffers = std::mem::take(
+            fence
+                .pass_buffers
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        self.keep_pass_buffers(&mut pass_buffers);
+    }
+
+    /// Keep what a pass rendered through, now that nothing is using it.
+    fn keep_pass_buffers(&mut self, buffers: &mut PassBuffers) {
+        if let Some((key, ms)) = buffers.color.take() {
+            self.keep_color(key, ms);
+        }
+        if let Some((key, stencil)) = buffers.stencil.take() {
+            self.keep_stencil(key, stencil);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -821,7 +844,68 @@ impl VulkanContext {
         let view = unsafe { device.create_image_view(&view_info, None) }
             .map_err(|e| backend_err("create_image_view", e))?;
 
-        let attachments = [view];
+        // The pass's multisample and stencil buffers, out of what the context
+        // keeps and back into it when the fence retires: until then the GPU
+        // may be writing them, so they travel with the fence like the
+        // framebuffer they are attached through.
+        let color_key = crate::kept::ColorKey {
+            extent,
+            format: target.format(),
+            samples: pass.samples,
+        };
+        let multisample = if pass.is_multisampled() {
+            let kept = self.kept_color.take(&color_key);
+            match kept.map_or_else(|| self.create_multisample_buffer(target, pass.samples), Ok) {
+                Ok(ms) => Some(ms),
+                Err(e) => {
+                    unsafe { device.destroy_image_view(view, None) };
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        let stencil_key = stencil_format.map(|format| crate::kept::StencilKey {
+            extent,
+            format,
+            samples: pass.samples,
+        });
+        let stencil = match stencil_key {
+            Some(key) => {
+                let kept = self.kept_stencil.take(&key);
+                let made = kept.map_or_else(
+                    || crate::stencil::create(self, extent, pass.samples, key.format),
+                    Ok,
+                );
+                match made {
+                    Ok(buffer) => Some(buffer),
+                    Err(e) => {
+                        unsafe { device.destroy_image_view(view, None) };
+                        if let Some(ms) = multisample {
+                            self.keep_color(color_key, ms);
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            None => None,
+        };
+        // Until the submission is made nothing reads any of this, so a
+        // failure before then gives it all back.
+        let mut pass_buffers = PassBuffers {
+            color: multisample.map(|ms| (color_key, ms)),
+            stencil: stencil_key.zip(stencil),
+        };
+
+        // Order matches the render pass: the multisample attachment first, the
+        // resolve target the caller reads, then the stencil.
+        let mut attachments: Vec<vk::ImageView> = match &pass_buffers.color {
+            Some((_, (_, ms_view))) => vec![*ms_view, view],
+            None => vec![view],
+        };
+        if let Some((_, stencil)) = &pass_buffers.stencil {
+            attachments.push(stencil.view);
+        }
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass)
             .attachments(&attachments)
@@ -832,6 +916,7 @@ impl VulkanContext {
             Ok(fb) => fb,
             Err(e) => {
                 unsafe { device.destroy_image_view(view, None) };
+                self.keep_pass_buffers(&mut pass_buffers);
                 return Err(backend_err("create_framebuffer", e));
             }
         };
@@ -849,7 +934,7 @@ impl VulkanContext {
                         program: draw.material.program(),
                         blend: draw.blend,
                         shader: draw.shader_variant(),
-                        samples: 1,
+                        samples: pass.samples,
                         stencil: stencil_format,
                         role: draw.stencil.role,
                     })
@@ -858,7 +943,17 @@ impl VulkanContext {
             .collect();
 
         let previous_layout = target.layout();
-        let cmd = self.begin_one_shot()?;
+        let cmd = match self.begin_one_shot() {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                unsafe {
+                    device.destroy_framebuffer(framebuffer, None);
+                    device.destroy_image_view(view, None);
+                }
+                self.keep_pass_buffers(&mut pass_buffers);
+                return Err(e);
+            }
+        };
 
         // SAFETY: every object below belongs to this device and the command
         // buffer is in the recording state.
@@ -878,11 +973,14 @@ impl VulkanContext {
                 );
             }
 
-            let clear_values = [vk::ClearValue {
+            // One clear value per attachment, as the waiting form gives: the
+            // resolve target's is discarded, and the stencil starts at zero.
+            let mut clear_values = vec![vk::ClearValue {
                 color: vk::ClearColorValue {
                     float32: pass.clear.unwrap_or([0.0; 4]),
                 },
             }];
+            clear_values.resize(attachments.len(), vk::ClearValue::default());
             let area = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D {
@@ -918,7 +1016,15 @@ impl VulkanContext {
             device.cmd_end_render_pass(cmd);
         }
 
-        let mut fence = self.submit_exportable(cmd, framebuffer, view, sync)?;
+        let mut fence = match self.submit_exportable(cmd, framebuffer, view, sync) {
+            Ok(fence) => fence,
+            Err(e) => {
+                // Not submitted, so nothing is reading the pass's buffers.
+                self.keep_pass_buffers(&mut pass_buffers);
+                return Err(e);
+            }
+        };
+        fence.pass_buffers = std::sync::Mutex::new(pass_buffers);
         fence.bindings = Some(bindings);
         fence.materials = Some(materials);
         fence.retained.push(material_buffer);
@@ -1025,6 +1131,17 @@ impl VulkanContext {
         // call that made it returned.
         unsafe { self.raw_device().destroy_buffer(staged.buffer, None) };
     }
+}
+
+/// The multisample color buffer and the stencil buffer a pass rendered
+/// through, each with the key it is kept under.
+///
+/// A waiting submission holds these on its stack. A deferred one hands them
+/// to its fence, since the GPU may be writing them until it signals.
+#[derive(Default)]
+pub(crate) struct PassBuffers {
+    pub(crate) color: Option<(crate::kept::ColorKey, (VulkanTexture, vk::ImageView))>,
+    pub(crate) stencil: Option<(crate::kept::StencilKey, crate::stencil::StencilBuffer)>,
 }
 
 pub(crate) struct StagedBuffer {

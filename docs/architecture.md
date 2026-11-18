@@ -1970,6 +1970,17 @@ BXE-4-32, where at 1280x720 and four samples it was 3.5 ms of a frame's 12:
 stores neither, so nothing carries over in a buffer that is used again, and
 `a_pass_s_buffers_are_kept_and_carry_nothing_over` holds that.
 
+A deferred submission takes them out of the same pool and its fence carries
+them until it retires, since the GPU may be writing them until then. That is
+what lets a multisampled pass be deferred at all: it was refused before, so a
+display loop whose frames antialias by multisampling waited for each on the
+CPU. On the same board the wait was 5.5 to 6 ms of a 16.7 ms frame, and the
+thread that submits now spends 2.2 ms doing so. Two frames in flight hold a
+pair each, `a_fence_holds_its_pass_s_buffers_until_it_retires`. The deferred
+form with a clip had a stencil in its render pass and none in its framebuffer
+until this was written; `a_deferred_multisampled_pass_draws_what_a_waiting_one_does`
+covers that case at one sample and at four.
+
 Pipelines are compiled **lazily, on first use**, not at context creation: each
 submission walks its draws and ensures a pipeline for every distinct
 `(format, program, blend, samples, stencil, role, shader variant)`, and they are
