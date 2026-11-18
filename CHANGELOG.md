@@ -7,6 +7,41 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.2 — 2026-11-18
+
+One merge past 0.3.1, and the rest of what a frame costs on a small GPU: the
+wait for it.
+
+### What a frame costs
+
+**A submission that is not waited for takes a multisampled or clipped pass.**
+`submit_batch_deferred_synchronized` hands a frame to the GPU and returns its
+fence, for a display to wait on in the kernel before the flip; it refused a
+pass with more than one sample, so a renderer that antialiases by multisampling
+could only use the submission that waits. It now takes the pass's multisample
+and stencil buffers from the ones the context keeps, holds them on the fence
+while the GPU draws, and puts them back when the fence retires. A multisampled
+pass must clear, as it must on the waiting path; one that preserves is still
+refused.
+
+On a VisionFive 2 at 1280x720 and four samples, with the display taking the
+fence on every commit but the one that sets the mode, the thread that submits
+went from 8.9 ms a frame to 2.2 for one rectangle and from 9.2 to 2.3 for a
+screen of changing text. Retiring the frame before costs about 1.1 ms where
+the next buffer is picked up, so the thread has about 6 ms more of a 16.7 ms
+frame than it had.
+
+**`DrmScanoutTarget::submit_recording` takes a recording that draws nothing.**
+A frame with an empty root pass has nothing to fence; it is executed and waited
+for, where it was an error.
+
+### New
+
+**`DrmScanoutTarget::wait_for_rendering`** waits for every frame the ring has
+handed to the GPU. A caller that submits without waiting calls it before it
+destroys or rewrites a texture a frame in flight may be sampling: a glyph
+atlas about to take new glyphs, an image about to be dropped.
+
 ## 0.3.1 — 2026-11-17
 
 One merge past 0.3.0, and one thing: what a frame costs on a small GPU.
