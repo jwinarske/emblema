@@ -7,6 +7,33 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.1 — 2026-11-17
+
+One merge past 0.3.0, and one thing: what a frame costs on a small GPU.
+
+### What a frame costs
+
+**A pass's multisample and stencil buffers are kept between submissions.** A
+multisampled pass renders into a color buffer it resolves out of, and a clipped
+one into a stencil buffer, and both were allocated and freed inside every
+submission. On a VisionFive 2 -- a PowerVR BXE-4-32 under IMG's Vulkan driver
+-- at 1280x720 and four samples that was 3.5 ms of a submission that took
+12 ms and whose GPU work took 5.5. A Vulkan context now keeps up to two of
+each, by extent, format and sample count, the least recently used freed to make
+room. On that board a submission of one rectangle went from 12.0 ms to 8.8, a
+screen of changing text from 12.5 to 9.2, and the text screen from missing one
+blank in eight at 60 Hz to missing none.
+
+The pass still clears both and stores neither, so nothing carries over in a
+buffer that is used again.
+
+### New
+
+**`VulkanContext::release_pass_buffers`** frees what is kept, for a caller that
+has stopped drawing or is about to draw at another size: a kept buffer is its
+target's size times its sample count, 33 MB for 1920x1080 at four samples.
+**`VulkanContext::pass_buffers_kept`** counts them.
+
 ## 0.3.0 — 2026-11-17
 
 A hundred and five merges past 0.2.0. Most of them are one of three things:
