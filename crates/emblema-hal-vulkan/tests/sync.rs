@@ -7,7 +7,10 @@
 //! is a full frame of latency rather than a correctness problem — the kind of
 //! regression that is easy to introduce and hard to notice.
 
-use emblema_hal::{Batch, BlendMode, Extent2D, HalFence, Material, PassDescriptor, PixelFormat};
+use emblema_hal::{
+    Batch, BlendMode, ClipState, ColorFilter, Extent2D, HalFence, Material, PassDescriptor,
+    PixelFormat,
+};
 use emblema_hal::{TextureDescriptor, FRAME_WAIT_TIMEOUT};
 use emblema_hal_vulkan::{ContextConfig, DevicePreference, VulkanContext};
 
@@ -213,25 +216,139 @@ fn deferred_and_waiting_submission_produce_the_same_pixels() {
     assert_clean(&ctx);
 }
 
+/// A triangle clipped to a smaller rectangle: an edge for multisampling to
+/// soften and a clip for the stencil to hold.
+fn clipped_scene() -> Batch {
+    let mut batch = Batch::new();
+    batch
+        .push_with(
+            &[[-0.5, -0.7], [0.6, -0.7], [0.6, 0.4], [-0.5, 0.4]],
+            &QUAD,
+            Material::solid([1.0; 4]),
+            ColorFilter::None,
+            BlendMode::Src,
+            None,
+            ClipState::narrow(0),
+        )
+        .expect("clip");
+    batch
+        .push_with(
+            &[[-0.9, -0.9], [0.9, -0.8], [0.1, 0.9]],
+            &[0, 1, 2],
+            Material::solid([1.0, 0.0, 0.0, 1.0]),
+            ColorFilter::None,
+            BlendMode::SrcOver,
+            None,
+            ClipState::content(1),
+        )
+        .expect("content");
+    batch
+}
+
+/// `batch` at `samples`, submitted without waiting and submitted waiting.
+fn deferred_and_waiting(ctx: &mut VulkanContext, batch: &Batch, samples: u32) -> [Vec<u8>; 2] {
+    let pass = PassDescriptor::clear([0.0, 0.0, 1.0, 1.0]).with_samples(samples);
+    let mut tex = target(ctx);
+    let fence = ctx
+        .submit_batch_deferred(&mut tex, batch, pass)
+        .expect("deferred submit");
+    assert!(fence.wait(FRAME_WAIT_TIMEOUT).expect("wait"));
+    ctx.retire_fence(fence);
+    let deferred = ctx.read_texture(&mut tex).expect("readback");
+    ctx.destroy_texture(tex);
+
+    let mut tex = target(ctx);
+    ctx.submit_batch(&mut tex, batch, pass).expect("submit");
+    let waiting = ctx.read_texture(&mut tex).expect("readback");
+    ctx.destroy_texture(tex);
+    [deferred, waiting]
+}
+
 #[test]
-fn a_deferred_multisampled_pass_is_refused_rather_than_leaking() {
+fn a_deferred_multisampled_pass_draws_what_a_waiting_one_does() {
+    let Some(mut ctx) = context() else { return };
+    if !ctx.capabilities().sample_counts.supports(4) {
+        return;
+    }
+    // This was refused: the pass's multisample buffer has to outlive the
+    // submission, and freeing it underneath the GPU corrupts intermittently
+    // rather than failing. It travels with the fence now, and the stencil
+    // buffer with it.
+    for batch in [scene(), clipped_scene()] {
+        let [deferred, waiting] = deferred_and_waiting(&mut ctx, &batch, 4);
+        assert_eq!(deferred, waiting, "deferring changed what was rendered");
+    }
+    // A frame's pass at one sample with a clip, which had a stencil in its
+    // render pass and none in its framebuffer.
+    let [deferred, waiting] = deferred_and_waiting(&mut ctx, &clipped_scene(), 1);
+    assert_eq!(deferred, waiting, "deferring changed what was rendered");
+    assert_clean(&ctx);
+}
+
+#[test]
+fn a_fence_holds_its_pass_s_buffers_until_it_retires() {
+    let Some(mut ctx) = context() else { return };
+    if !ctx.capabilities().sample_counts.supports(4) {
+        return;
+    }
+    let batch = clipped_scene();
+    let pass = PassDescriptor::clear([0.0; 4]).with_samples(4);
+
+    // Two frames in flight, as a frame loop two deep has them. Each needs a
+    // multisample and a stencil buffer of its own, since the GPU may be
+    // writing the first's while the second is submitted; neither is the
+    // context's to hand out again until its fence retires.
+    let mut first_target = target(&mut ctx);
+    let mut second_target = target(&mut ctx);
+    let first = ctx
+        .submit_batch_deferred(&mut first_target, &batch, pass)
+        .expect("first submission");
+    assert_eq!(ctx.pass_buffers_kept(), 0, "the first frame has its own");
+    let second = ctx
+        .submit_batch_deferred(&mut second_target, &batch, pass)
+        .expect("second submission");
+    assert_eq!(ctx.pass_buffers_kept(), 0, "and the second its own");
+
+    ctx.retire_fence(first);
+    assert_eq!(ctx.pass_buffers_kept(), 2, "one color, one stencil, back");
+    // The third frame takes those rather than making more.
+    let mut third_target = target(&mut ctx);
+    let third = ctx
+        .submit_batch_deferred(&mut third_target, &batch, pass)
+        .expect("third submission");
+    assert_eq!(ctx.pass_buffers_kept(), 0);
+    ctx.retire_fence(second);
+    ctx.retire_fence(third);
+    assert_eq!(ctx.pass_buffers_kept(), 4);
+
+    let frames: Vec<Vec<u8>> = [&mut first_target, &mut second_target, &mut third_target]
+        .into_iter()
+        .map(|t| ctx.read_texture(t).expect("readback"))
+        .collect();
+    assert_eq!(frames[0], frames[1]);
+    assert_eq!(frames[0], frames[2]);
+    for t in [first_target, second_target, third_target] {
+        ctx.destroy_texture(t);
+    }
+    assert_clean(&ctx);
+}
+
+#[test]
+fn a_deferred_multisampled_pass_that_does_not_clear_is_refused() {
     let Some(mut ctx) = context() else { return };
     if !ctx.capabilities().sample_counts.supports(4) {
         return;
     }
     let mut tex = target(&mut ctx);
-    let batch = scene();
-
-    // The transient multisample buffer would have to outlive the submission
-    // too. Refusing is better than submitting and freeing it underneath the
-    // GPU, which corrupts intermittently rather than failing.
+    // As the waiting form refuses it: there is no reverse of a resolve to
+    // seed the multisample buffer with what the target held.
     let result = ctx.submit_batch_deferred(
         &mut tex,
-        &batch,
-        PassDescriptor::clear([0.0; 4]).with_samples(4),
+        &scene(),
+        PassDescriptor::preserve().with_samples(4),
     );
     assert!(result.is_err());
-
+    assert_eq!(ctx.pass_buffers_kept(), 0);
     ctx.destroy_texture(tex);
     assert_clean(&ctx);
 }

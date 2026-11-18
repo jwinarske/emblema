@@ -113,11 +113,11 @@ fn frame(width: f32, height: f32, t: f32, cards: u32) -> emblema_core::Recording
         .draw_rect(
             Rect::new(0.0, 0.0, width, height),
             // Not antialiased, and it costs nothing: this covers the whole
-            // frame, so it has no edge to soften. It matters because a gradient
-            // fill is tessellated rather than evaluated per fragment, so with
-            // antialiasing on it would make the frame's pass multisampled --
-            // and `execute_deferred` cannot submit one of those, which is how
-            // the fence reaches the kernel.
+            // frame, so it has no edge to soften. A gradient fill is
+            // tessellated rather than evaluated per fragment, so with
+            // antialiasing on it would make the frame's pass multisampled for
+            // an edge nobody sees. `execute_deferred` could not submit one of
+            // those when this was written, and can now.
             &Paint::default()
                 .with_anti_alias(false)
                 .with_shader(Shader::LinearGradient {

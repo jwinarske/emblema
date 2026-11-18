@@ -508,10 +508,10 @@ pub(super) fn stacked(stage: Stacked) -> Recording {
 /// ramp, the blur's passes, the layer's own target and its composite back.
 ///
 /// Deliberately *not* the panel example's frame, which it otherwise resembles.
-/// That one turns antialiasing off on its ground because `execute_deferred`
-/// cannot submit a multisampled pass, which is a constraint of presenting to a
-/// display and not of drawing. A frame written to be timed should look like a
-/// frame, so this leaves it on.
+/// That one turns antialiasing off on its ground, which has no edge to soften;
+/// it was written when `execute_deferred` could not submit a multisampled pass
+/// at all. A frame written to be timed should look like a frame, so this
+/// leaves it on.
 ///
 /// Static, at one instant of that scene rather than a moving one: a benchmark
 /// that changed its own content between runs would report the content.

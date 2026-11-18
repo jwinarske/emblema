@@ -674,6 +674,18 @@ where
         let Some(index) = self.acquired else {
             return Err(Error::Unsupported("no frame is currently acquired"));
         };
+        if recording.root().batch.is_empty() {
+            // A frame that draws nothing is a clear, and a clear has no
+            // deferred form: it is waited for, and the commit carries no
+            // fence, as a frame the caller rendered and waited for carries
+            // none.
+            return emblema_core::execute::<H>(
+                ctx,
+                &mut self.slots[index].texture,
+                recording,
+                images,
+            );
+        }
         let (fence, transient) = emblema_core::execute_deferred::<H>(
             ctx,
             &mut self.slots[index].texture,
@@ -682,6 +694,32 @@ where
         )?;
         self.slots[index].fence = Some(fence);
         self.slots[index].retained = transient.into_textures();
+        Ok(())
+    }
+
+    /// Wait until the GPU has finished every frame submitted to this ring.
+    ///
+    /// A frame submitted through [`Self::submit_recording`] is still being
+    /// drawn when that returns, and it samples the caller's textures while it
+    /// is. A caller about to write or destroy one of those -- a glyph atlas
+    /// it adds to, an image nothing refers to any more -- waits here first.
+    /// Nothing is retired: a slot's fence stays with it for the commit, or
+    /// for whoever frees the slot.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Timeout`] if a frame is still drawing after the standard
+    /// frame-loop wait, and whatever waiting on a fence reports.
+    pub fn wait_for_rendering(&self) -> Result<()> {
+        for slot in &self.slots {
+            if let Some(fence) = &slot.fence {
+                if !fence.wait(FRAME_WAIT_TIMEOUT)? {
+                    return Err(Error::Timeout {
+                        what: "a submitted frame to finish drawing",
+                    });
+                }
+            }
+        }
         Ok(())
     }
 }
