@@ -1959,6 +1959,17 @@ comment in `upload` claimed there were until this was checked, and this
 paragraph claimed it too. Long-lived resources are `Arc`-tracked and retired by
 the fence waiter.
 
+A pass's multisample color buffer and its stencil buffer are the exception:
+transient in what they hold, and **kept between submissions** in what they are.
+A context keeps up to two of each, by extent, format and sample count, the
+least recently used freed to make room, and
+`VulkanContext::release_pass_buffers` gives them all back. They were allocated
+and freed inside every submission until that was measured on a PowerVR
+BXE-4-32, where at 1280x720 and four samples it was 3.5 ms of a frame's 12:
+2.3 ms to make the two, 1.2 to free them. The pass still clears both and
+stores neither, so nothing carries over in a buffer that is used again, and
+`a_pass_s_buffers_are_kept_and_carry_nothing_over` holds that.
+
 Pipelines are compiled **lazily, on first use**, not at context creation: each
 submission walks its draws and ensures a pipeline for every distinct
 `(format, program, blend, samples, stencil, role, shader variant)`, and they are

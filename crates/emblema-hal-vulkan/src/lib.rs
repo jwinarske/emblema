@@ -16,6 +16,7 @@ pub mod device;
 pub mod external;
 pub mod fence;
 pub mod hal;
+pub(crate) mod kept;
 pub(crate) mod materials;
 pub mod render;
 pub mod resource;

@@ -296,6 +296,12 @@ pub struct VulkanContext {
     /// submission pool would have to survive until a fence the caller retires
     /// whenever it chooses.
     placeholder_binding: Option<(vk::DescriptorPool, vk::ImageView, vk::DescriptorSet)>,
+    /// Multisample color buffers and stencil buffers between the submissions
+    /// that use them. See `kept.rs`.
+    pub(crate) kept_color:
+        crate::kept::Kept<crate::kept::ColorKey, (crate::resource::VulkanTexture, vk::ImageView)>,
+    pub(crate) kept_stencil:
+        crate::kept::Kept<crate::kept::StencilKey, crate::stencil::StencilBuffer>,
     enabled_extensions: HashSet<String>,
     instance: ash::Instance,
     _entry: ash::Entry,
@@ -586,6 +592,8 @@ impl VulkanContext {
             sampler: None,
             placeholder: None,
             placeholder_binding: None,
+            kept_color: crate::kept::Kept::default(),
+            kept_stencil: crate::kept::Kept::default(),
             enabled_extensions: enabled,
             instance,
             _entry: entry,
@@ -1008,6 +1016,35 @@ impl VulkanContext {
     }
 }
 
+impl VulkanContext {
+    /// How many multisample and stencil buffers are kept between submissions,
+    /// for [`Self::release_pass_buffers`] to free.
+    pub fn pass_buffers_kept(&self) -> usize {
+        self.kept_color.len() + self.kept_stencil.len()
+    }
+
+    /// Free the multisample and stencil buffers kept between submissions.
+    ///
+    /// A context keeps the last few a pass used, since a frame loop asks for
+    /// the same ones every frame. They are the largest allocations a context
+    /// holds, so a caller that has stopped drawing for a while, or is about to
+    /// draw at another size, can give them back; the next multisampled or
+    /// clipped submission allocates its own again.
+    pub fn release_pass_buffers(&mut self) {
+        let color: Vec<_> = self.kept_color.drain().collect();
+        for (texture, view) in color {
+            // SAFETY: a kept buffer is in no submission; the one that used it
+            // was waited on before it was put back.
+            unsafe { self.device.destroy_image_view(view, None) };
+            self.destroy_texture(texture);
+        }
+        let stencil: Vec<_> = self.kept_stencil.drain().collect();
+        for buffer in stencil {
+            buffer.destroy(self);
+        }
+    }
+}
+
 impl Drop for VulkanContext {
     fn drop(&mut self) {
         // The allocator must free its memory while the device is still alive,
@@ -1017,6 +1054,8 @@ impl Drop for VulkanContext {
         if let Some(texture) = self.placeholder.take() {
             self.destroy_texture(texture);
         }
+        // And the attachments kept between submissions, for the same reason.
+        self.release_pass_buffers();
         // SAFETY: nothing is in flight, and no descriptor set still refers to
         // either of these -- every other pool is destroyed with the submission
         // that made it.
