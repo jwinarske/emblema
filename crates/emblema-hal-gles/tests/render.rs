@@ -6,7 +6,8 @@
 //! rather than as two suites that merely happen to pass.
 
 use emblema_hal::{
-    Batch, BlendMode, Extent2D, Material, PassDescriptor, PixelFormat, TextureDescriptor,
+    Batch, BlendMode, Extent2D, Material, MaterialVariant, PassDescriptor, PixelFormat,
+    ShaderVariant, TextureDescriptor,
 };
 use emblema_hal_gles::Validated as GlesValidated;
 use emblema_hal_gles::{DisplayTarget, GlesTexture};
@@ -480,6 +481,22 @@ fn a_prepared_context_draws_what_an_unprepared_one_does() {
         .expect("prepare");
     warm.prepare_pipelines(PixelFormat::Rgba8Unorm, 4)
         .expect("prepare again");
+    // One more variant linked ahead, twice, and a caller's program refused.
+    let shape = ShaderVariant {
+        material: MaterialVariant::Shape,
+        ..ShaderVariant::CORE
+    };
+    warm.prepare_variant(PixelFormat::Rgba8Unorm, 4, shape)
+        .expect("prepare a variant");
+    warm.prepare_variant(PixelFormat::Rgba8Unorm, 4, shape)
+        .expect("prepare it again");
+    let runtime = ShaderVariant {
+        material: MaterialVariant::Runtime,
+        ..ShaderVariant::CORE
+    };
+    assert!(warm
+        .prepare_variant(PixelFormat::Rgba8Unorm, 4, runtime)
+        .is_err());
     let mut batch = Batch::new();
     batch
         .push(

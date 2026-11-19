@@ -831,6 +831,30 @@ impl GlesContext {
         self.ensure_variant(solid_variant(ShaderVariant::CORE), false)
     }
 
+    /// Link one more variant of the built-in program, in its plain form,
+    /// ahead of the first draw that needs it: [`MaterialVariant::Shape`] for
+    /// rounded rectangles and shadows, [`MaterialVariant::Image`] for images
+    /// and composited layers. [`GlesContext::prepare_pipelines`] links the
+    /// core variant alone.
+    ///
+    /// The format and sample count make no difference, as there.
+    /// [`MaterialVariant::Runtime`] is refused: its fragment stage is a
+    /// caller's program, which is linked when a draw names it.
+    pub fn prepare_variant(
+        &mut self,
+        _format: PixelFormat,
+        _samples: u32,
+        shader: ShaderVariant,
+    ) -> Result<()> {
+        if shader.material == MaterialVariant::Runtime {
+            return Err(Error::Unsupported(
+                "a runtime program is built by the draw that names it",
+            ));
+        }
+        self.ensure_program()?;
+        self.ensure_variant(solid_variant(shader), false)
+    }
+
     /// The buffers and vertex state every built-in program draws with.
     fn ensure_program(&mut self) -> Result<()> {
         if self.program().is_some() {

@@ -157,6 +157,31 @@ impl Context {
         }
     }
 
+    /// Build one more variant of the built-in shader ahead of the first draw
+    /// that needs it, as [`Context::prepare_pipelines`] builds the core one:
+    /// [`MaterialVariant::Shape`](crate::MaterialVariant::Shape) for
+    /// rounded rectangles and shadows,
+    /// [`MaterialVariant::Image`](crate::MaterialVariant::Image) for
+    /// images and composited layers.
+    ///
+    /// Each is a compile of its own, most of a second on some drivers, so it
+    /// belongs with a step that prepares once and exits, not with every
+    /// start. A runtime program's variant is refused: it is built by the draw
+    /// that names it.
+    pub fn prepare_variant(
+        &mut self,
+        format: PixelFormat,
+        samples: u32,
+        shader: crate::ShaderVariant,
+    ) -> Result<()> {
+        match self {
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(ctx) => ctx.prepare_variant(format, samples, shader),
+            #[cfg(feature = "gles")]
+            Self::Gles(ctx) => ctx.prepare_variant(format, samples, shader),
+        }
+    }
+
     /// Register a fragment program a caller's own build produced.
     ///
     /// Returns the index to name it by, which is what goes into the `program`
