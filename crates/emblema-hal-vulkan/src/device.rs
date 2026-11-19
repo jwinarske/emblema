@@ -319,6 +319,14 @@ impl VulkanContext {
 
     /// Create a context with explicit configuration.
     pub fn with_config(config: ContextConfig) -> Result<Self> {
+        Self::with_memory(config, emblema_hal::MemoryBlocks::default())
+    }
+
+    /// Create a context that takes its memory in blocks of these sizes.
+    ///
+    /// Beside [`ContextConfig`] and not in it: a field added there would
+    /// break whoever writes one out in full.
+    pub fn with_memory(config: ContextConfig, blocks: emblema_hal::MemoryBlocks) -> Result<Self> {
         let preference = config.device;
         // SAFETY: the loader is dlopened and the returned entry points are
         // used only for the lifetime of `entry`, which this struct owns.
@@ -445,6 +453,7 @@ impl VulkanContext {
             validation_log,
             sync_validation_available,
             config.withheld,
+            blocks,
         )
     }
 
@@ -457,6 +466,7 @@ impl VulkanContext {
         validation_log: Arc<ValidationLog>,
         sync_validation: bool,
         withheld: emblema_hal::Withheld,
+        blocks: emblema_hal::MemoryBlocks,
     ) -> Result<Self> {
         let mut available = match device_extensions(&instance, physical_device) {
             Ok(set) => set,
@@ -556,7 +566,10 @@ impl VulkanContext {
                 physical_device,
                 debug_settings: Default::default(),
                 buffer_device_address: false,
-                allocation_sizes: Default::default(),
+                // Fixed, not growing: when a second block is made is then a
+                // matter of what has been allocated and not of how many
+                // blocks came before.
+                allocation_sizes: gpu_allocator::AllocationSizes::new(blocks.device, blocks.host),
             })
             .map_err(|e| Error::Backend {
                 backend: "vulkan",
@@ -788,6 +801,14 @@ impl VulkanContext {
 
     pub fn validation_active(&self) -> bool {
         self.debug_messenger.is_some()
+    }
+
+    /// The device memory held in blocks, in bytes: what has been taken from
+    /// the driver, which is more than what textures and buffers occupy.
+    pub fn memory_reserved(&self) -> u64 {
+        self.allocator
+            .as_ref()
+            .map_or(0, |a| a.generate_report().total_capacity_bytes)
     }
 
     /// Everything the layer has reported for this context so far.

@@ -199,6 +199,38 @@ pub struct BufferDescriptor {
     pub host_visible: bool,
 }
 
+/// The sizes of the blocks a backend takes device memory in, in bytes.
+///
+/// A backend that allocates its own memory takes it from the driver a block
+/// at a time and places textures and buffers inside: `device` for memory only
+/// the device reads, a texture's, and `host` for memory the host writes
+/// through, an upload's or a frame's vertices. Something larger than a block
+/// has one of its own.
+///
+/// The default is 256 MiB and 64 MiB, which suits a driver that backs memory
+/// as it is touched. One that backs a block with pages when it is made charges
+/// for all of it at the first texture: on a VisionFive 2 that was 100 ms for
+/// the device block and 38 for the host one, and 320 MiB held for an
+/// application using 57. An embedder that knows its targets picks blocks near
+/// what it will use.
+///
+/// Each is held between 4 MiB and 256 MiB and rounded up to a multiple of
+/// 4 MiB. A backend whose driver places memory itself, GLES, has no use for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryBlocks {
+    pub device: u64,
+    pub host: u64,
+}
+
+impl Default for MemoryBlocks {
+    fn default() -> Self {
+        Self {
+            device: 256 << 20,
+            host: 64 << 20,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

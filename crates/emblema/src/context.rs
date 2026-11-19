@@ -2,7 +2,9 @@
 
 use crate::backend::{no_backend, Backend, BackendPreference};
 use emblema_core::Recording;
-use emblema_hal::{Capabilities, Error, Extent2D, HalContext, PixelFormat, Result, RuntimeProgram};
+use emblema_hal::{
+    Capabilities, Error, Extent2D, HalContext, MemoryBlocks, PixelFormat, Result, RuntimeProgram,
+};
 
 /// A device to render with.
 ///
@@ -26,6 +28,12 @@ pub enum Context {
 impl Context {
     /// Create a context, choosing a backend.
     pub fn new(preference: BackendPreference) -> Result<Self> {
+        Self::with_memory(preference, MemoryBlocks::default())
+    }
+
+    /// Create a context whose backend takes device memory in blocks of
+    /// these sizes, where the backend is the one that places it (Vulkan).
+    pub fn with_memory(preference: BackendPreference, blocks: MemoryBlocks) -> Result<Self> {
         let mut attempts = Vec::new();
 
         #[cfg(feature = "vulkan")]
@@ -33,8 +41,10 @@ impl Context {
             preference,
             BackendPreference::Auto | BackendPreference::Vulkan
         ) {
-            match emblema_hal_vulkan::VulkanContext::new(emblema_hal_vulkan::DevicePreference::Auto)
-            {
+            match emblema_hal_vulkan::VulkanContext::with_memory(
+                emblema_hal_vulkan::ContextConfig::default(),
+                blocks,
+            ) {
                 Ok(ctx) => return Ok(Self::Vulkan(ctx)),
                 Err(e) => attempts.push((Backend::Vulkan, e)),
             }
@@ -51,7 +61,7 @@ impl Context {
             }
         }
 
-        let _ = preference;
+        let _ = (preference, blocks);
         Err(no_backend(attempts))
     }
 

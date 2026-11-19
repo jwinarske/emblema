@@ -63,7 +63,7 @@ unimplemented = "deny"
 [workspace.dependencies]
 # --- rendering ---
 ash = "0.38"
-gpu-allocator = "0.27"
+gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"] }
 glow = "0.14"
 # NEVER enable the "static" feature: it requires libEGL plus pkg-config at link
 # time, which breaks clean cross-builds. "dynamic" dlopens libEGL at runtime.
