@@ -214,6 +214,10 @@ pub struct BufferDescriptor {
 /// application using 57. An embedder that knows its targets picks blocks near
 /// what it will use.
 ///
+/// A device with one kind of memory, every type of it mapped by the host, has
+/// no block of the first kind: there the larger of the two is the size of
+/// every block, so a texture is placed in a block of `device` at least.
+///
 /// Each is held between 4 MiB and 256 MiB and rounded up to a multiple of
 /// 4 MiB. A backend whose driver places memory itself, GLES, has no use for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
