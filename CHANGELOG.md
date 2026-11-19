@@ -7,6 +7,40 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.4 — 2026-11-18
+
+One merge past 0.3.3: what preparing ahead of a first frame builds.
+
+### What a first draw costs
+
+**A clip's mask is prepared as a canvas draws it.** `prepare_pipelines` built
+the two pipelines a mask is drawn with source-over. A canvas draws a mask with
+`Src`, and the blend is part of a pipeline's key, so the two prepared were
+never used and a canvas's first clip built its own. They are built with `Src`
+now; the count prepared is the same.
+
+**One more variant of the shader can be prepared.** `prepare_pipelines` builds
+the core variant alone, which every frame needs. A Flutter counter's first
+frame, pointer and click also draw with the shape variant and the image
+variant, and where the driver compiles on first use each was a frame that
+waited. On a VisionFive 2 with nothing kept, a step that prepared the three
+variants for the display's format left that run's longest frame at 11.5 ms; it
+was 755 with the core variant prepared alone. A pipeline is built for its
+target's format, and that board's driver keeps it by that: what is prepared for
+another format is compiled again.
+
+### New
+
+**`Context::prepare_variant`**, and the same on `VulkanContext` and
+`GlesContext`, builds the source-over pipelines of one variant of the built-in
+shader, at one sample and at the count given, with a stencil and without. Each
+variant is a compile of its own, so it goes with a step that prepares once and
+keeps what the driver compiled, not with every start. A runtime program's
+variant is refused: it is built by the draw that names it.
+
+**`MaterialVariant` and `ShaderVariant`** are exported from `emblema`, to name
+one.
+
 ## 0.3.3 — 2026-11-18
 
 One merge past 0.3.2: what a pipeline's first build costs where the driver
