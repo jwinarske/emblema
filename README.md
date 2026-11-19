@@ -296,9 +296,13 @@ defect is visible at all.
 from. [`CHANGELOG.md`](https://github.com/jwinarske/emblema/blob/main/CHANGELOG.md)
 says what changed since `0.2.0`, the first release under this name.
 
+**The prepared release is `0.3.5`, and until it is pushed the dependency below
+will not resolve.** `cargo xtask release` prints the order it goes up in and
+what each step needs.
+
 ```toml
 [dependencies]
-emblema = "0.3.4"
+emblema = "0.3.5"
 ```
 
 `emblema 0.0.0` and `0.0.1` also exist and contain **no API**: they reserved the
