@@ -7,6 +7,39 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.5 — 2026-11-19
+
+One merge past 0.3.4: the blocks a context takes device memory in.
+
+### What a context holds
+
+**The allocator's block sizes are the ones it is given.** A Vulkan context
+takes memory from the driver a block at a time, 256 MiB for textures and
+64 MiB for what the host writes through. gpu-allocator 0.27.0 dropped any
+other size it was handed and kept its defaults, so there was nothing to set.
+It is 0.28 now, with its Vulkan feature alone, and keeps them.
+
+That matters where a driver backs a block with pages when it is made. On a
+VisionFive 2 `vkAllocateMemory` costs about 0.45 ms a megabyte: a display's
+first texture took 100 ms and its first write 38, and a Flutter counter using
+57 MiB held 320. With blocks of 64 and 8 MiB the same start-up takes 14 ms and
+holds 75 MiB, and no frame of a hover and two taps is longer. With 32 MiB or
+less a second block is made during a frame, which then took 24 to 42 ms.
+
+The default is unchanged, 256 and 64 MiB: a caller that does not ask gets what
+it had.
+
+### New
+
+**`MemoryBlocks`**, the two sizes in bytes, and **`Context::with_memory`** and
+**`VulkanContext::with_memory`**, which make a context with them. Each size is
+held between 4 MiB and 256 MiB and rounded up to 4 MiB. Blocks are fixed and do
+not grow; something larger than a block has one of its own. GLES takes the
+type and ignores it, its driver placing memory itself.
+
+**`VulkanContext::memory_reserved`** says how much has been taken from the
+driver, which is more than what textures and buffers occupy.
+
 ## 0.3.4 — 2026-11-18
 
 One merge past 0.3.3: what preparing ahead of a first frame builds.
