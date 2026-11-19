@@ -9,8 +9,8 @@
 //! validation error, rather than a failure to build.
 
 use emblema_hal::{
-    Batch, BlendMode, ClipState, ColorFilter, Extent2D, Material, PassDescriptor, PixelFormat,
-    TextureDescriptor,
+    Batch, BlendMode, ClipState, ColorFilter, Extent2D, Material, MaterialVariant, PassDescriptor,
+    PixelFormat, ShaderVariant, TextureDescriptor,
 };
 use emblema_hal_vulkan::{ContextConfig, DevicePreference, ValidationSeverity, VulkanContext};
 
@@ -43,26 +43,42 @@ fn plain() -> Batch {
     batch
 }
 
-/// A clip narrowed, filled through, and widened back: every stencil role.
-fn clipped() -> Batch {
+/// A clip narrowed, filled through with `material`, and widened back: every
+/// stencil role, the mask drawn with `Src` as a canvas draws it.
+fn clipped_with(material: Material) -> Batch {
     let mut batch = Batch::new();
-    let mut push = |verts: &[[f32; 2]; 4], stencil| {
+    let mut push = |verts: &[[f32; 2]; 4], material, blend, stencil| {
         batch
             .push_with(
                 verts,
                 &QUAD,
-                Material::solid(HALF_RED),
+                material,
                 ColorFilter::None,
-                BlendMode::SrcOver,
+                blend,
                 None,
                 stencil,
             )
             .expect("push");
     };
-    push(&INNER, ClipState::narrow(0));
-    push(&FULL, ClipState::content(1));
-    push(&INNER, ClipState::widen(1));
+    let mask = || Material::solid([1.0; 4]);
+    push(&INNER, mask(), BlendMode::Src, ClipState::narrow(0));
+    push(&FULL, material, BlendMode::SrcOver, ClipState::content(1));
+    push(&INNER, mask(), BlendMode::Src, ClipState::widen(1));
     batch
+}
+
+fn clipped() -> Batch {
+    clipped_with(Material::solid(HALF_RED))
+}
+
+/// A material of the shape variant: an ellipse, filled.
+fn ellipse() -> Material {
+    Material::Ellipse {
+        color: HALF_RED,
+        half_size: [0.5, 0.5],
+        to_local: Default::default(),
+        stroke: 0.0,
+    }
 }
 
 fn render(ctx: &mut VulkanContext, batch: &Batch, samples: u32) -> Vec<u8> {
@@ -114,6 +130,52 @@ fn a_prepared_context_builds_nothing_for_a_first_frame() {
         8,
         "a first frame built a pipeline prepare_pipelines should have"
     );
+}
+
+#[test]
+fn a_prepared_variant_builds_nothing_for_its_first_draw() {
+    let Some(mut ctx) = context() else { return };
+    if !ctx.capabilities().sample_counts.supports(4) {
+        eprintln!("skipping: no four-sample rendering");
+        return;
+    }
+    ctx.prepare_pipelines(PixelFormat::Rgba8Unorm, 4)
+        .expect("prepare");
+    let shape = ShaderVariant {
+        material: MaterialVariant::Shape,
+        ..ShaderVariant::CORE
+    };
+    ctx.prepare_variant(PixelFormat::Rgba8Unorm, 4, shape)
+        .expect("prepare the variant");
+    // The variant's source-over at one and four samples, with a stencil and
+    // without: four more. A mask is the core variant's, built above.
+    assert_eq!(ctx.pipeline_count(), 12);
+    ctx.prepare_variant(PixelFormat::Rgba8Unorm, 4, shape)
+        .expect("prepare it again");
+    assert_eq!(ctx.pipeline_count(), 12);
+    for samples in [1, 4] {
+        let mut plain = Batch::new();
+        plain
+            .push(&INNER, &QUAD, ellipse(), BlendMode::SrcOver)
+            .expect("push");
+        render(&mut ctx, &plain, samples);
+        render(&mut ctx, &clipped_with(ellipse()), samples);
+    }
+    assert_eq!(
+        ctx.pipeline_count(),
+        12,
+        "a shape's first draw built a pipeline prepare_variant should have"
+    );
+
+    // A caller's program is built by the draw that names it.
+    let runtime = ShaderVariant {
+        material: MaterialVariant::Runtime,
+        ..ShaderVariant::CORE
+    };
+    assert!(ctx
+        .prepare_variant(PixelFormat::Rgba8Unorm, 4, runtime)
+        .is_err());
+    assert_eq!(ctx.pipeline_count(), 12);
 }
 
 #[test]

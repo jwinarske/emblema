@@ -2021,10 +2021,21 @@ at one and four, and on the RK3566 0.27 s and 0.5 to 0.58 s through Vulkan and
 0.33 s through GLES; a variant a frame
 never draws with is never compiled. `prepare_pipelines(format, samples)` builds
 the source-over pipeline with the core variant at one sample and at `samples`,
-with no stencil and in each clip role, before any frame. Building every key
-instead would cost lavapipe, which compiles each pipeline afresh at about 26 ms,
-seconds a context for keys most frames never use. The GLES backend links the
-core variant's program.
+with no stencil and with one, and the two a clip's mask is drawn with, before
+any frame. A mask's are built with `Src`, the blend a canvas draws one with:
+until 2026-11-19 they were built source-over, which no canvas asked for, and
+its first clip built its own two. Building every key instead would cost
+lavapipe, which compiles each pipeline afresh at about 26 ms, seconds a context
+for keys most frames never use. The GLES backend links the core variant's
+program.
+
+What else a first screen draws with is its application's to know, and
+`prepare_variant(format, samples, variant)` builds one more variant's
+source-over pipelines the same way: the shape variant for rounded rectangles
+and shadows, the image variant for images and composited layers. A Flutter
+counter's first frame, hover and click draw with both. Each is a compile of
+its own, so it goes with a step that prepares once and keeps what the driver
+compiled, not with every start.
 
 Building ahead moves the compile; it does not shorten it. A process that
 reaches its first frame sooner than the compile ends still waits for it, so

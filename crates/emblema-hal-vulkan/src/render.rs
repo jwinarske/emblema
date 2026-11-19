@@ -156,20 +156,64 @@ impl VulkanContext {
     ///
     /// What is built is the source-over pipeline with the core shader variant
     /// ([`ShaderVariant::CORE`]: solid colors, gradients and glyphs) at one
-    /// sample and at `samples`, with no stencil and in each role a clip gives
-    /// it: the ones a frame draws first, and the ones that compile that
-    /// variant at each sample count. Every other blend mode and variant is
-    /// left to its first use. A driver that compiles once per variant and
-    /// sample count builds the other blend modes in microseconds once these
-    /// exist; one that compiles every pipeline afresh, lavapipe at about 26 ms
-    /// each, would pay seconds for all of them on every start, for modes most
-    /// frames never use.
+    /// sample and at `samples`, with no stencil and with one, and the two
+    /// pipelines a clip's mask is drawn with, as a canvas draws it
+    /// ([`BlendMode::Src`]): the ones a frame draws first, and the ones that
+    /// compile that variant at each sample count. Every other blend mode and
+    /// variant is left to its first use, or to
+    /// [`VulkanContext::prepare_variant`]. A driver that compiles once per
+    /// variant and sample count builds the other blend modes in microseconds
+    /// once these exist; one that compiles every pipeline afresh, lavapipe at
+    /// about 26 ms each, would pay seconds for all of them on every start,
+    /// for modes most frames never use.
     ///
     /// `samples` is the count a canvas antialiases at, four unless it was
     /// given another. One builds the single-sample set only. A count the
     /// device does not support is refused here, as a pass at that count
     /// would be.
     pub fn prepare_pipelines(&mut self, format: PixelFormat, samples: u32) -> Result<()> {
+        self.prepare(format, samples, ShaderVariant::CORE, true)
+    }
+
+    /// Build the source-over pipelines of one more variant of the built-in
+    /// shader, ahead of the first draw that needs it: at one sample and at
+    /// `samples`, with no stencil and with one.
+    ///
+    /// [`VulkanContext::prepare_pipelines`] builds the core variant alone,
+    /// which is what every frame needs. What else an application draws is its
+    /// own to know: one whose first screen has rounded rectangles and shadows
+    /// names [`MaterialVariant::Shape`], one that draws images or composites
+    /// layers [`MaterialVariant::Image`]. Each is a compile of its own, most
+    /// of a second on some drivers, so this belongs with a step that prepares
+    /// once and keeps the result ([`VulkanContext::pipeline_cache_data`]),
+    /// not with every start.
+    ///
+    /// [`MaterialVariant::Runtime`] is refused: its fragment stage is a
+    /// caller's program, which is built when a draw names it.
+    pub fn prepare_variant(
+        &mut self,
+        format: PixelFormat,
+        samples: u32,
+        shader: ShaderVariant,
+    ) -> Result<()> {
+        if shader.material == MaterialVariant::Runtime {
+            return Err(Error::Unsupported(
+                "a runtime program is built by the draw that names it",
+            ));
+        }
+        self.prepare(format, samples, shader, false)
+    }
+
+    /// `shader`'s source-over pipelines at one sample and at `samples`, with
+    /// and without a stencil; with `masks`, the two a clip's mask is drawn
+    /// with as well.
+    fn prepare(
+        &mut self,
+        format: PixelFormat,
+        samples: u32,
+        shader: ShaderVariant,
+        masks: bool,
+    ) -> Result<()> {
         if !samples.is_power_of_two() {
             return Err(Error::Unsupported("sample count is not a power of two"));
         }
@@ -190,20 +234,24 @@ impl VulkanContext {
                     presents: false,
                     stencil,
                 })?;
-                let roles: &[ClipRole] = match stencil {
-                    None => &[ClipRole::Content],
-                    Some(_) => &[ClipRole::Content, ClipRole::Narrow, ClipRole::Widen],
-                };
-                for &role in roles {
+                // A mask writes the stencil alone, and a canvas draws it with
+                // `Src`: the blend is part of a pipeline's key, so it is the
+                // one built here.
+                let mut wanted = vec![(ClipRole::Content, BlendMode::SrcOver)];
+                if masks && stencil.is_some() {
+                    wanted.push((ClipRole::Narrow, BlendMode::Src));
+                    wanted.push((ClipRole::Widen, BlendMode::Src));
+                }
+                for (role, blend) in wanted {
                     self.ensure_pipeline(
                         PipelineKey {
                             format,
-                            blend: BlendMode::SrcOver,
+                            blend,
                             samples,
                             stencil,
                             program: None,
                             role,
-                            shader: ShaderVariant::CORE,
+                            shader,
                         },
                         render_pass,
                     )?;

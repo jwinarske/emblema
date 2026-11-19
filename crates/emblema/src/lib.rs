@@ -54,8 +54,8 @@ pub use emblema_core::{
     Sprite, StrokeStyle, Style, TileMode, Transform2D, Vec2, VertexMode, Vertices, MAX_STOPS,
 };
 pub use emblema_hal::{
-    mip_levels_for, BlendFactor, Capabilities, Error, Hal, Result, RuntimeProgram,
-    TextureDescriptor, TextureUsage, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
+    mip_levels_for, BlendFactor, Capabilities, Error, Hal, MaterialVariant, Result, RuntimeProgram,
+    ShaderVariant, TextureDescriptor, TextureUsage, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
 };
 
 /// Draw a recording into a texture this crate did not create.
