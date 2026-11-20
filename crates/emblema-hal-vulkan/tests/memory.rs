@@ -105,3 +105,26 @@ fn a_block_size_out_of_range_is_held_to_it() {
         reserved / MIB
     );
 }
+
+/// A texture larger than a host block and smaller than a device one is placed
+/// in a device block, whatever kinds of memory the device has. With one kind,
+/// all of it mapped by the host, the allocator sizes every block as a host
+/// one, and the texture had an allocation of its own: 8 MiB reserved here,
+/// and on a board a frame that waited for it.
+#[test]
+fn a_texture_is_placed_in_a_device_block_on_any_device() {
+    let Some(mut ctx) = context(Some(MemoryBlocks {
+        device: 32 * MIB,
+        host: 4 * MIB,
+    })) else {
+        return;
+    };
+    let tex = ctx
+        .create_texture(&TextureDescriptor::offscreen(
+            Extent2D::new(2048, 1024),
+            PixelFormat::Rgba8Unorm,
+        ))
+        .expect("texture");
+    assert_eq!(ctx.memory_reserved() / MIB, 32);
+    ctx.destroy_texture(tex);
+}

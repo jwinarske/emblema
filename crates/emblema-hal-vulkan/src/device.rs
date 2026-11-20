@@ -559,6 +559,34 @@ impl VulkanContext {
         // already false because their extension was left out stay false.
         withheld.apply_to(&mut capabilities);
 
+        // The allocator sizes a block by its memory type: the host's size for
+        // a type the host can map, the device's for one it cannot. A device
+        // with no type of the second kind, V3D's one type or lavapipe's, would
+        // take its textures from host blocks, and with a small host size give
+        // every texture larger than it an allocation of its own, made in the
+        // frame that first draws with it. There the larger size is both.
+        let blocks = {
+            // SAFETY: the instance and the physical device are live.
+            let memory = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+            let device_only = memory.memory_types[..memory.memory_type_count as usize]
+                .iter()
+                .any(|ty| {
+                    !ty.property_flags
+                        .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                        && !ty
+                            .property_flags
+                            .contains(vk::MemoryPropertyFlags::LAZILY_ALLOCATED)
+                });
+            if device_only {
+                blocks
+            } else {
+                emblema_hal::MemoryBlocks {
+                    device: blocks.device,
+                    host: blocks.host.max(blocks.device),
+                }
+            }
+        };
+
         let allocator =
             gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
                 instance: instance.clone(),
