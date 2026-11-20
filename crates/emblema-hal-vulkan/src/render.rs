@@ -1153,7 +1153,6 @@ impl VulkanContext {
 
         let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let mut allocation = self
-            .allocator_mut()
             .allocate(&AllocationCreateDesc {
                 name: "upload",
                 requirements,
@@ -1189,7 +1188,7 @@ impl VulkanContext {
     }
 
     pub(crate) fn release(&mut self, staged: StagedBuffer) {
-        let _ = self.allocator_mut().free(staged.allocation);
+        let _ = self.free(staged.allocation, MemoryLocation::CpuToGpu);
         // SAFETY: every submission using this buffer was waited on before the
         // call that made it returned.
         unsafe { self.raw_device().destroy_buffer(staged.buffer, None) };

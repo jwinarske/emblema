@@ -128,3 +128,43 @@ fn a_texture_is_placed_in_a_device_block_on_any_device() {
     assert_eq!(ctx.memory_reserved() / MIB, 32);
     ctx.destroy_texture(tex);
 }
+
+/// What is in use and the most that has been, by kind: a texture is the
+/// device's, the staging its write goes through the host's, and a peak
+/// outlasts what made it.
+#[test]
+fn what_is_in_use_and_its_peak_are_counted_by_kind() {
+    let Some(mut ctx) = context(None) else {
+        return;
+    };
+    // A context holds something of its own by now on some paths; what a
+    // texture adds is what is measured.
+    let before = ctx.memory_used();
+    let mut tex = ctx
+        .create_texture(&TextureDescriptor::offscreen(
+            Extent2D::new(256, 256),
+            PixelFormat::Rgba8Unorm,
+        ))
+        .expect("texture");
+    let held = ctx.memory_used();
+    let texture = held.device - before.device;
+    assert!(texture >= 256 * 256 * 4, "{texture} bytes for the texture");
+    assert_eq!(held.host, before.host, "a texture is not the host's");
+
+    ctx.write_texture(&mut tex, &vec![0x7f; 256 * 256 * 4])
+        .expect("write");
+    // The staging is given back when the write returns, and was counted.
+    assert_eq!(ctx.memory_used(), held);
+    let peak = ctx.memory_peak();
+    assert!(
+        peak.host >= before.host + 256 * 256 * 4,
+        "{} bytes of host memory at the most",
+        peak.host
+    );
+    assert!(peak.device >= held.device);
+
+    ctx.destroy_texture(tex);
+    assert_eq!(ctx.memory_used(), before);
+    assert_eq!(ctx.memory_peak(), peak, "a peak is not lowered by a free");
+    assert!(ctx.memory_reserved() >= ctx.memory_used().device);
+}
