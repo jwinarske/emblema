@@ -7,6 +7,29 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.6 — 2026-11-19
+
+One merge past 0.3.5, and a fix to what 0.3.5 added.
+
+### What a context holds
+
+**A texture is placed in a device block on a device with one kind of memory.**
+`MemoryBlocks` says a texture goes in a block of `device` and what the host
+writes through in one of `host`. The allocator sizes a block by its memory
+type, the host's size for a type the host can map, and a device whose every
+type is mapped, V3D's single one or lavapipe's, has no other: its textures came
+from host blocks. With a small `host`, which 0.3.5 made it possible to ask for,
+a texture larger than it had an allocation of its own, made in the frame that
+first drew with it.
+
+On a Pi 5, a Flutter counter given 128 and 8 MiB drew its first frame in 9.6 ms
+where 0.3.4 took 0.9. Where no memory type is the device's alone, the larger of
+the two sizes is now the size of every block: the first draw is 0.9 ms again,
+and the longest draw of a hover and two taps 0.9 ms where it was 18.7, and 20.5
+with the default sizes, the layers a hover makes no longer needing a block of
+their own. A device with a type of its own is as it was, and so is a caller
+that gives no sizes.
+
 ## 0.3.5 — 2026-11-19
 
 One merge past 0.3.4: the blocks a context takes device memory in.
