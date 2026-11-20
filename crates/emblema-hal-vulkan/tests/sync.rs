@@ -286,7 +286,7 @@ fn a_deferred_multisampled_pass_draws_what_a_waiting_one_does() {
 }
 
 #[test]
-fn a_fence_holds_its_pass_s_buffers_until_it_retires() {
+fn frames_in_flight_share_their_pass_s_buffers() {
     let Some(mut ctx) = context() else { return };
     if !ctx.capabilities().sample_counts.supports(4) {
         return;
@@ -294,40 +294,42 @@ fn a_fence_holds_its_pass_s_buffers_until_it_retires() {
     let batch = clipped_scene();
     let pass = PassDescriptor::clear([0.0; 4]).with_samples(4);
 
-    // Two frames in flight, as a frame loop two deep has them. Each needs a
-    // multisample and a stencil buffer of its own, since the GPU may be
-    // writing the first's while the second is submitted; neither is the
-    // context's to hand out again until its fence retires.
-    let mut first_target = target(&mut ctx);
-    let mut second_target = target(&mut ctx);
-    let first = ctx
-        .submit_batch_deferred(&mut first_target, &batch, pass)
-        .expect("first submission");
-    assert_eq!(ctx.pass_buffers_kept(), 0, "the first frame has its own");
-    let second = ctx
-        .submit_batch_deferred(&mut second_target, &batch, pass)
-        .expect("second submission");
-    assert_eq!(ctx.pass_buffers_kept(), 0, "and the second its own");
-
-    ctx.retire_fence(first);
-    assert_eq!(ctx.pass_buffers_kept(), 2, "one color, one stencil, back");
-    // The third frame takes those rather than making more.
-    let mut third_target = target(&mut ctx);
-    let third = ctx
-        .submit_batch_deferred(&mut third_target, &batch, pass)
-        .expect("third submission");
+    // Three frames in flight, as a frame loop three deep has them. Each pass
+    // clears its multisample and stencil buffers and discards them, and the
+    // render pass orders its writes after the last pass's, so the three use
+    // one of each: at 3840x2160 and four samples that is 254 MiB where it was
+    // 760. Synchronization validation is on, and is what would see a pass
+    // writing them while the one before still was.
+    let mut targets = [target(&mut ctx), target(&mut ctx), target(&mut ctx)];
+    let mut fences = Vec::new();
+    for t in &mut targets {
+        fences.push(
+            ctx.submit_batch_deferred(t, &batch, pass)
+                .expect("submission"),
+        );
+        assert_eq!(ctx.pass_buffers_kept(), 2, "one color, one stencil");
+    }
+    // Retired out of order, and still in use until the last is.
+    let last = fences.pop().expect("three");
+    for fence in fences {
+        ctx.retire_fence(fence);
+    }
+    // Given back while the third frame has them: freed when it retires.
+    ctx.release_pass_buffers();
+    assert_eq!(ctx.pass_buffers_kept(), 2, "still the third frame's");
+    ctx.retire_fence(last);
     assert_eq!(ctx.pass_buffers_kept(), 0);
-    ctx.retire_fence(second);
-    ctx.retire_fence(third);
-    assert_eq!(ctx.pass_buffers_kept(), 4);
 
-    let frames: Vec<Vec<u8>> = [&mut first_target, &mut second_target, &mut third_target]
-        .into_iter()
+    let frames: Vec<Vec<u8>> = targets
+        .iter_mut()
         .map(|t| ctx.read_texture(t).expect("readback"))
         .collect();
     assert_eq!(frames[0], frames[1]);
     assert_eq!(frames[0], frames[2]);
-    for t in [first_target, second_target, third_target] {
+    // And with them kept, a deferred pass still draws what a waiting one does.
+    let [deferred, waiting] = deferred_and_waiting(&mut ctx, &batch, 4);
+    assert_eq!(deferred, waiting);
+    for t in targets {
         ctx.destroy_texture(t);
     }
     assert_clean(&ctx);
