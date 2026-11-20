@@ -7,6 +7,36 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.8 — 2026-11-20
+
+One merge past 0.3.7: frames in flight share their pass's multisample and
+stencil buffers.
+
+### What a frame loop holds
+
+**One pair of pass buffers, however many frames are in flight.** A deferred
+submission took the multisample color buffer and the stencil buffer it
+rendered through out of what the context keeps, and gave them back when its
+fence retired, so each frame in flight had its own. Every pass clears both at
+its start and discards them at its end, and nothing in one is read by another.
+A frame loop three deep held three of each: at 3840x2160 and four samples,
+127 MiB apiece, 760 MiB where 254 does, and on a Pi 5 each one more was a
+memory block made in the frame that first needed it, 80 ms.
+
+The context now keeps one of each by extent, format and sample count, shared
+by every submission using it, and frees one only when none is.
+`release_pass_buffers` frees the idle ones at once and those in use when their
+fences retire. The render pass's dependency from outside the pass makes the
+attachment writes of every pass before it available, where it only waited for
+them: a shared buffer's clear is a write after the last pass's write.
+
+On a Pi 5 (V3D) with fl-engine, the GPU memory a Flutter app holds: at
+1280x1440, 64 MiB with no layers where it was 122, and 92 after a hover and two
+taps where it was 148; at 3840x2160, 278 and 626 where they were 626 and 1138.
+
+No API changes. `pass_buffers_kept` counts the buffers in use as well as the
+idle ones.
+
 ## 0.3.7 — 2026-11-20
 
 One merge past 0.3.6: what a context has allocated, and the most it has at
