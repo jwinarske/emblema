@@ -206,7 +206,6 @@ impl VulkanContext {
 
         let requirements = unsafe { device.get_image_memory_requirements(image) };
         let allocation = self
-            .allocator_mut()
             .allocate(&AllocationCreateDesc {
                 name: "texture",
                 requirements,
@@ -242,7 +241,7 @@ impl VulkanContext {
         // about an allocation it never made.
         match texture.memory {
             TextureMemory::Pooled(allocation) => {
-                let _ = self.allocator_mut().free(allocation);
+                let _ = self.free(allocation, MemoryLocation::GpuOnly);
             }
             TextureMemory::Dedicated(memory) => {
                 // SAFETY: nothing else holds this allocation, and every
@@ -353,7 +352,6 @@ impl VulkanContext {
             .map_err(|e| backend_err("create_buffer", e))?;
         let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let mut allocation = self
-            .allocator_mut()
             .allocate(&AllocationCreateDesc {
                 name: "upload",
                 requirements,
@@ -371,7 +369,7 @@ impl VulkanContext {
         if let Err(e) =
             unsafe { device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset()) }
         {
-            let _ = self.allocator_mut().free(allocation);
+            let _ = self.free(allocation, MemoryLocation::CpuToGpu);
             unsafe { device.destroy_buffer(buffer, None) };
             return Err(backend_err("bind_buffer_memory", e));
         }
@@ -425,7 +423,7 @@ impl VulkanContext {
             self.submit_one_shot(cmd)
         });
 
-        let _ = self.allocator_mut().free(allocation);
+        let _ = self.free(allocation, MemoryLocation::CpuToGpu);
         // SAFETY: the submission above was waited on, so the copy has finished
         // reading from this buffer.
         unsafe { device.destroy_buffer(buffer, None) };
@@ -444,7 +442,6 @@ impl VulkanContext {
             .map_err(|e| backend_err("create_buffer", e))?;
         let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let allocation = self
-            .allocator_mut()
             .allocate(&AllocationCreateDesc {
                 name: "readback",
                 requirements,
@@ -506,7 +503,7 @@ impl VulkanContext {
                 })
         });
 
-        let _ = self.allocator_mut().free(allocation);
+        let _ = self.free(allocation, MemoryLocation::GpuToCpu);
         unsafe { device.destroy_buffer(buffer, None) };
         pixels
     }

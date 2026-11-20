@@ -43,7 +43,7 @@ impl StencilBuffer {
             device.destroy_image(self.image, None);
         }
         if let Some(allocation) = self.allocation.take() {
-            let _ = ctx.allocator_mut().free(allocation);
+            let _ = ctx.free(allocation, MemoryLocation::GpuOnly);
         }
     }
 }
@@ -116,7 +116,7 @@ pub fn create(
         unsafe { device.create_image(&info, None) }.map_err(|e| backend_err("create_image", e))?;
 
     let requirements = unsafe { device.get_image_memory_requirements(image) };
-    let allocation = match ctx.allocator_mut().allocate(&AllocationCreateDesc {
+    let allocation = match ctx.allocate(&AllocationCreateDesc {
         name: "stencil",
         requirements,
         location: MemoryLocation::GpuOnly,
@@ -136,7 +136,7 @@ pub fn create(
     if let Err(e) =
         unsafe { device.bind_image_memory(image, allocation.memory(), allocation.offset()) }
     {
-        let _ = ctx.allocator_mut().free(allocation);
+        let _ = ctx.free(allocation, MemoryLocation::GpuOnly);
         unsafe { device.destroy_image(image, None) };
         return Err(backend_err("bind_image_memory", e));
     }
@@ -160,7 +160,7 @@ pub fn create(
             allocation: Some(allocation),
         }),
         Err(e) => {
-            let _ = ctx.allocator_mut().free(allocation);
+            let _ = ctx.free(allocation, MemoryLocation::GpuOnly);
             unsafe { device.destroy_image(image, None) };
             Err(backend_err("create_image_view", e))
         }

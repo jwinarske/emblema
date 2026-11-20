@@ -73,7 +73,8 @@ pub use material::{
     TileMode, MATERIAL_FLOATS, MAX_EFFECT_TEXTURES, MAX_STOPS, MORPHOLOGY_TAPS, RUNTIME_FLOATS,
 };
 pub use resource::{
-    mip_levels_for, BufferDescriptor, BufferUsage, MemoryBlocks, TextureDescriptor, TextureUsage,
+    mip_levels_for, BufferDescriptor, BufferUsage, MemoryBlocks, MemoryUse, TextureDescriptor,
+    TextureUsage,
 };
 pub use scissor::Scissor;
 pub use sync::{HalFence, FRAME_WAIT_TIMEOUT};

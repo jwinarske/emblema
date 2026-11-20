@@ -3,7 +3,8 @@
 use crate::backend::{no_backend, Backend, BackendPreference};
 use emblema_core::Recording;
 use emblema_hal::{
-    Capabilities, Error, Extent2D, HalContext, MemoryBlocks, PixelFormat, Result, RuntimeProgram,
+    Capabilities, Error, Extent2D, HalContext, MemoryBlocks, MemoryUse, PixelFormat, Result,
+    RuntimeProgram,
 };
 
 /// A device to render with.
@@ -63,6 +64,19 @@ impl Context {
 
         let _ = (preference, blocks);
         Err(no_backend(attempts))
+    }
+
+    /// The most device memory of each kind that has been allocated at once
+    /// since the context was made, where the backend is the one that places
+    /// it: what [`MemoryBlocks`] would have had to hold for no second block
+    /// to be made. `None` on a backend whose driver places memory itself.
+    pub fn memory_peak(&self) -> Option<MemoryUse> {
+        match self {
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(ctx) => Some(ctx.memory_peak()),
+            #[cfg(feature = "gles")]
+            Self::Gles(_) => None,
+        }
     }
 
     pub fn backend(&self) -> Backend {

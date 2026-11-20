@@ -235,6 +235,15 @@ impl Default for MemoryBlocks {
     }
 }
 
+/// Memory allocated from a backend's blocks, in bytes, by the two kinds
+/// [`MemoryBlocks`] has: what only the device reads, and what the host
+/// writes or reads through.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryUse {
+    pub device: u64,
+    pub host: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

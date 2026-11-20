@@ -262,6 +262,8 @@ pub struct VulkanContext {
     // The allocator must release its memory before the device goes away, which
     // is why it is an Option -- Drop takes it and drops it explicitly first.
     allocator: Option<gpu_allocator::vulkan::Allocator>,
+    memory_used: emblema_hal::MemoryUse,
+    memory_peak: emblema_hal::MemoryUse,
     pipelines: PipelineCache,
     command_pool: vk::CommandPool,
     device: ash::Device,
@@ -619,6 +621,8 @@ impl VulkanContext {
             validation_log,
             sync_validation,
             allocator: Some(allocator),
+            memory_used: emblema_hal::MemoryUse::default(),
+            memory_peak: emblema_hal::MemoryUse::default(),
             pipelines: PipelineCache::default(),
             command_pool,
             device,
@@ -911,6 +915,62 @@ impl VulkanContext {
 
     pub(crate) fn pipeline_cache_mut(&mut self) -> &mut PipelineCache {
         &mut self.pipelines
+    }
+
+    /// Takes memory from the allocator's blocks, and counts it.
+    ///
+    /// Every allocation goes through here and every release through
+    /// [`Self::free`], so that what is in use and the most that has been are
+    /// known without asking the allocator to walk its blocks.
+    pub(crate) fn allocate(
+        &mut self,
+        desc: &gpu_allocator::vulkan::AllocationCreateDesc<'_>,
+    ) -> std::result::Result<gpu_allocator::vulkan::Allocation, gpu_allocator::AllocationError>
+    {
+        let allocation = self.allocator_mut().allocate(desc)?;
+        let size = allocation.size();
+        let (used, peak) = match desc.location {
+            gpu_allocator::MemoryLocation::GpuOnly => {
+                (&mut self.memory_used.device, &mut self.memory_peak.device)
+            }
+            _ => (&mut self.memory_used.host, &mut self.memory_peak.host),
+        };
+        *used += size;
+        *peak = (*peak).max(*used);
+        Ok(allocation)
+    }
+
+    /// Gives an allocation back. `location` is the one it was made with.
+    pub(crate) fn free(
+        &mut self,
+        allocation: gpu_allocator::vulkan::Allocation,
+        location: gpu_allocator::MemoryLocation,
+    ) -> std::result::Result<(), gpu_allocator::AllocationError> {
+        let size = allocation.size();
+        let used = match location {
+            gpu_allocator::MemoryLocation::GpuOnly => &mut self.memory_used.device,
+            _ => &mut self.memory_used.host,
+        };
+        *used = used.saturating_sub(size);
+        self.allocator_mut().free(allocation)
+    }
+
+    /// What is allocated from the blocks now, in bytes: `device` what only
+    /// the device reads, textures and a pass's buffers, and `host` what the
+    /// host writes or reads through, an upload's staging and a frame's
+    /// vertices. Less than [`Self::memory_reserved`], which is the blocks
+    /// themselves. Memory an image was imported or exported with is not from
+    /// a block and is not counted.
+    pub fn memory_used(&self) -> emblema_hal::MemoryUse {
+        self.memory_used
+    }
+
+    /// The most of each kind that has been allocated at once since the
+    /// context was made: what [`emblema_hal::MemoryBlocks`] would have had
+    /// to hold for no second block to be made. The two need not have been
+    /// reached together.
+    pub fn memory_peak(&self) -> emblema_hal::MemoryUse {
+        self.memory_peak
     }
 
     pub(crate) fn allocator_mut(&mut self) -> &mut gpu_allocator::vulkan::Allocator {
