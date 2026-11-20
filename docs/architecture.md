@@ -1961,22 +1961,26 @@ the fence waiter.
 
 A pass's multisample color buffer and its stencil buffer are the exception:
 transient in what they hold, and **kept between submissions** in what they are.
-A context keeps up to two of each, by extent, format and sample count, the
-least recently used freed to make room, and
-`VulkanContext::release_pass_buffers` gives them all back. They were allocated
+A context keeps one of each by extent, format and sample count, shared by
+every submission using it, and up to two of each that none is using, the
+least recently used freed to make room; `VulkanContext::release_pass_buffers`
+gives them all back, those in use when their fences retire. They were allocated
 and freed inside every submission until that was measured on a PowerVR
 BXE-4-32, where at 1280x720 and four samples it was 3.5 ms of a frame's 12:
 2.3 ms to make the two, 1.2 to free them. The pass still clears both and
 stores neither, so nothing carries over in a buffer that is used again, and
 `a_pass_s_buffers_are_kept_and_carry_nothing_over` holds that.
 
-A deferred submission takes them out of the same pool and its fence carries
-them until it retires, since the GPU may be writing them until then. That is
-what lets a multisampled pass be deferred at all: it was refused before, so a
-display loop whose frames antialias by multisampling waited for each on the
-CPU. On the same board the wait was 5.5 to 6 ms of a 16.7 ms frame, and the
-thread that submits now spends 2.2 ms doing so. Two frames in flight hold a
-pair each, `a_fence_holds_its_pass_s_buffers_until_it_retires`. The deferred
+A deferred submission uses them until its fence retires, since the GPU may be
+writing them until then. That is what lets a multisampled pass be deferred at
+all: it was refused before, so a display loop whose frames antialias by
+multisampling waited for each on the CPU. On the same board the wait was 5.5
+to 6 ms of a 16.7 ms frame, and the thread that submits now spends 2.2 ms
+doing so. Frames in flight share one pair rather than holding one each: the
+render pass's dependency from outside it makes every earlier pass's writes to
+them available before its clear, and at 3840x2160 and four samples a pair is
+254 MiB, which three frames held three times over on a Pi 5,
+`frames_in_flight_share_their_pass_s_buffers`. The deferred
 form with a clip had a stencil in its render pass and none in its framebuffer
 until this was written; `a_deferred_multisampled_pass_draws_what_a_waiting_one_does`
 covers that case at one sample and at four.

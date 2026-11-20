@@ -440,59 +440,25 @@ impl VulkanContext {
 
         // The multisample buffer is transient: rendered into, resolved out of,
         // and discarded. So is the stencil buffer. Neither is made here unless
-        // the last submissions left none that fits: see `crate::kept`.
-        let color_key = crate::kept::ColorKey {
-            extent,
-            format: target.format(),
-            samples: pass.samples,
-        };
-        let multisample = if pass.is_multisampled() {
-            let kept = self.kept_color.take(&color_key);
-            match kept.map_or_else(|| self.create_multisample_buffer(target, pass.samples), Ok) {
-                Ok(ms) => Some(ms),
-                Err(e) => {
-                    unsafe { device.destroy_image_view(view, None) };
-                    return Err(e);
-                }
+        // the context keeps none that fits: see `crate::kept`.
+        let mut pass_buffers = PassBuffers::default();
+        let attached = self.share_pass_buffers(target, pass, stencil_format, &mut pass_buffers);
+        let (multisample, stencil) = match attached {
+            Ok(views) => views,
+            Err(e) => {
+                unsafe { device.destroy_image_view(view, None) };
+                return Err(e);
             }
-        } else {
-            None
         };
 
-        let stencil_key = stencil_format.map(|format| crate::kept::StencilKey {
-            extent,
-            format,
-            samples: pass.samples,
-        });
-        let stencil = match stencil_key {
-            Some(key) => {
-                let kept = self.kept_stencil.take(&key);
-                let made = kept.map_or_else(
-                    || crate::stencil::create(self, extent, pass.samples, key.format),
-                    Ok,
-                );
-                match made {
-                    Ok(buffer) => Some(buffer),
-                    Err(e) => {
-                        unsafe { device.destroy_image_view(view, None) };
-                        if let Some(ms) = multisample {
-                            self.keep_color(color_key, ms);
-                        }
-                        return Err(e);
-                    }
-                }
-            }
-            None => None,
-        };
-
-        let mut attachments: Vec<vk::ImageView> = match &multisample {
+        let mut attachments: Vec<vk::ImageView> = match multisample {
             // Order matches the render pass: the multisample attachment first,
             // then the resolve target the caller reads.
-            Some((_, ms_view)) => vec![*ms_view, view],
+            Some(ms_view) => vec![ms_view, view],
             None => vec![view],
         };
-        if let Some(stencil) = &stencil {
-            attachments.push(stencil.view);
+        if let Some(stencil) = stencil {
+            attachments.push(stencil);
         }
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass)
@@ -504,12 +470,7 @@ impl VulkanContext {
             Ok(fb) => fb,
             Err(e) => {
                 unsafe { device.destroy_image_view(view, None) };
-                if let Some(ms) = multisample {
-                    self.keep_color(color_key, ms);
-                }
-                if let (Some(key), Some(stencil)) = (stencil_key, stencil) {
-                    self.keep_stencil(key, stencil);
-                }
+                self.release_pass_buffers_of(&mut pass_buffers);
                 return Err(backend_err("create_framebuffer", e));
             }
         };
@@ -608,12 +569,7 @@ impl VulkanContext {
         }
         // Kept for the next submission, which in a frame loop is this one
         // again. Whatever the outcome: the buffers are sound either way.
-        if let Some(ms) = multisample {
-            self.keep_color(color_key, ms);
-        }
-        if let (Some(key), Some(stencil)) = (stencil_key, stencil) {
-            self.keep_stencil(key, stencil);
-        }
+        self.release_pass_buffers_of(&mut pass_buffers);
 
         if outcome.is_ok() {
             // The render pass declares this as its final layout, so the next
@@ -624,25 +580,81 @@ impl VulkanContext {
         outcome
     }
 
-    /// Keep a multisample buffer no submission is using, freeing the one it
-    /// pushes out.
-    fn keep_color(&mut self, key: crate::kept::ColorKey, buffer: (VulkanTexture, vk::ImageView)) {
-        if let Some((texture, view)) = self.kept_color.put(key, buffer) {
-            // SAFETY: a kept buffer is in no submission.
-            unsafe { self.raw_device().destroy_image_view(view, None) };
-            self.destroy_texture(texture);
-        }
+    /// The multisample and stencil buffers a pass renders through, kept ones
+    /// where the context has them, shared with any submission in flight, and
+    /// made and kept where it does not. Each is noted in `uses`, for
+    /// [`Self::release_pass_buffers_of`] once the GPU is done with the pass.
+    fn share_pass_buffers(
+        &mut self,
+        target: &VulkanTexture,
+        pass: PassDescriptor,
+        stencil_format: Option<vk::Format>,
+        uses: &mut PassBuffers,
+    ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>)> {
+        let extent = target.extent();
+        let multisample = if pass.is_multisampled() {
+            let key = crate::kept::ColorKey {
+                extent,
+                format: target.format(),
+                samples: pass.samples,
+            };
+            let (id, view) = match self.kept_color.share(&key) {
+                Some((id, (_, view))) => (id, *view),
+                None => {
+                    let made = self.create_multisample_buffer(target, pass.samples)?;
+                    let (id, (_, view)) = self.kept_color.keep(key, made);
+                    (id, *view)
+                }
+            };
+            uses.color = Some(id);
+            Some(view)
+        } else {
+            None
+        };
+        let stencil = match stencil_format {
+            Some(format) => {
+                let key = crate::kept::StencilKey {
+                    extent,
+                    format,
+                    samples: pass.samples,
+                };
+                let (id, view) = match self.kept_stencil.share(&key) {
+                    Some((id, buffer)) => (id, buffer.view),
+                    None => {
+                        let made = match crate::stencil::create(self, extent, pass.samples, format)
+                        {
+                            Ok(made) => made,
+                            Err(e) => {
+                                self.release_pass_buffers_of(uses);
+                                return Err(e);
+                            }
+                        };
+                        let (id, buffer) = self.kept_stencil.keep(key, made);
+                        (id, buffer.view)
+                    }
+                };
+                uses.stencil = Some(id);
+                Some(view)
+            }
+            None => None,
+        };
+        Ok((multisample, stencil))
     }
 
-    /// Keep a stencil buffer no submission is using, freeing the one it pushes
-    /// out.
-    fn keep_stencil(
-        &mut self,
-        key: crate::kept::StencilKey,
-        buffer: crate::stencil::StencilBuffer,
-    ) {
-        if let Some(old) = self.kept_stencil.put(key, buffer) {
-            old.destroy(self);
+    /// A pass is done with its buffers: the GPU has finished it, or it was
+    /// never submitted. Frees what that leaves past what is kept.
+    fn release_pass_buffers_of(&mut self, uses: &mut PassBuffers) {
+        if let Some(id) = uses.color.take() {
+            for (texture, view) in self.kept_color.release(id) {
+                // SAFETY: released by its last user, so in no submission.
+                unsafe { self.raw_device().destroy_image_view(view, None) };
+                self.destroy_texture(texture);
+            }
+        }
+        if let Some(id) = uses.stencil.take() {
+            for buffer in self.kept_stencil.release(id) {
+                buffer.destroy(self);
+            }
         }
     }
 
@@ -849,17 +861,7 @@ impl VulkanContext {
                 .get_mut()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        self.keep_pass_buffers(&mut pass_buffers);
-    }
-
-    /// Keep what a pass rendered through, now that nothing is using it.
-    fn keep_pass_buffers(&mut self, buffers: &mut PassBuffers) {
-        if let Some((key, ms)) = buffers.color.take() {
-            self.keep_color(key, ms);
-        }
-        if let Some((key, stencil)) = buffers.stencil.take() {
-            self.keep_stencil(key, stencil);
-        }
+        self.release_pass_buffers_of(&mut pass_buffers);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -899,67 +901,29 @@ impl VulkanContext {
         let view = unsafe { device.create_image_view(&view_info, None) }
             .map_err(|e| backend_err("create_image_view", e))?;
 
-        // The pass's multisample and stencil buffers, out of what the context
-        // keeps and back into it when the fence retires: until then the GPU
-        // may be writing them, so they travel with the fence like the
-        // framebuffer they are attached through.
-        let color_key = crate::kept::ColorKey {
-            extent,
-            format: target.format(),
-            samples: pass.samples,
-        };
-        let multisample = if pass.is_multisampled() {
-            let kept = self.kept_color.take(&color_key);
-            match kept.map_or_else(|| self.create_multisample_buffer(target, pass.samples), Ok) {
-                Ok(ms) => Some(ms),
-                Err(e) => {
-                    unsafe { device.destroy_image_view(view, None) };
-                    return Err(e);
-                }
+        // The pass's multisample and stencil buffers, shared with the
+        // submissions in flight and used by this one until its fence retires:
+        // the use travels with the fence like the framebuffer they are
+        // attached through. Until the submission is made nothing reads any of
+        // this, so a failure before then releases it.
+        let mut pass_buffers = PassBuffers::default();
+        let attached = self.share_pass_buffers(target, pass, stencil_format, &mut pass_buffers);
+        let (multisample, stencil) = match attached {
+            Ok(views) => views,
+            Err(e) => {
+                unsafe { device.destroy_image_view(view, None) };
+                return Err(e);
             }
-        } else {
-            None
-        };
-        let stencil_key = stencil_format.map(|format| crate::kept::StencilKey {
-            extent,
-            format,
-            samples: pass.samples,
-        });
-        let stencil = match stencil_key {
-            Some(key) => {
-                let kept = self.kept_stencil.take(&key);
-                let made = kept.map_or_else(
-                    || crate::stencil::create(self, extent, pass.samples, key.format),
-                    Ok,
-                );
-                match made {
-                    Ok(buffer) => Some(buffer),
-                    Err(e) => {
-                        unsafe { device.destroy_image_view(view, None) };
-                        if let Some(ms) = multisample {
-                            self.keep_color(color_key, ms);
-                        }
-                        return Err(e);
-                    }
-                }
-            }
-            None => None,
-        };
-        // Until the submission is made nothing reads any of this, so a
-        // failure before then gives it all back.
-        let mut pass_buffers = PassBuffers {
-            color: multisample.map(|ms| (color_key, ms)),
-            stencil: stencil_key.zip(stencil),
         };
 
         // Order matches the render pass: the multisample attachment first, the
         // resolve target the caller reads, then the stencil.
-        let mut attachments: Vec<vk::ImageView> = match &pass_buffers.color {
-            Some((_, (_, ms_view))) => vec![*ms_view, view],
+        let mut attachments: Vec<vk::ImageView> = match multisample {
+            Some(ms_view) => vec![ms_view, view],
             None => vec![view],
         };
-        if let Some((_, stencil)) = &pass_buffers.stencil {
-            attachments.push(stencil.view);
+        if let Some(stencil) = stencil {
+            attachments.push(stencil);
         }
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass)
@@ -971,7 +935,7 @@ impl VulkanContext {
             Ok(fb) => fb,
             Err(e) => {
                 unsafe { device.destroy_image_view(view, None) };
-                self.keep_pass_buffers(&mut pass_buffers);
+                self.release_pass_buffers_of(&mut pass_buffers);
                 return Err(backend_err("create_framebuffer", e));
             }
         };
@@ -1005,7 +969,7 @@ impl VulkanContext {
                     device.destroy_framebuffer(framebuffer, None);
                     device.destroy_image_view(view, None);
                 }
-                self.keep_pass_buffers(&mut pass_buffers);
+                self.release_pass_buffers_of(&mut pass_buffers);
                 return Err(e);
             }
         };
@@ -1075,7 +1039,7 @@ impl VulkanContext {
             Ok(fence) => fence,
             Err(e) => {
                 // Not submitted, so nothing is reading the pass's buffers.
-                self.keep_pass_buffers(&mut pass_buffers);
+                self.release_pass_buffers_of(&mut pass_buffers);
                 return Err(e);
             }
         };
@@ -1195,15 +1159,16 @@ impl VulkanContext {
     }
 }
 
-/// The multisample color buffer and the stencil buffer a pass rendered
-/// through, each with the key it is kept under.
+/// Which of the context's kept multisample and stencil buffers a pass
+/// renders through.
 ///
-/// A waiting submission holds these on its stack. A deferred one hands them
-/// to its fence, since the GPU may be writing them until it signals.
-#[derive(Default)]
+/// A waiting submission holds this on its stack. A deferred one hands it to
+/// its fence, since the GPU may be writing them until it signals, and the
+/// fence's retiring releases them.
+#[derive(Debug, Default)]
 pub(crate) struct PassBuffers {
-    pub(crate) color: Option<(crate::kept::ColorKey, (VulkanTexture, vk::ImageView))>,
-    pub(crate) stencil: Option<(crate::kept::StencilKey, crate::stencil::StencilBuffer)>,
+    pub(crate) color: Option<crate::kept::Use>,
+    pub(crate) stencil: Option<crate::kept::Use>,
 }
 
 pub(crate) struct StagedBuffer {
@@ -1349,6 +1314,13 @@ fn build_render_pass(device: &ash::Device, key: RenderPassKey) -> Result<vk::Ren
     // the first waits for prior color output before transitioning in, the
     // second makes this pass's writes visible before whatever reads the target
     // next, which is presentation or a later pass sampling it.
+    // The first also makes the writes of every pass submitted before this one
+    // available, not only waits for them: the frames in flight share one
+    // multisample buffer and one stencil buffer of a size (`crate::kept`), so
+    // this pass's clear of them is a write after the last pass's, and a write
+    // after a write needs the first made available, where a write after a
+    // read needs only the wait.
+    //
     // Every stage that touches an attachment here, not only the color one. A
     // stencil attachment is transitioned and then cleared by its load
     // operation, and those are two writes that need ordering exactly as much
@@ -1367,7 +1339,10 @@ fn build_render_pass(device: &ash::Device, key: RenderPassKey) -> Result<vk::Ren
             .dst_subpass(0)
             .src_stage_mask(attachment_stages)
             .dst_stage_mask(attachment_stages)
-            .src_access_mask(vk::AccessFlags::empty())
+            .src_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            )
             .dst_access_mask(attachment_writes),
         vk::SubpassDependency::default()
             .src_subpass(0)

@@ -1126,8 +1126,9 @@ impl VulkanContext {
 }
 
 impl VulkanContext {
-    /// How many multisample and stencil buffers are kept between submissions,
-    /// for [`Self::release_pass_buffers`] to free.
+    /// How many multisample and stencil buffers the context keeps, those the
+    /// submissions in flight are using among them, for
+    /// [`Self::release_pass_buffers`] to free.
     pub fn pass_buffers_kept(&self) -> usize {
         self.kept_color.len() + self.kept_stencil.len()
     }
@@ -1139,16 +1140,15 @@ impl VulkanContext {
     /// holds, so a caller that has stopped drawing for a while, or is about to
     /// draw at another size, can give them back; the next multisampled or
     /// clipped submission allocates its own again.
+    ///
+    /// One a deferred submission still uses is freed when its fence retires.
     pub fn release_pass_buffers(&mut self) {
-        let color: Vec<_> = self.kept_color.drain().collect();
-        for (texture, view) in color {
-            // SAFETY: a kept buffer is in no submission; the one that used it
-            // was waited on before it was put back.
+        for (texture, view) in self.kept_color.drain() {
+            // SAFETY: `drain` gives only what no submission is using.
             unsafe { self.device.destroy_image_view(view, None) };
             self.destroy_texture(texture);
         }
-        let stencil: Vec<_> = self.kept_stencil.drain().collect();
-        for buffer in stencil {
+        for buffer in self.kept_stencil.drain() {
             buffer.destroy(self);
         }
     }

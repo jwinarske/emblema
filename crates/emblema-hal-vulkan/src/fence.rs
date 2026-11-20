@@ -69,9 +69,10 @@ pub struct VulkanFence {
     /// in flight, and a deferred submission is in flight for as long as the
     /// caller likes.
     pub(crate) materials: Option<crate::materials::Materials>,
-    /// The multisample and stencil buffers the pass rendered through, which
-    /// the GPU may be writing until this signals. Given back to the context
-    /// that keeps them when the fence retires.
+    /// Which of the context's kept multisample and stencil buffers the pass
+    /// rendered through, which the GPU may be writing until this signals.
+    /// Released to the context, which other submissions may share them
+    /// from meanwhile, when the fence retires.
     ///
     /// Behind a mutex for what a fence has to be, not for anything that is
     /// done with it: a fence is shared with the thread a page flip is waited
