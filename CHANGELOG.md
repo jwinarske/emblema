@@ -7,6 +7,33 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.7 — 2026-11-20
+
+One merge past 0.3.6: what a context has allocated, and the most it has at
+once.
+
+### What a context holds
+
+**How large the blocks needed to be can be known.** 0.3.5 let an embedder say
+how large the memory blocks are, and nothing said how large they needed to be:
+`memory_reserved` is the blocks themselves. A context now counts what it
+allocates from them, by the two kinds the blocks have, and keeps the most of
+each it has held at once. An embedder that keeps that figure from one run can
+size the next by it. On a Pi 5 at 1280x1440, a Flutter app with no layers
+allocated 86 MiB at the most and one after a hover 114, where the blocks given
+had been 128.
+
+Every allocation and release goes through the context's own two functions,
+which add and subtract; asking the allocator for a report walks every block,
+too much to do in a frame. Memory an image is imported or exported with is not
+from a block and is not counted.
+
+### New
+
+**`VulkanContext::memory_used`** and **`VulkanContext::memory_peak`**, each a
+**`MemoryUse`** of `device` and `host` bytes, and **`Context::memory_peak`**,
+`None` on GLES.
+
 ## 0.3.6 — 2026-11-19
 
 One merge past 0.3.5, and a fix to what 0.3.5 added.
