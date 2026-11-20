@@ -253,9 +253,12 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-deny
-          key: cargo-deny-${{ runner.os }}
+          key: cargo-deny-0.21.0-${{ runner.os }}
+      # A version, and in the cache's key: the newest is whatever was released
+      # that day, and 0.22.0 wants a compiler past the pinned one, which this
+      # job found out only when its cache was gone. 0.21.0 builds with 1.89.
       - name: Install cargo-deny
-        run: command -v cargo-deny || cargo install cargo-deny --locked
+        run: command -v cargo-deny || cargo install cargo-deny --version 0.21.0 --locked
       # Separate from the build because the bans are a design constraint rather
       # than a lint: this workspace must compile from pure Rust source, with no
       # C toolchain, cmake or pkg-config, because that property is what keeps
