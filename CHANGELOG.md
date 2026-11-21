@@ -7,10 +7,14 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
-## 0.3.10 — 2026-11-21
+## 0.4.0 — 2026-11-21
 
-One merge past 0.3.9, found running fl-engine on a Raspberry Pi 4's touch
-panel: the GBM scanout path's buffers fit what the renderer reads past them.
+Two merges past 0.3.9, both found running fl-engine's Wonderous on a
+Raspberry Pi 4's touch panel: the GBM scanout path's buffers fit what the
+renderer reads past them, and the advanced blend modes are blended in the
+shader on a device whose blend unit has none of them. The second adds public
+fields to three structs whose fields were all public, which breaks a caller
+building one by its literal, so the version is 0.4.0 rather than 0.3.10.
 
 ### Scanout
 
@@ -26,7 +30,32 @@ the mode's height, so the row is never scanned out. A tiled buffer, whose
 layout may depend on its height, is refused as before, and a device whose
 first import succeeds allocates nothing more.
 
-No API changes.
+### Blend modes
+
+**The advanced modes are blended in the shader where the device cannot.**
+None of Mesa's V3D, Panfrost or PowerVR Vulkan drivers offers
+`VK_EXT_blend_operation_advanced`, so on those devices a draw or a layer
+composite under `multiply` through `luminosity` was refused. A canvas made
+`with_advanced_blends_in_shader(true)` cuts its pass before such a draw, as a
+backdrop does, and the draw reads the cut back as its destination: the
+shader loads the texel under the fragment and evaluates the mode by the same
+function a mesh's tint blend uses, and the blend unit replaces what the draw
+covers with the result. Held to the specification's equations within the
+blend unit's own one unit, on Vulkan and GLES, for a draw and for a group.
+One full-target redraw per such draw is the cost, so it is off unless asked
+for; a device with the extension does better without it, and a canvas not
+asked refuses the modes there as before.
+
+### API
+
+Added: `Canvas::with_advanced_blends_in_shader`; `BatchDraw::destination`,
+`BatchDraw::texture_slots` and `BatchDraw::unit_blend`;
+`Batch::read_destination_from`, `Batch::destination_fresh` and
+`Batch::forget_destination`. **Breaking**: the new public fields
+`BatchDraw::destination`, `ShaderVariant::reads_destination` and
+`SolidVariant::destination`, for code that builds one of those by its
+literal. `SolidVariant::COUNT` is 40, from 20, and `SolidVariant::overrides`
+returns seven pairs, with `DST_READ` the seventh.
 
 ## 0.3.9 — 2026-11-20
 
