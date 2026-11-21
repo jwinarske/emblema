@@ -657,6 +657,27 @@ fn power_distance(point: vec2<f32>, exponent: f32, exponent_inv: f32) -> f32 {
 
 /// A blurred rounded rectangle, evaluated rather than blurred.
 ///
+/// The coverage an analytic shape or a glyph measured for this fragment,
+/// applied in `fs_main` after the color filter rather than here.
+///
+/// A color filter acts on the paint's color, and coverage on where that color
+/// lands: `dart:ui` filters the source and then covers it, and upstream does
+/// the same for every shape it draws as geometry. Folded in here, the filter
+/// saw the color already scaled by coverage, so a filter that does not keep
+/// transparent black so -- `srcOver` of a tint, `multiply`, a matrix with an
+/// offset -- colored every fragment of the shape's quad outside the shape.
+/// Without a filter the product is the same one, in another order.
+var<private> coverage_after_filter: f32 = 1.0;
+
+/// The paint's solid color, premultiplied and uncovered, with `coverage`
+/// left for `fs_main`. Built from the uniform alone: no vector here takes a
+/// component of a parameter (see `the_shader_builds_no_vector_from_a_parameter`).
+fn covered(coverage: f32) -> vec4<f32> {
+    coverage_after_filter = coverage;
+    let tint = paint.stops[0];
+    return vec4<f32>(tint.rgb * tint.a, tint.a);
+}
+
 /// The exact convolution of a Gaussian with a rounded rectangle has no closed
 /// form. This is Raph Levien's approximation, which upstream evaluates too: the
 /// blur along one axis is the difference of two error functions -- the shape's
@@ -704,15 +725,13 @@ fn rrect_blur_coverage(clip: vec3<f32>) -> vec4<f32> {
     // removing to look, rather than trusting.
     //
     // The color is straight, as every solid paint's is, and premultiplied
-    // here, as the glyph and ellipse arms do: this arm returns before the
-    // shared premultiply at the end of `shade`. Returning `color * coverage`
+    // by `covered`, as the glyph and ellipse arms' are: this arm returns
+    // before the shared premultiply at the end of `shade`. Returning `color * coverage`
     // left the color channels at full strength under a fractional alpha,
     // which a black shadow cannot show and a colored one shows as a fringe
     // brighter than what it falls on. Upstream's `rrect_blur.frag` multiplies
     // a color the CPU side has already premultiplied.
-    let tint = paint.stops[0];
-    let alpha = tint.a * clamp(coverage, 0.0, 1.0);
-    return vec4<f32>(tint.rgb * alpha, alpha);
+    return covered(clamp(coverage, 0.0, 1.0));
 }
 
 /// A rounded rectangle evaluated here rather than built out of triangles.
@@ -781,9 +800,7 @@ fn rounded_rect_coverage(clip: vec3<f32>) -> vec4<f32> {
         coverage -= clamp(0.5 - inner / per_pixel, 0.0, 1.0);
     }
 
-    let tint = paint.stops[0];
-    let alpha = tint.a * coverage;
-    return vec4<f32>(tint.rgb * alpha, alpha);
+    return covered(coverage);
 }
 
 /// An ellipse evaluated here, with coverage from an approximate distance.
@@ -831,9 +848,7 @@ fn shadow_mesh_color(uv: vec2<f32>) -> vec4<f32> {
     let a = abs(x);
     let b = (0.278393 + (0.230389 + 0.078108 * a * a) * a) * a + 1.0;
     let erf = sign(x) * (1.0 - 1.0 / (b * b * b * b));
-    let tint = paint.stops[0];
-    let alpha = tint.a * (1.0 + erf) * 0.5;
-    return vec4<f32>(tint.rgb * alpha, alpha);
+    return covered((1.0 + erf) * 0.5);
 }
 
 /// The body both share: an implicit ellipse, differentiated into coverage.
@@ -857,9 +872,7 @@ fn disc_coverage(point: vec2<f32>, axes: vec2<f32>) -> vec4<f32> {
         stroke = stroke * k2 / k1;
     }
     let coverage = coverage_of(implicit, per_pixel, stroke);
-    let tint = paint.stops[0];
-    let alpha = tint.a * coverage;
-    return vec4<f32>(tint.rgb * alpha, alpha);
+    return covered(coverage);
 }
 
 /// One axis of a separable Gaussian blur of the bound texture.
@@ -1414,6 +1427,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (FILTERS) {
         tinted = filtered(tinted);
     }
+    // Covered after the filter, as the paint's color is filtered before it
+    // lands (`coverage_after_filter`).
+    tinted = tinted * coverage_after_filter;
     return dithered(tinted, in.position.xy);
 }
 
@@ -1591,9 +1607,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         // Read from the red channel, which is where a single-channel atlas
         // puts it and where a four-channel one repeats it.
         let coverage = textureSampleLevel(image_texture, image_sampler, in.uv, 0.0).r;
-        let tint = paint.stops[0];
-        let alpha = tint.a * coverage;
-        return vec4<f32>(tint.rgb * alpha, alpha);
+        return covered(coverage);
     }
 
     // Colors are linear here. Conversion to the target's transfer function is

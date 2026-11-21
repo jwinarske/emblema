@@ -17026,6 +17026,64 @@ fn a_gradient_on_a_mesh_is_read_at_the_texture_coordinates() {
 }
 
 #[test]
+fn a_color_filter_colors_the_shape_and_not_the_rest_of_its_quad() {
+    // A color filter acts on the paint's color, and coverage on where that
+    // color lands: `dart:ui` filters the source and then covers it. A filter
+    // that does not keep transparent black so -- a translucent tint blended
+    // `SrcOver`, which colors even nothing -- shows the order. Filtered after
+    // coverage, every fragment of the quad an analytic shape is drawn on came
+    // out tinted, outside the shape as well as in it: a purple square around
+    // each circle, which is what fl-engine's color filters showed against
+    // the stock engine's.
+    //
+    // Each analytic shape is checked, the circle, the oval and the rounded
+    // rectangle, at a point inside its quad and outside it, where nothing is
+    // to land, and at its center, where the filtered color is.
+    let Some(mut ctx) = context() else { return };
+
+    let filter = ColorFilter::blend([0.5, 0.0, 0.5, 0.5], BlendMode::SrcOver);
+    let paint = Paint::fill(Color::srgb(1.0, 1.0, 0.0, 1.0)).with_color_filter(filter);
+    let mut canvas = Canvas::new(SIZE);
+    canvas.clear(Color::WHITE);
+    canvas
+        .draw_circle(Vec2::new(32.0, 32.0), 24.0, &paint)
+        .expect("the circle");
+    canvas
+        .draw_oval(Rect::new(72.0, 8.0, 120.0, 56.0), &paint)
+        .expect("the oval");
+    canvas
+        .draw_rrect(Rect::new(8.0, 72.0, 56.0, 120.0), 20.0, &paint)
+        .expect("the rounded rectangle");
+    let shot = render(&mut ctx, canvas);
+
+    // Inside each quad, a pixel in from its corner: outside the shape.
+    for (x, y, shape) in [
+        (10, 10, "circle"),
+        (74, 10, "oval"),
+        (10, 74, "rounded rectangle"),
+    ] {
+        assert_eq!(
+            pixel(&shot, x, y),
+            [255, 255, 255, 255],
+            "the {shape}'s quad outside the shape was colored by its filter"
+        );
+    }
+    // And the filter reached the shapes: yellow under a half purple, red
+    // pulled down from 255 and blue up from 0.
+    for (x, y, shape) in [
+        (32, 32, "circle"),
+        (96, 32, "oval"),
+        (32, 96, "rounded rectangle"),
+    ] {
+        let p = pixel(&shot, x, y);
+        assert!(
+            p[0] < 240 && p[2] > 40,
+            "the {shape} should be yellow tinted purple, and is {p:?}"
+        );
+    }
+}
+
+#[test]
 fn a_color_filter_that_recolors_nothing_still_draws_the_shape() {
     // Upstream's `PipelineBlendSingleParameter`, whose whole subject is a
     // filter that does nothing: it puts a blend color filter in `Dst` mode --
