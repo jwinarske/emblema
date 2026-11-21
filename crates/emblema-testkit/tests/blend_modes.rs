@@ -589,9 +589,23 @@ fn composite_group<H: Hal>(
 where
     H::Context: HalContext<Hal = H>,
 {
+    composite_group_by::<H>(ctx, mode, alpha, false)
+}
+
+/// [`composite_group`], with the canvas blending advanced modes in the shader
+/// or not.
+fn composite_group_by<H: Hal>(
+    ctx: &mut H::Context,
+    mode: BlendMode,
+    alpha: f32,
+    in_shader: bool,
+) -> Result<[u8; 4], Error>
+where
+    H::Context: HalContext<Hal = H>,
+{
     use emblema_core::{Canvas, Color, Layer, Paint, Rect};
 
-    let mut canvas = Canvas::new(SIZE);
+    let mut canvas = Canvas::new(SIZE).with_advanced_blends_in_shader(in_shader);
     // What a clear writes is what it is given: these are the numbers that end
     // up in the target, so the equation below takes them as they are rather
     // than premultiplying them again.
@@ -693,4 +707,201 @@ fn every_advanced_mode_composites_a_group_by_its_equation() {
     if !ran {
         eprintln!("skipping: no device here composites a group with an advanced mode");
     }
+}
+
+/// One draw blending by `mode` in the shader: the destination is a texture
+/// holding the clear, named as the draw's second slot, and the draw replaces
+/// what it covers with what the shader computed.
+fn render_in_shader<H: Hal>(ctx: &mut H::Context, mode: BlendMode) -> Result<[u8; 4], Error>
+where
+    H::Context: HalContext<Hal = H>,
+{
+    let (straight, _, dst) = colors(mode);
+    let descriptor = TextureDescriptor::offscreen(SIZE, PixelFormat::Rgba8Unorm);
+    let mut under = ctx.create_texture(&descriptor)?;
+    ctx.submit_batch(&mut under, &Batch::new(), PassDescriptor::clear(dst))?;
+
+    let mut batch = Batch::new();
+    batch.read_destination_from(0);
+    batch
+        .push(&FULL, &QUAD, Material::solid(straight), mode)
+        .expect("push");
+    let mut target = ctx.create_texture(&descriptor)?;
+    let submitted =
+        ctx.submit_batch_textured(&mut target, &batch, PassDescriptor::clear(dst), &[&under]);
+    let result = submitted.and_then(|()| ctx.read_texture(&mut target));
+    ctx.destroy_texture(target);
+    ctx.destroy_texture(under);
+    let pixels = result?;
+    let middle = ((SIZE.height / 2 * SIZE.width + SIZE.width / 2) * 4) as usize;
+    Ok([
+        pixels[middle],
+        pixels[middle + 1],
+        pixels[middle + 2],
+        pixels[middle + 3],
+    ])
+}
+
+/// One draw over the clear through a canvas, blending by `mode` in the shader
+/// where `in_shader` says so.
+fn canvas_draw<H: Hal>(
+    ctx: &mut H::Context,
+    mode: BlendMode,
+    in_shader: bool,
+) -> Result<[u8; 4], Error>
+where
+    H::Context: HalContext<Hal = H>,
+{
+    use emblema_core::{Canvas, Color, Paint, Rect};
+
+    let mut canvas = Canvas::new(SIZE).with_advanced_blends_in_shader(in_shader);
+    canvas.clear(Color::srgb(ADV_DST[0], ADV_DST[1], ADV_DST[2], ADV_DST[3]));
+    canvas
+        .draw_rect(
+            Rect::new(0.0, 0.0, SIZE.width as f32, SIZE.height as f32),
+            &Paint::fill(Color::srgb(ADV_SRC[0], ADV_SRC[1], ADV_SRC[2], ADV_SRC[3]))
+                .with_blend(mode),
+        )
+        .map_err(|_| Error::Unsupported("the draw"))?;
+    let pixels = emblema_core::render_offscreen_into::<H>(
+        ctx,
+        &canvas.finish(),
+        &[],
+        PixelFormat::Rgba8Unorm,
+    )?;
+    let middle = ((SIZE.height / 2 * SIZE.width + SIZE.width / 2) * 4) as usize;
+    Ok([
+        pixels[middle],
+        pixels[middle + 1],
+        pixels[middle + 2],
+        pixels[middle + 3],
+    ])
+}
+
+/// Every advanced mode, blended in the shader against its destination read
+/// from a texture, matches its equation on a device whose blend unit has
+/// none of them: the extension withheld, on both backends.
+///
+/// The same equations and the same one-unit allowance as the blend unit's own
+/// test above, so the two routes are held to one standard.
+#[gtest]
+fn every_advanced_mode_blends_in_the_shader_where_the_device_cannot() {
+    let mut ran = Vec::new();
+    if let Ok(mut ctx) = Validated::without(DevicePreference::Auto, Capability::AdvancedBlend) {
+        for mode in BlendMode::ADVANCED {
+            match render_in_shader::<VulkanHal>(&mut ctx, *mode) {
+                Ok(got) => {
+                    let want = expected(*mode);
+                    expect_true!(
+                        near(got, want),
+                        "vulkan {mode}: got {got:?}, equation says {want:?}"
+                    );
+                }
+                Err(e) => expect_true!(false, "vulkan {mode}: refused: {e}"),
+            }
+        }
+        ran.push("vulkan");
+    }
+    if let Ok(mut ctx) =
+        GlesValidated::without(DisplayTarget::Surfaceless, Capability::AdvancedBlend)
+    {
+        for mode in BlendMode::ADVANCED {
+            match render_in_shader::<GlesHal>(&mut ctx, *mode) {
+                Ok(got) => {
+                    let want = expected(*mode);
+                    expect_true!(
+                        near(got, want),
+                        "gles {mode}: got {got:?}, equation says {want:?}"
+                    );
+                }
+                Err(e) => expect_true!(false, "gles {mode}: refused: {e}"),
+            }
+        }
+        ran.push("gles");
+    }
+    eprintln!("checked the shader's advanced blends on {ran:?}");
+}
+
+/// A canvas asked to blend the advanced modes in the shader draws them on a
+/// device that cannot, a draw and a group alike, by their equations; and one
+/// not asked still refuses them there, as before.
+#[gtest]
+fn a_canvas_blends_advanced_modes_in_the_shader_when_asked() {
+    let Ok(mut ctx) = Validated::without(DevicePreference::Auto, Capability::AdvancedBlend) else {
+        eprintln!("skipping: no Vulkan device");
+        return;
+    };
+    for mode in BlendMode::ADVANCED {
+        match canvas_draw::<VulkanHal>(&mut ctx, *mode, true) {
+            Ok(got) => {
+                let want = expected(*mode);
+                expect_true!(
+                    near(got, want),
+                    "draw {mode}: got {got:?}, equation says {want:?}"
+                );
+            }
+            Err(e) => expect_true!(false, "draw {mode}: refused: {e}"),
+        }
+        for alpha in GROUP_ALPHAS {
+            match composite_group_by::<VulkanHal>(&mut ctx, *mode, alpha, true) {
+                Ok(got) => {
+                    let a = ADV_SRC[3] * alpha;
+                    let source = [ADV_SRC[0] * a, ADV_SRC[1] * a, ADV_SRC[2] * a, a];
+                    let want =
+                        quantize(blend_advanced(*mode, source, ADV_DST).expect("advanced formula"));
+                    expect_true!(
+                        near(got, want),
+                        "group {mode} at {alpha}: got {got:?}, equation says {want:?}"
+                    );
+                }
+                Err(e) => expect_true!(false, "group {mode} at {alpha}: refused: {e}"),
+            }
+        }
+        expect_true!(
+            matches!(
+                canvas_draw::<VulkanHal>(&mut ctx, *mode, false),
+                Err(Error::Unsupported(_))
+            ),
+            "{mode} drew on a device without the modes from a canvas not asked to blend them"
+        );
+    }
+}
+
+/// Two advanced draws that overlap blend with each other in the shader: the
+/// second reads a destination that holds the first, which is what a cut per
+/// such draw is for. Multiply twice over the clear is the clear times the
+/// source squared, where the source is opaque.
+#[gtest]
+fn overlapping_advanced_draws_blend_with_each_other_in_the_shader() {
+    use emblema_core::{Canvas, Color, Paint, Rect};
+
+    let Ok(mut ctx) = Validated::without(DevicePreference::Auto, Capability::AdvancedBlend) else {
+        eprintln!("skipping: no Vulkan device");
+        return;
+    };
+    let ground = [0.8, 0.6, 0.4, 1.0];
+    let source = [0.5, 0.5, 0.5, 1.0];
+    let mut canvas = Canvas::new(SIZE).with_advanced_blends_in_shader(true);
+    canvas.clear(Color::srgb(ground[0], ground[1], ground[2], ground[3]));
+    let whole = Rect::new(0.0, 0.0, SIZE.width as f32, SIZE.height as f32);
+    let paint = Paint::fill(Color::srgb(source[0], source[1], source[2], source[3]))
+        .with_blend(BlendMode::Multiply);
+    canvas.draw_rect(whole, &paint).expect("first");
+    canvas.draw_rect(whole, &paint).expect("second");
+    let pixels = emblema_core::render_offscreen_into::<VulkanHal>(
+        &mut ctx,
+        &canvas.finish(),
+        &[],
+        PixelFormat::Rgba8Unorm,
+    )
+    .expect("drawn");
+    let middle = ((SIZE.height / 2 * SIZE.width + SIZE.width / 2) * 4) as usize;
+    let got = [
+        pixels[middle],
+        pixels[middle + 1],
+        pixels[middle + 2],
+        pixels[middle + 3],
+    ];
+    let want = quantize([ground[0] * 0.25, ground[1] * 0.25, ground[2] * 0.25, 1.0]);
+    expect_true!(near(got, want), "got {got:?}, twice multiplied is {want:?}");
 }

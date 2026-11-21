@@ -279,7 +279,7 @@ impl GlesContext {
             if draw.material.program().is_none() {
                 self.ensure_variant(
                     solid_variant(draw.shader_variant()),
-                    draw.blend.is_advanced(),
+                    draw.unit_blend().is_advanced(),
                 )?;
             }
         }
@@ -446,9 +446,12 @@ impl GlesContext {
             let mut stencil_state: Option<ClipState> = None;
             let mut bound_texture: Option<[Option<u32>; emblema_hal::MAX_EFFECT_TEXTURES]> = None;
             for (index, draw) in batch.draws().iter().enumerate() {
-                if current != Some(draw.blend) {
-                    apply_blend(gl, draw.blend);
-                    current = Some(draw.blend);
+                // The mode the blend unit applies: a draw that reads its
+                // destination has blended in the shader and replaces.
+                let unit_blend = draw.unit_blend();
+                if current != Some(unit_blend) {
+                    apply_blend(gl, unit_blend);
+                    current = Some(unit_blend);
                 }
                 // Before every advanced draw, not only where two of them
                 // overlap. An advanced equation reads the destination, so
@@ -462,7 +465,7 @@ impl GlesContext {
                 // there is no barrier to call, and nothing on a batch with no
                 // advanced mode in it.
                 if let Some(barrier) = blend_barrier {
-                    if draw.blend.is_advanced() {
+                    if unit_blend.is_advanced() {
                         // SAFETY: a context is current, and the entry point
                         // was resolved for it.
                         barrier();
@@ -506,7 +509,7 @@ impl GlesContext {
                 // sampler left pointing at whatever unit a previous frame used
                 // reads a texture that may since have been deleted, so the
                 // placeholder is bound explicitly rather than by omission.
-                let wanted = draw.material.texture_slots();
+                let wanted = draw.texture_slots();
                 if bound_texture != Some(wanted) {
                     // Every unit the layout has, not only the ones this draw
                     // reads. A unit left pointing at a previous frame's texture
@@ -532,7 +535,7 @@ impl GlesContext {
                 let wanted = (
                     draw.material.program(),
                     draw.shader_variant(),
-                    draw.blend.is_advanced(),
+                    unit_blend.is_advanced(),
                 );
                 if bound_program != Some(wanted) {
                     let object = match wanted.0 {
@@ -901,6 +904,7 @@ fn solid_variant(variant: ShaderVariant) -> SolidVariant {
         kinds,
         filters: variant.filters,
         tint_blends: variant.tint_blends,
+        destination: variant.reads_destination,
     }
 }
 
@@ -1297,6 +1301,14 @@ fn build_solid_program(
         if let Some(location) = gl.get_uniform_location(program, "_group_0_binding_0_fs") {
             gl.use_program(Some(program));
             gl.uniform_1_i32(Some(&location), 0);
+            gl.use_program(None);
+        }
+        // What is under a draw that blends with it here, on unit one: the
+        // second of a draw's texture slots (`BatchDraw::texture_slots`). Only
+        // a variant that reads its destination declares it.
+        if let Some(location) = gl.get_uniform_location(program, &sampler_name(1)) {
+            gl.use_program(Some(program));
+            gl.uniform_1_i32(Some(&location), 1);
             gl.use_program(None);
         }
     }

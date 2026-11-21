@@ -1770,6 +1770,10 @@ pub struct ShaderVariant {
     pub material: MaterialVariant,
     pub filters: bool,
     pub tint_blends: bool,
+    /// Blends with what is under the draw in the shader, read from a texture
+    /// (`BatchDraw::destination`), for an advanced mode the device's blend
+    /// unit cannot do.
+    pub reads_destination: bool,
 }
 
 impl ShaderVariant {
@@ -1780,6 +1784,7 @@ impl ShaderVariant {
         material: MaterialVariant::Core,
         filters: false,
         tint_blends: false,
+        reads_destination: false,
     };
 }
 

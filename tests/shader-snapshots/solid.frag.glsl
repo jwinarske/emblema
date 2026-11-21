@@ -25,10 +25,13 @@ const bool SHAPES = true;
 const bool PASSES = true;
 const bool FILTERS = true;
 const bool TINT_BLENDS = true;
+const bool DST_READ = true;
 
 layout(std140) uniform Paint_block_0Fragment { Paint _group_1_binding_0_fs; };
 
 uniform highp sampler2D _group_0_binding_0_fs;
+
+uniform highp sampler2D _group_0_binding_2_fs;
 
 float coverage_after_filter = 1.0;
 
@@ -1001,31 +1004,44 @@ vec4 shade(VertexOutput in_3) {
 
 void main() {
     VertexOutput in_ = VertexOutput(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2);
+    int tint_mode = 0;
     vec4 tinted = vec4(0.0);
     vec4 _e1 = shade(in_);
     float _e5 = _group_1_binding_0_fs.filter_params.y;
-    int tint_mode = int((_e5 + 0.5));
+    int packed_modes = int((_e5 + 0.5));
+    tint_mode = packed_modes;
+    if (DST_READ) {
+        tint_mode = (packed_modes % 32);
+    }
     tinted = (in_.tint * _e1);
     if (TINT_BLENDS) {
-        if ((tint_mode != 13)) {
-            vec4 _e16 = blend_tint(tint_mode, _e1, in_.tint);
-            tinted = _e16;
+        int _e17 = tint_mode;
+        if ((_e17 != 13)) {
+            int _e20 = tint_mode;
+            vec4 _e22 = blend_tint(_e20, _e1, in_.tint);
+            tinted = _e22;
         }
     }
-    vec4 _e17 = tinted;
-    float _e21 = _group_1_binding_0_fs.filter_params.w;
-    tinted = (_e17 * _e21);
+    vec4 _e23 = tinted;
+    float _e27 = _group_1_binding_0_fs.filter_params.w;
+    tinted = (_e23 * _e27);
     if (FILTERS) {
-        vec4 _e24 = tinted;
-        vec4 _e25 = filtered(_e24);
-        tinted = _e25;
+        vec4 _e30 = tinted;
+        vec4 _e31 = filtered(_e30);
+        tinted = _e31;
     }
-    vec4 _e26 = tinted;
-    float _e28 = coverage_after_filter;
-    tinted = (_e26 * _e28);
-    vec4 _e30 = tinted;
-    vec4 _e33 = dithered(_e30, in_.position.xy);
-    _fs2p_location0 = _e33;
+    vec4 _e32 = tinted;
+    float _e34 = coverage_after_filter;
+    tinted = (_e32 * _e34);
+    if (DST_READ) {
+        vec4 under = texelFetch(_group_0_binding_2_fs, ivec2(in_.position.xy), 0);
+        vec4 _e45 = tinted;
+        vec4 _e46 = blend_tint((packed_modes / 32), _e45, under);
+        tinted = _e46;
+    }
+    vec4 _e47 = tinted;
+    vec4 _e50 = dithered(_e47, in_.position.xy);
+    _fs2p_location0 = _e50;
     return;
 }
 

@@ -25,6 +25,7 @@ const bool SHAPES = true;
 const bool PASSES = true;
 const bool FILTERS = true;
 const bool TINT_BLENDS = true;
+const bool DST_READ = true;
 
 layout(location = 0) in vec3 _p2vs_location0;
 layout(location = 1) in vec2 _p2vs_location1;

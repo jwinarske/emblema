@@ -89,6 +89,7 @@ pub(crate) fn solid_variant(variant: ShaderVariant) -> emblema_shaders::SolidVar
         kinds,
         filters: variant.filters,
         tint_blends: variant.tint_blends,
+        destination: variant.reads_destination,
     }
 }
 
@@ -359,7 +360,7 @@ impl VulkanContext {
                 PipelineKey {
                     format,
                     program: draw.material.program(),
-                    blend: draw.blend,
+                    blend: draw.unit_blend(),
                     shader: draw.shader_variant(),
                     samples: pass.samples,
                     stencil: stencil_format,
@@ -545,7 +546,7 @@ impl VulkanContext {
                         .pipeline(PipelineKey {
                             format,
                             program: draw.material.program(),
-                            blend: draw.blend,
+                            blend: draw.unit_blend(),
                             shader: draw.shader_variant(),
                             samples: pass.samples,
                             stencil: stencil_format,
@@ -786,7 +787,7 @@ impl VulkanContext {
                 PipelineKey {
                     format,
                     program: draw.material.program(),
-                    blend: draw.blend,
+                    blend: draw.unit_blend(),
                     shader: draw.shader_variant(),
                     samples: pass.samples,
                     stencil: stencil_format,
@@ -951,7 +952,7 @@ impl VulkanContext {
                     .pipeline(PipelineKey {
                         format,
                         program: draw.material.program(),
-                        blend: draw.blend,
+                        blend: draw.unit_blend(),
                         shader: draw.shader_variant(),
                         samples: pass.samples,
                         stencil: stencil_format,
@@ -1723,7 +1724,7 @@ unsafe fn record_draw(
         // declares the texture whatever the paint is, and a descriptor a
         // pipeline statically uses must be bound even where the branch reading
         // it is unreachable. A draw that samples nothing gets a placeholder.
-        let set = bindings.set_for(draw.material.texture_slots());
+        let set = bindings.set_for(draw.texture_slots());
         if state.descriptor_set != Some(set) {
             device.cmd_bind_descriptor_sets(
                 cmd,

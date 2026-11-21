@@ -1104,6 +1104,10 @@ impl Layer {
 
 /// Records drawing commands for one frame.
 pub struct Canvas {
+    /// Blend the advanced modes in the shader, against a copy of what is
+    /// under each such draw, rather than in the device's blend unit. See
+    /// [`Canvas::with_advanced_blends_in_shader`].
+    advanced_blends_in_shader: bool,
     renderer: Renderer,
     batch: Batch,
     transform: Transform2D,
@@ -1260,7 +1264,55 @@ impl Canvas {
             samples: 4,
             ramps: Vec::new(),
             backdrops: std::collections::HashMap::new(),
+            advanced_blends_in_shader: false,
         }
+    }
+
+    /// Blend the advanced modes -- `multiply` through `luminosity` -- in the
+    /// shader, against a copy of what is under each such draw, rather than in
+    /// the device's blend unit.
+    ///
+    /// For a device without `VK_EXT_blend_operation_advanced` or its GLES
+    /// counterpart, which is most of those that are not a desktop's: no
+    /// combination of blend factors expresses these modes, and a recording
+    /// that uses one is refused there (`Error::Unsupported`). With this on,
+    /// each draw or layer composite blending by one cuts the pass first, as a
+    /// backdrop does, and the draw reads the cut back as its destination: the
+    /// shader computes the mode and the draw replaces what it covers. One
+    /// full-target redraw per such draw is the cost, which is why it is off
+    /// unless asked for: a device that has the extension does better without
+    /// it. Whoever makes the canvas knows the device; a recording does not.
+    ///
+    /// The picture is the same either way, to the precision of the target:
+    /// the copy holds what the target holds.
+    pub fn with_advanced_blends_in_shader(mut self, on: bool) -> Self {
+        self.advanced_blends_in_shader = on;
+        self
+    }
+
+    /// Before a draw or a composite blending by `blend`: where this canvas
+    /// blends the advanced modes in the shader, cut the pass for one so its
+    /// draws read what is under them, and for any other mode stop the batch
+    /// handing out a copy that will no longer be what is under anything.
+    ///
+    /// First thing in every call that draws, before any texture slot is
+    /// taken: a cut hands the slots taken so far to the pass it finishes. A
+    /// copy no draw has read yet is still the destination, so a call that
+    /// reaches here twice cuts once.
+    fn prepare_destination(&mut self, blend: BlendMode) {
+        if !self.advanced_blends_in_shader {
+            return;
+        }
+        if !blend.is_advanced() {
+            self.batch.forget_destination();
+            return;
+        }
+        if self.batch.destination_fresh() {
+            return;
+        }
+        let cut = self.cut_pass();
+        let slot = self.slot_for(TextureSource::Layer(cut));
+        self.batch.read_destination_from(slot);
     }
 
     /// Sample count to use when anything is antialiased.
@@ -2518,6 +2570,7 @@ impl Canvas {
     }
 
     pub fn draw_path(&mut self, path: &Path, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if !paint.is_visible() || path.is_empty() {
             return Ok(self);
         }
@@ -3645,6 +3698,7 @@ impl Canvas {
     /// is careful about a corner the field would otherwise round -- see
     /// `analytic_rrect` -- and nothing here has measured what that costs.
     pub fn draw_rect(&mut self, rect: Rect, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if rect.is_empty() {
             return Ok(self);
         }
@@ -3691,6 +3745,7 @@ impl Canvas {
     /// solid paint that asked for antialiasing -- and anything else goes to
     /// `draw_path`.
     pub fn draw_rrect(&mut self, rect: Rect, radius: f32, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if rect.is_empty() {
             return Ok(self);
         }
@@ -3730,6 +3785,7 @@ impl Canvas {
         radii: RoundingRadii,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if rect.is_empty() {
             return Ok(self);
         }
@@ -3762,6 +3818,7 @@ impl Canvas {
         radii: RoundingRadii,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if rect.is_empty() {
             return Ok(self);
         }
@@ -4410,6 +4467,7 @@ impl Canvas {
     /// triangles and needs no shader of its own, where four cubics flattened to
     /// a tolerance cost vertices in proportion to how large it is drawn.
     pub fn draw_circle(&mut self, center: Vec2, radius: f32, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         // NaN named rather than caught by a negated comparison, which reads as
         // a typo and which clippy objects to on exactly those grounds.
         if radius.is_nan() || radius <= 0.0 {
@@ -4445,6 +4503,7 @@ impl Canvas {
     /// approximate an ellipse exactly as well as they approximate a circle --
     /// which is to say closely, and not exactly.
     pub fn draw_oval(&mut self, bounds: Rect, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if bounds.is_empty() {
             return Ok(self);
         }
@@ -4501,6 +4560,7 @@ impl Canvas {
         atlas_slot: u32,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if glyphs.is_empty() || !paint.is_visible() {
             return Ok(self);
         }
@@ -4618,6 +4678,7 @@ impl Canvas {
     /// image paint with no coordinates maps by position, the same as on any
     /// other shape.
     pub fn draw_vertices(&mut self, mesh: &Vertices, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if mesh.is_empty() || !paint.is_visible() {
             return Ok(self);
         }
@@ -4786,6 +4847,7 @@ impl Canvas {
         sheet: Extent2D,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if sprites.is_empty() || !paint.is_visible() {
             return Ok(self);
         }
@@ -4901,6 +4963,7 @@ impl Canvas {
         points: &[Vec2],
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         let stroke = match &paint.style {
             Style::Stroke(stroke) => *stroke,
             Style::Fill => StrokeStyle::default(),
@@ -5108,6 +5171,7 @@ impl Canvas {
     /// Its layers and its baked gradients are renumbered, since those name
     /// positions in lists this recording is appending to.
     pub fn draw_recording(&mut self, recording: &Recording, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if recording.is_empty() || !paint.is_visible() {
             return Ok(self);
         }
@@ -5214,6 +5278,7 @@ impl Canvas {
         inner_radius: f32,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if outer.is_empty() {
             return Ok(self);
         }
@@ -5240,6 +5305,7 @@ impl Canvas {
         inner_radii: RoundingRadii,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if outer.is_empty() {
             return Ok(self);
         }
@@ -5263,6 +5329,7 @@ impl Canvas {
     /// admits -- and the clip then removes the excess, which is what makes a
     /// superset the safe direction to be wrong in.
     pub fn draw_paint(&mut self, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         let bounds = self.local_clip_bounds();
         if bounds.is_empty() {
             return Ok(self);
@@ -5276,6 +5343,7 @@ impl Canvas {
     /// replaces the whole target and ignores the clip: this is a draw, so it
     /// blends and it obeys what is in force.
     pub fn draw_color(&mut self, color: Color, blend: BlendMode) -> Result<&mut Self> {
+        self.prepare_destination(blend);
         self.draw_paint(&Paint::fill(color).with_blend(blend))
     }
 
@@ -5310,6 +5378,7 @@ impl Canvas {
         into: Rect,
         paint: &Paint,
     ) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if size.width == 0 || size.height == 0 || into.is_empty() {
             return Ok(self);
         }
@@ -5489,6 +5558,7 @@ impl Canvas {
     /// and this draws in device space, so the two would disagree under a scale --
     /// and a snap is worth half a pixel, not a wrong blur.
     pub fn draw_line(&mut self, from: Vec2, to: Vec2, paint: &Paint) -> Result<&mut Self> {
+        self.prepare_destination(paint.blend);
         if let Some((p0, p1)) = self.hairline_snap(from, to, paint) {
             let mut b = PathBuilder::new();
             b.move_to(p0).line_to(p1);
@@ -5776,6 +5846,9 @@ impl Canvas {
                 index = filtered;
             }
         }
+        // Before the layer's slot is taken in the parent: a cut for an
+        // advanced composite moves the parent's slots to the pass it finishes.
+        self.prepare_destination(frame.paint.blend);
         let slot = self.slot_for(TextureSource::Layer(index));
 
         // Where the layer sits in the parent's clip space, and how much of that

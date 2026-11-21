@@ -287,7 +287,14 @@ impl Capabilities {
     /// Refusing is deliberate — the alternative is substituting the nearest
     /// expressible mode, which produces a picture nobody can debug from.
     pub fn check_blend_modes(&self, batch: &crate::Batch) -> crate::Result<()> {
-        if !self.advanced_blend && batch.draws().iter().any(|draw| draw.blend.is_advanced()) {
+        // A draw that carries what is under it blends in the shader and asks
+        // the blend unit for nothing it lacks.
+        if !self.advanced_blend
+            && batch
+                .draws()
+                .iter()
+                .any(|draw| draw.blend.is_advanced() && draw.destination.is_none())
+        {
             return Err(crate::Error::Unsupported(
                 "advanced blend modes; this device has no advanced-blend extension",
             ));

@@ -173,9 +173,12 @@ mod tests {
                 v.kinds == SolidKinds::Passes
             }),
             ("filtered(", |v: SolidVariant| v.filters),
-            // The blend filter calls the tint's blend function, so a variant
-            // that filters carries it whether or not it blends a tint.
-            ("blend_tint(", |v: SolidVariant| v.tint_blends || v.filters),
+            // The blend filter calls the tint's blend function, and so does a
+            // draw blending with its destination, so a variant that does
+            // either carries it whether or not it blends a tint.
+            ("blend_tint(", |v: SolidVariant| {
+                v.tint_blends || v.filters || v.destination
+            }),
         ];
         let mut seen = 0;
         for variant in SolidVariant::every() {
