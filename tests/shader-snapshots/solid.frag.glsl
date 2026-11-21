@@ -30,6 +30,8 @@ layout(std140) uniform Paint_block_0Fragment { Paint _group_1_binding_0_fs; };
 
 uniform highp sampler2D _group_0_binding_0_fs;
 
+float coverage_after_filter = 1.0;
+
 smooth in vec3 _vs2fs_location0;
 smooth in vec2 _vs2fs_location1;
 smooth in vec4 _vs2fs_location2;
@@ -328,6 +330,12 @@ float power_distance(vec2 point_1, float exponent, float exponent_inv) {
     return pow((xp + yp), exponent_inv);
 }
 
+vec4 covered(float coverage) {
+    coverage_after_filter = coverage;
+    vec4 tint_3 = _group_1_binding_0_fs.stops[0];
+    return vec4((tint_3.xyz * tint_3.w), tint_3.w);
+}
+
 vec4 rrect_blur_coverage(vec3 clip_2) {
     vec2 _e1 = to_gradient_space(clip_2);
     vec4 _e4 = _group_1_binding_0_fs.geometry;
@@ -344,14 +352,13 @@ vec4 rrect_blur_coverage(vec3 clip_2) {
     float distance_1 = ((_e33 + inside_2) - r1_);
     float _e43 = erf7_((s_inv * (min_edge + distance_1)));
     float _e45 = erf7_((s_inv * distance_1));
-    float coverage_1 = (scale * (_e43 - _e45));
-    vec4 tint_3 = _group_1_binding_0_fs.stops[0];
-    float alpha_2 = (tint_3.w * clamp(coverage_1, 0.0, 1.0));
-    return vec4((tint_3.xyz * alpha_2), alpha_2);
+    float coverage_2 = (scale * (_e43 - _e45));
+    vec4 _e51 = covered(clamp(coverage_2, 0.0, 1.0));
+    return _e51;
 }
 
 vec4 rounded_rect_coverage(vec3 clip_3) {
-    float coverage = 0.0;
+    float coverage_1 = 0.0;
     vec2 _e1 = to_gradient_space(clip_3);
     vec4 _e4 = _group_1_binding_0_fs.geometry;
     vec2 half_size_1 = _e4.zw;
@@ -367,17 +374,16 @@ vec4 rounded_rect_coverage(vec3 clip_3) {
     float _e34 = dFdy(_e32);
     vec2 gradient = vec2(_e33, _e34);
     float per_pixel_2 = max(length(gradient), 1e-6);
-    coverage = clamp((0.5 - (_e32 / per_pixel_2)), 0.0, 1.0);
+    coverage_1 = clamp((0.5 - (_e32 / per_pixel_2)), 0.0, 1.0);
     vec2 shrunk = (half_size_1 - vec2(half_));
     if (((stroke_1 > 0.0) && (min(shrunk.x, shrunk.y) > 0.0))) {
         float _e59 = rounded_rect_distance(_e1, shrunk, max((radius_1 - half_), 0.0));
-        float _e66 = coverage;
-        coverage = (_e66 - clamp((0.5 - (_e59 / per_pixel_2)), 0.0, 1.0));
+        float _e66 = coverage_1;
+        coverage_1 = (_e66 - clamp((0.5 - (_e59 / per_pixel_2)), 0.0, 1.0));
     }
-    vec4 tint_4 = _group_1_binding_0_fs.stops[0];
-    float _e73 = coverage;
-    float alpha_3 = (tint_4.w * _e73);
-    return vec4((tint_4.xyz * alpha_3), alpha_3);
+    float _e68 = coverage_1;
+    vec4 _e69 = covered(_e68);
+    return _e69;
 }
 
 vec4 disc_coverage(vec2 point_2, vec2 axes) {
@@ -398,9 +404,8 @@ vec4 disc_coverage(vec2 point_2, vec2 axes) {
     }
     float _e30 = stroke;
     float _e31 = coverage_of(implicit, per_pixel_3, _e30);
-    vec4 tint_5 = _group_1_binding_0_fs.stops[0];
-    float alpha_4 = (tint_5.w * _e31);
-    return vec4((tint_5.xyz * alpha_4), alpha_4);
+    vec4 _e32 = covered(_e31);
+    return _e32;
 }
 
 vec4 ellipse_coverage(vec3 clip_4) {
@@ -420,9 +425,8 @@ vec4 shadow_mesh_color(vec2 uv_7) {
     float a = abs(x_2);
     float b = (((0.278393 + ((0.230389 + ((0.078108 * a) * a)) * a)) * a) + 1.0);
     float erf = (sign(x_2) * (1.0 - (1.0 / (((b * b) * b) * b))));
-    vec4 tint_6 = _group_1_binding_0_fs.stops[0];
-    float alpha_5 = ((tint_6.w * (1.0 + erf)) * 0.5);
-    return vec4((tint_6.xyz * alpha_5), alpha_5);
+    vec4 _e31 = covered(((1.0 + erf) * 0.5));
+    return _e31;
 }
 
 vec4 blur_along_axis(vec3 clip_5) {
@@ -765,10 +769,10 @@ vec4 filtered(vec4 premultiplied) {
     color = premultiplied;
     if (straight) {
         float _e25 = color.w;
-        float alpha_6 = max(_e25, 1e-6);
+        float alpha_2 = max(_e25, 1e-6);
         vec4 _e28 = color;
         float _e33 = color.w;
-        color = vec4((_e28.xyz / vec3(alpha_6)), _e33);
+        color = vec4((_e28.xyz / vec3(alpha_2)), _e33);
     }
     if ((kind > 2.5)) {
         if ((kind < 3.5)) {
@@ -801,9 +805,9 @@ vec4 filtered(vec4 premultiplied) {
         return vec4((_e92.xyz * a_1), a_1);
     }
     float _e97 = out_2.w;
-    float alpha_7 = clamp(_e97, 0.0, 1.0);
+    float alpha_3 = clamp(_e97, 0.0, 1.0);
     vec4 _e101 = out_2;
-    return vec4(((alpha_7 <= 0.0) ? vec3(0.0) : _e101.xyz), alpha_7);
+    return vec4(((alpha_3 <= 0.0) ? vec3(0.0) : _e101.xyz), alpha_3);
 }
 
 float ordered_dither(vec2 frag) {
@@ -829,7 +833,7 @@ vec4 dithered(vec4 color_1, vec2 frag_1) {
 vec4 shade(VertexOutput in_3) {
     vec4 color_2 = vec4(0.0);
     float t_4 = 0.0;
-    bool covered = false;
+    bool covered_1 = false;
     vec4 _e4 = _group_1_binding_0_fs.stops[0];
     color_2 = _e4;
     float kind_1 = _group_1_binding_0_fs.params.y;
@@ -887,11 +891,11 @@ vec4 shade(VertexOutput in_3) {
                             float near = min(((b_1 + root) / a_2), ((b_1 - root) / a_2));
                             if (((r0_ + (far * dr)) >= 0.0)) {
                                 t_4 = far;
-                                covered = true;
+                                covered_1 = true;
                             } else {
                                 if (((r0_ + (near * dr)) >= 0.0)) {
                                     t_4 = near;
-                                    covered = true;
+                                    covered_1 = true;
                                 }
                             }
                         }
@@ -900,7 +904,7 @@ vec4 shade(VertexOutput in_3) {
                             float only = (c_6 / (2.0 * b_1));
                             if (((r0_ + (only * dr)) >= 0.0)) {
                                 t_4 = only;
-                                covered = true;
+                                covered_1 = true;
                             }
                         }
                     }
@@ -908,7 +912,7 @@ vec4 shade(VertexOutput in_3) {
                     float _e182 = _group_1_binding_0_fs.params.z;
                     vec2 _e183 = tile_gradient(_e178, _e182);
                     vec4 _e185 = gradient_color(_e183.x, count_2);
-                    bool _e190 = covered;
+                    bool _e190 = covered_1;
                     color_2 = ((_e185 * _e183.y) * (_e190 ? 1.0 : 0.0));
                 }
             }
@@ -985,15 +989,14 @@ vec4 shade(VertexOutput in_3) {
     }
     if (((kind_1 > 4.5) && (kind_1 < 5.5))) {
         vec4 _e232 = textureLod(_group_0_binding_0_fs, vec2(in_3.uv), 0.0);
-        float coverage_2 = _e232.x;
-        vec4 tint_7 = _group_1_binding_0_fs.stops[0];
-        float alpha_8 = (tint_7.w * coverage_2);
-        return vec4((tint_7.xyz * alpha_8), alpha_8);
+        float coverage_3 = _e232.x;
+        vec4 _e234 = covered(coverage_3);
+        return _e234;
     }
-    vec4 _e243 = color_2;
-    float _e246 = color_2.w;
-    float _e249 = color_2.w;
-    return vec4((_e243.xyz * _e246), _e249);
+    vec4 _e235 = color_2;
+    float _e238 = color_2.w;
+    float _e241 = color_2.w;
+    return vec4((_e235.xyz * _e238), _e241);
 }
 
 void main() {
@@ -1018,8 +1021,11 @@ void main() {
         tinted = _e25;
     }
     vec4 _e26 = tinted;
-    vec4 _e29 = dithered(_e26, in_.position.xy);
-    _fs2p_location0 = _e29;
+    float _e28 = coverage_after_filter;
+    tinted = (_e26 * _e28);
+    vec4 _e30 = tinted;
+    vec4 _e33 = dithered(_e30, in_.position.xy);
+    _fs2p_location0 = _e33;
     return;
 }
 
