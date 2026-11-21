@@ -15573,13 +15573,17 @@ fn a_shared_backdrop_id_captures_once_and_filters_once() {
         canvas.finish().passes.len()
     };
 
-    // One row costs the same either way -- the first use of an id is a capture
-    // and a filter like any other. That is what makes the slope below the
-    // measurement rather than the intercept.
+    // One row costs the same either way but for the crop -- the first use of
+    // an id is a capture and a filter like any other. Without an id the
+    // filter runs over the layer's region alone, cropped out of the capture
+    // first; with one it runs over the whole capture, which later layers
+    // naming the id read other parts of. That is what makes the slope below
+    // the measurement rather than the intercept.
     assert_eq!(
         passes(None, 1),
-        passes(Some(3), 1),
-        "the first layer to name an id has nothing to share with"
+        passes(Some(3), 1) + 1,
+        "the first layer to name an id has nothing to share with, and only a \
+         layer without one crops its region out of the capture"
     );
 
     // So the measurement is the slope: what each row after the first adds. A
@@ -15588,10 +15592,10 @@ fn a_shared_backdrop_id_captures_once_and_filters_once() {
     let apart = passes(None, 4) - passes(None, 1);
     let shared = passes(Some(3), 4) - passes(Some(3), 1);
     assert_eq!(
-        apart, 9,
-        "three more rows without an id should each cost three passes -- the cut \
-         that captures the backdrop, the filter over it, and the row's own \
-         layer"
+        apart, 12,
+        "three more rows without an id should each cost four passes -- the cut \
+         that captures the backdrop, the crop of the row's region out of it, \
+         the filter over that, and the row's own layer"
     );
     assert_eq!(
         shared, 3,
@@ -18688,5 +18692,67 @@ fn a_nine_slice_fades_by_its_paints_opacity() {
             255,
         ];
         close_enough(pixel(&half, x, y), want, 2, &format!("({x}, {y})"));
+    }
+}
+
+#[test]
+fn a_bounded_backdrop_filters_what_is_behind_it() {
+    // A frame red on the left and blue on the right, and a backdrop over a
+    // square inside the blue half. What the layer holds is that square of
+    // the frame, filtered: blue, halved. It held the whole frame shrunk into
+    // the square instead, red at its left edge -- the filter's passes were
+    // written at the square's size while each mapped a full-target quad onto
+    // the whole capture. fl-engine's `BackdropFilter` under a `ClipRect`
+    // showed every cell of a page squeezed into each frosted panel.
+    //
+    // Bounded by the layer, by a clip over an unbounded one, and both under a
+    // scale, as a device pixel ratio puts one.
+    let Some(mut ctx) = context() else { return };
+    for (scale, clipped, bounded) in [
+        (1.0, false, true),
+        (1.0, true, false),
+        (2.0, true, false),
+        (2.0, true, true),
+    ] {
+        let mut canvas = Canvas::new(SIZE);
+        canvas.clear(Color::WHITE);
+        canvas.save();
+        canvas.scale(scale, scale);
+        let s = 64.0 / scale;
+        let red = Paint::fill(Color::srgb(1.0, 0.0, 0.0, 1.0));
+        let blue = Paint::fill(Color::srgb(0.0, 0.0, 1.0, 1.0));
+        canvas
+            .draw_rect(Rect::new(0.0, 0.0, s, 2.0 * s), &red)
+            .expect("red");
+        canvas
+            .draw_rect(Rect::new(s, 0.0, 2.0 * s, 2.0 * s), &blue)
+            .expect("blue");
+        // Device pixels 80 to 112 across and 16 to 48 down.
+        let region = Rect::new(1.25 * s, 0.25 * s, 1.75 * s, 0.75 * s);
+        if clipped {
+            canvas.save();
+            canvas.clip_rect(region).expect("clip");
+        }
+        canvas
+            .save_layer_backdrop(
+                Layer::opacity(1.0),
+                bounded.then_some(region),
+                &half_every_channel(),
+            )
+            .expect("backdrop");
+        canvas.restore();
+        if clipped {
+            canvas.restore();
+        }
+        canvas.restore();
+        let shot = render(&mut ctx, canvas);
+        for (x, y) in [(82, 18), (96, 32), (110, 46)] {
+            let got = pixel(&shot, x, y);
+            assert!(
+                got[0] <= 2 && got[2].abs_diff(128) <= 2,
+                "scale {scale}, clipped {clipped}, bounded {bounded}: at ({x}, {y}) the \
+                 backdrop should be the blue behind it halved, and is {got:?}"
+            );
+        }
     }
 }

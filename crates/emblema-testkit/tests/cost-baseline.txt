@@ -56,8 +56,8 @@
   rounded-rect-analytic                        1      1        4        6       0     0
   rounded-rect-stroked                         1      1        4        6       0     0
   layer-blurred                                4      5       40       90       3     0
-  layer-backdrop-blurred                       5      9       80      186       5     0
-  layer-backdrop-under-a-difference-clip       5     11       70      138       5     0
+  layer-backdrop-blurred                       6     10       84      192       6     0
+  layer-backdrop-under-a-difference-clip       6     12       74      144       6     0
   layer-group-opacity                          2      3       68      186       1     0
   layer-blended-composite                      2      3       44      114       1     0
   layer-bounded                                2      3       40      102       1     0
