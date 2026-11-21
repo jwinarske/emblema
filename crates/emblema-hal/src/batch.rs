@@ -257,6 +257,20 @@ pub struct BatchDraw {
     /// in a slot no material that could set it uses, and the shader's select
     /// is one instruction on a value it has already computed.
     pub paint_at_texture_coords: bool,
+    /// A texture holding what is under this draw, for an advanced blend mode
+    /// the device cannot do in its blend unit.
+    ///
+    /// Without `VK_EXT_blend_operation_advanced` or its GLES counterpart no
+    /// combination of blend factors expresses `multiply` through `luminosity`,
+    /// and such a draw was refused. Given what is beneath it, the shader
+    /// computes the mode itself -- `blend_tint`, which has every one -- and the
+    /// draw replaces what it covers with the result. The canvas makes the
+    /// texture by cutting its pass, as a backdrop does, and names its slot
+    /// here; the texture covers the same pixels as the target, so the shader
+    /// reads the texel under the fragment and needs no mapping.
+    ///
+    /// `None` for every other draw, which blends as it always did.
+    pub destination: Option<u32>,
 }
 
 impl BatchDraw {
@@ -543,12 +557,41 @@ impl BatchDraw {
                 material,
                 filters: false,
                 tint_blends: false,
+                reads_destination: false,
             };
         }
         crate::ShaderVariant {
             material,
             filters: !matches!(self.filter, ColorFilter::None),
             tint_blends: self.tint_blend != BlendMode::Modulate,
+            reads_destination: self.destination.is_some(),
+        }
+    }
+
+    /// Every texture slot this draw samples, in binding order: the material's,
+    /// and its destination in the second place where it reads one.
+    ///
+    /// The second place because a built-in material uses the first alone, and
+    /// a layout already carries the others for a caller's program. A program
+    /// with a destination is not made: its fragment stage is the caller's, and
+    /// the canvas does not read a destination for one.
+    pub fn texture_slots(&self) -> [Option<u32>; crate::MAX_EFFECT_TEXTURES] {
+        let mut slots = self.material.texture_slots();
+        if self.destination.is_some() && self.material.variant() != crate::MaterialVariant::Runtime
+        {
+            slots[1] = self.destination;
+        }
+        slots
+    }
+
+    /// The mode a backend's blend unit applies to this draw: its own, or
+    /// replacing what it covers for one that reads its destination and so
+    /// blends in the shader.
+    pub fn unit_blend(&self) -> BlendMode {
+        if self.destination.is_some() {
+            BlendMode::Src
+        } else {
+            self.blend
         }
     }
 
@@ -565,7 +608,16 @@ impl BatchDraw {
     pub fn to_uniform(&self, target: crate::PixelFormat) -> [f32; crate::MATERIAL_FLOATS] {
         let mut out = self.material.to_uniform();
         self.filter.pack_into(&mut out);
-        out[crate::material::layout::FILTER_PARAMS + 1] = self.tint_blend.code();
+        // The tint blend's code, and above it the draw's own mode where the
+        // shader blends with the destination: the slot is full, a code is
+        // below 32 (`BlendMode::code`), and the shader takes the two apart.
+        let destination_mode = if self.destination.is_some() {
+            self.blend.code()
+        } else {
+            0.0
+        };
+        out[crate::material::layout::FILTER_PARAMS + 1] =
+            self.tint_blend.code() + 32.0 * destination_mode;
         out[crate::material::layout::OPACITY] = self.opacity;
         if self.paint_at_texture_coords {
             // `geometry.x`, which no gradient writes. See the field's own note
@@ -608,11 +660,38 @@ pub struct Batch {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     draws: Vec<BatchDraw>,
+    /// The slot holding what is under the draws to come, for those of them
+    /// that blend by an advanced mode (`BatchDraw::destination`).
+    destination: Option<u32>,
+    /// Whether a draw has been given [`Self::destination`] yet.
+    destination_taken: bool,
 }
 
 impl Batch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Name the slot holding what is under the draws to come: each of them
+    /// that blends by an advanced mode reads it and blends in the shader
+    /// (`BatchDraw::destination`).
+    ///
+    /// For a recorder that cut its pass to make the texture, as the canvas
+    /// does where the device's blend unit has no advanced modes. The texture
+    /// holds what was drawn before the cut, so it is the destination of the
+    /// draws that follow the cut until one has drawn: after that, what is
+    /// under the next includes it, and the recorder cuts again. See
+    /// [`Self::destination_fresh`].
+    pub fn read_destination_from(&mut self, slot: u32) {
+        self.destination = Some(slot);
+        self.destination_taken = false;
+    }
+
+    /// Whether the slot named by [`Self::read_destination_from`] still holds
+    /// what is under the next draw: named, and no draw has read it yet. A
+    /// recorder asked again before anything drew needs no second cut.
+    pub fn destination_fresh(&self) -> bool {
+        self.destination.is_some() && !self.destination_taken
     }
 
     /// Append a draw covering the whole target.
@@ -772,6 +851,14 @@ impl Batch {
         // Adjacent only, never sorted. Reordering to create more of these is a
         // different decision with a different safety argument, and this one
         // needs none: the sequence is untouched.
+        let destination = if blend.is_advanced() {
+            self.destination
+        } else {
+            None
+        };
+        if destination.is_some() {
+            self.destination_taken = true;
+        }
         if let Some(last) = self.draws.last_mut() {
             if last.first_index + last.index_count == first_index
                 && last.material == material
@@ -782,6 +869,9 @@ impl Batch {
                 && last.tint_blend == tint_blend
                 && last.opacity == opacity
                 && last.paint_at_texture_coords == paint_at_texture_coords
+                // The same texture under both, so the two read what was
+                // under them alike, merged or not.
+                && last.destination == destination
             {
                 last.index_count += indices.len() as u32;
                 return Ok(());
@@ -799,6 +889,7 @@ impl Batch {
             tint_blend,
             opacity,
             paint_at_texture_coords,
+            destination,
         });
         Ok(())
     }
@@ -808,6 +899,17 @@ impl Batch {
         self.vertices.clear();
         self.indices.clear();
         self.draws.clear();
+        self.forget_destination();
+    }
+
+    /// Stop handing out the slot [`Self::read_destination_from`] named: what
+    /// it holds is no longer what is under the draws to come. An advanced
+    /// draw pushed after this, without a slot named again, carries none and
+    /// is refused by a device that cannot blend it, rather than blended with
+    /// a stale picture.
+    pub fn forget_destination(&mut self) {
+        self.destination = None;
+        self.destination_taken = false;
     }
 
     pub fn draw_count(&self) -> usize {
@@ -878,7 +980,7 @@ impl Batch {
         let mut slots: Vec<u32> = self
             .draws
             .iter()
-            .flat_map(|draw| draw.material.texture_slots())
+            .flat_map(BatchDraw::texture_slots)
             .flatten()
             .collect();
         slots.sort_unstable();
@@ -1073,6 +1175,7 @@ mod tests {
             tint_blend: BlendMode::Modulate,
             opacity: 1.0,
             paint_at_texture_coords: false,
+            destination: None,
         }
     }
 

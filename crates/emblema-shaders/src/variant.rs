@@ -45,11 +45,14 @@ pub struct SolidVariant {
     pub filters: bool,
     /// Blends the tint by a mode other than `Modulate`.
     pub tint_blends: bool,
+    /// Blends with what is under the draw, read from a texture, for an
+    /// advanced mode the device's blend unit cannot do.
+    pub destination: bool,
 }
 
 impl SolidVariant {
     /// How many variants there are.
-    pub const COUNT: usize = SolidKinds::ALL.len() * 4;
+    pub const COUNT: usize = SolidKinds::ALL.len() * 8;
 
     /// The variant a draw with a solid color, a gradient or a glyph needs,
     /// unfiltered and tinted by `Modulate`: what most of a frame draws with.
@@ -57,6 +60,7 @@ impl SolidVariant {
         kinds: SolidKinds::Core,
         filters: false,
         tint_blends: false,
+        destination: false,
     };
 
     /// Where this variant sits among [`SolidVariant::every`].
@@ -68,24 +72,30 @@ impl SolidVariant {
             SolidKinds::Shapes => 3,
             SolidKinds::Passes => 4,
         };
-        kinds * 4 + (self.filters as usize) * 2 + self.tint_blends as usize
+        kinds * 8
+            + (self.destination as usize) * 4
+            + (self.filters as usize) * 2
+            + self.tint_blends as usize
     }
 
     /// Every variant, in index order.
     pub fn every() -> impl Iterator<Item = SolidVariant> {
         SolidKinds::ALL.into_iter().flat_map(|kinds| {
-            [(false, false), (false, true), (true, false), (true, true)].map(
-                move |(filters, tint_blends)| SolidVariant {
-                    kinds,
-                    filters,
-                    tint_blends,
-                },
-            )
+            [false, true].into_iter().flat_map(move |destination| {
+                [(false, false), (false, true), (true, false), (true, true)].map(
+                    move |(filters, tint_blends)| SolidVariant {
+                        kinds,
+                        filters,
+                        tint_blends,
+                        destination,
+                    },
+                )
+            })
         })
     }
 
     /// The value of each of `solid.wgsl`'s overrides for this variant.
-    pub fn overrides(self) -> [(&'static str, bool); 6] {
+    pub fn overrides(self) -> [(&'static str, bool); 7] {
         [
             ("IMAGES", self.kinds == SolidKinds::Images),
             ("MESHES", self.kinds == SolidKinds::Meshes),
@@ -93,6 +103,7 @@ impl SolidVariant {
             ("PASSES", self.kinds == SolidKinds::Passes),
             ("FILTERS", self.filters),
             ("TINT_BLENDS", self.tint_blends),
+            ("DST_READ", self.destination),
         ]
     }
 }

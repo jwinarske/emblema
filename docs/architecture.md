@@ -376,7 +376,7 @@ The separable modes — multiply, screen, overlay and the rest — mix the two s
 arithmetically rather than deciding where each survives, and the non-separable
 four — hue, saturation, color and luminosity — exchange whole attributes of a
 color, so each output channel depends on all three inputs. Neither is expressible
-as blend factors. They need an advanced-blend extension and are
+as blend factors. In a device's blend unit they need an advanced-blend extension and are
 capability-gated. A renderer that could not composite at all without one would
 be unusable on the hardware least likely to have it, which is why the
 fixed-function set came first. `BlendMode::factors` returns an option rather
@@ -384,6 +384,25 @@ than a plausible pair for these, so a backend cannot silently render one as
 something close: a wrong blend mode is a picture nobody can debug from, and the
 check that refuses it lives in `Capabilities` so both backends refuse the same
 batch for the same reason.
+
+**Without the extension they are blended in the shader**, where a canvas is
+asked to (`Canvas::with_advanced_blends_in_shader`). That is most devices that
+are not a desktop's: none of Mesa's V3D, Panfrost or PowerVR Vulkan drivers
+offers `VK_EXT_blend_operation_advanced`, and lavapipe does. A draw or a layer
+composite under an advanced mode cuts the pass first, as a backdrop does, and
+reads the cut back as its destination: a second texture slot on the draw
+(`BatchDraw::destination`), a variant of the built-in shader that loads the
+texel under the fragment and runs `blend_tint` -- which already had every mode,
+for a mesh's tint -- and a blend unit set to `Src`, so the draw replaces what it
+covers with the result. Coverage is folded into the source before the blend and
+the composite is linear in the source's alpha, so an edge lands between the
+destination and the full blend by exactly its coverage. The cost is the cut, one
+full-target redraw per such draw, which is why a canvas does it only when asked:
+whoever makes the canvas knows the device, and a recording does not. Held to the
+same equations and the same one-unit allowance as the blend unit
+(`every_advanced_mode_blends_in_the_shader_where_the_device_cannot`), a draw and
+a group alike (`a_canvas_blends_advanced_modes_in_the_shader_when_asked`). A
+draw that is not prepared for it carries no destination and is still refused.
 
 Their formulas are fixed by the compositing specification, and it is transcribed
 once in the HAL. The non-separable four are checked against *what they are named

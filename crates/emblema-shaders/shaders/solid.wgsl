@@ -80,6 +80,10 @@ struct Paint {
 // invalid however unreachable the branch that would have read it.
 @group(0) @binding(0) var image_texture: texture_2d<f32>;
 @group(0) @binding(1) var image_sampler: sampler;
+// What is under the draw, for one that blends with it here (`DST_READ`). The
+// second of a draw's texture slots, at the binding a layout gives the second
+// of a caller's program's textures; the placeholder for every other draw.
+@group(0) @binding(2) var destination_texture: texture_2d<f32>;
 
 // Which of this shader's optional parts a pipeline is built with. Each draw
 // asks for the set its material, filter and tint blend need, and the build
@@ -108,6 +112,9 @@ override PASSES: bool = true;
 override FILTERS: bool = true;
 // A tint blend other than `Modulate`.
 override TINT_BLENDS: bool = true;
+// An advanced blend mode computed here against what is under the draw, read
+// from `destination_texture`, where the device's blend unit has no such mode.
+override DST_READ: bool = true;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -1407,7 +1414,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // and `src` the texture in vertices_uber_1.frag, and the texture bound as
     // the destination of an inverted Porter-Duff mode in `AtlasContents`.
     let shaded = shade(in);
-    let tint_mode = i32(paint.filter_params.y + 0.5);
+    // The tint blend's code, and above it the draw's own mode for one that
+    // blends with its destination here (`BatchDraw::to_uniform`).
+    // Taken apart only where there are two: without a destination the slot
+    // holds the tint's code alone, and every other draw pays nothing for it.
+    let packed_modes = i32(paint.filter_params.y + 0.5);
+    var tint_mode = packed_modes;
+    if (DST_READ) {
+        tint_mode = packed_modes % 32;
+    }
     // `Modulate` is the mode a draw that asked for nothing gets, white being
     // its identity, and it is `src * dst` outright -- the same line the switch
     // in `blend_tint` reaches for it. Written here as well so the common case
@@ -1430,6 +1445,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Covered after the filter, as the paint's color is filtered before it
     // lands (`coverage_after_filter`).
     tinted = tinted * coverage_after_filter;
+    if (DST_READ) {
+        // The draw's mode against what is under it, which the blend unit then
+        // writes in place (`Src`). Coverage is already in `tinted`, and the
+        // composite is linear in the source's alpha, so a partly covered
+        // fragment comes out between the destination and the full blend by
+        // exactly its coverage. The texture is the target's size and place,
+        // so the fragment's own pixel is the one to read.
+        let under = textureLoad(destination_texture, vec2<i32>(in.position.xy), 0);
+        tinted = blend_tint(packed_modes / 32, tinted, under);
+    }
     return dithered(tinted, in.position.xy);
 }
 

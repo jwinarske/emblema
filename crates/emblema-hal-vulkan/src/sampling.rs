@@ -302,7 +302,7 @@ pub fn build(
     // that pair as well.
     let mut tuples: Vec<[Option<u32>; emblema_hal::MAX_EFFECT_TEXTURES]> = Vec::new();
     for draw in batch.draws() {
-        let slots = draw.material.texture_slots();
+        let slots = draw.texture_slots();
         if slots.iter().all(Option::is_none) {
             continue;
         }

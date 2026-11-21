@@ -232,6 +232,9 @@ fn variant_label(variant: SolidVariant) -> String {
     if variant.tint_blends {
         parts.push("tint blends".into());
     }
+    if variant.destination {
+        parts.push("destination".into());
+    }
     format!("[{}]", parts.join(", "))
 }
 
