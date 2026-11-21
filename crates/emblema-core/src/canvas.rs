@@ -438,7 +438,7 @@ impl Recording {
 /// layer covering a tenth of the frame costs a tenth of the memory and a tenth
 /// of the fill. Everything that turns a device position into a clip position
 /// has to know where that target sits, which is what `origin` carries.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Target {
     /// Where this target's top-left corner sits in the frame, in device pixels.
     /// Whole pixels, so that the composite samples texel centers exactly.
@@ -1788,10 +1788,22 @@ impl Canvas {
         let Some(id) = id else {
             // The capture is the pass being cut, so it is the parent's size
             // whatever happens next. What the filter *writes* need not be: its
-            // passes read the whole capture and only have to cover the region
-            // the layer will hold, which is where the seed reads from.
+            // passes only have to cover the region the layer will hold, which
+            // is where the seed reads from. But each filter pass maps a
+            // full-target quad onto the whole of what it reads, a texel to a
+            // pixel only when the two are one size, so the region's rectangle
+            // of the capture is cropped out first: read whole, a bounded
+            // backdrop held the entire capture shrunk into the region rather
+            // than the part of it behind the layer. The region already reaches
+            // as far as the filter does, so the crop cuts nothing it reads.
             let cut = self.cut_pass();
-            let pass = self.filter_passes(cut, region, filter, BlurBasis::of(self.transform))?;
+            let cropped = if region == parent {
+                cut
+            } else {
+                self.crop_pass(cut, parent, region)
+            };
+            let pass =
+                self.filter_passes(cropped, region, filter, BlurBasis::of(self.transform))?;
             return Ok(Backdrop {
                 pass,
                 // Unless the filter had nothing to do -- a matrix backdrop
@@ -5944,6 +5956,35 @@ impl Canvas {
     /// Slot zero, because `filter_pass` gives the pass one source and that
     /// source is the layer being filtered. A program declaring the binding
     /// every draw already fills reads it and nothing further is bound.
+    /// `region`'s rectangle of `source`, a pass the size of `parent`, as a
+    /// pass the size of `region`: what lets a filter that reads a pass texel
+    /// for pixel work on part of a capture. The mapping is the one
+    /// `draw_whole_pass` seeds with, in the same direction.
+    fn crop_pass(&mut self, source: usize, parent: Target, region: Target) -> usize {
+        let offset = region.origin - parent.origin;
+        let (rw, rh) = (region.extent.width as f32, region.extent.height as f32);
+        let (pw, ph) = (parent.extent.width as f32, parent.extent.height as f32);
+        let anchor = Vec2::new(-1.0 - 2.0 * offset.x / rw, 1.0 + 2.0 * offset.y / rh);
+        let scale = Mat2::from_diagonal(Vec2::new(0.5 * rw / pw, -0.5 * rh / ph));
+        let to_local = to_local_columns(Transform2D::from(
+            Affine2::from_mat2(scale) * Affine2::from_translation(-anchor),
+        ));
+        self.filter_pass(
+            source,
+            region,
+            Material::Image {
+                to_local,
+                slot: 0,
+                alpha: 1.0,
+                tile: [TileMode::Clamp; 2],
+                // A texel to a pixel, both targets on the same grid.
+                sampling: Sampling::Nearest,
+                source: [0.0, 0.0, 1.0, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
+            },
+        )
+    }
+
     fn runtime_pass(
         &mut self,
         source: usize,
@@ -7102,13 +7143,14 @@ mod tests {
             .map(|pass| pass.extent)
             .filter(|extent| *extent != frame)
             .collect();
-        // The layer's own target and both passes of the backdrop's blur. What
-        // stays frame-sized is the pass being captured and the one the frame
-        // ends in, and neither is allocated for this layer.
+        // The layer's own target, the crop of its region out of the capture,
+        // and both passes of the backdrop's blur. What stays frame-sized is
+        // the pass being captured and the one the frame ends in, and neither
+        // is allocated for this layer.
         assert_eq!(
             narrowed.len(),
-            3,
-            "three passes should be sized to the clip, and {} are: {:?}",
+            4,
+            "four passes should be sized to the clip, and {} are: {:?}",
             narrowed.len(),
             recording
                 .passes
