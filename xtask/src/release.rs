@@ -19,19 +19,19 @@
 //!   it is a trap because the tidy spelling is the broken one. Every other
 //!   dependency in this workspace is `{ workspace = true }`, and the workspace
 //!   table gives `emblema-testkit` a version -- so writing it that way asks the
-//!   registry for `emblema-testkit 0.3.8`, which does not exist and will not.
+//!   registry for `emblema-testkit 0.3.9`, which does not exist and will not.
 //!   `emblema-present` spells it `{ path = "../emblema-testkit" }` instead,
 //!   with no version, and cargo strips a dev-dependency like that when it
 //!   packages. Measured: adding the version form to `emblema-geometry` fails
 //!   `cargo package` with "failed to select a version for the requirement
-//!   `emblema-testkit = ^0.3.8`"; the path form packages 19 files.
+//!   `emblema-testkit = ^0.3.9`"; the path form packages 19 files.
 //!
 //! # What this does not do
 //!
 //! It does not publish, and it does not run `cargo package`. Packaging a crate
 //! whose workspace dependencies are not yet on the registry at this version
 //! fails by construction -- the registry holds the release before and the tree is at
-//! 0.3.8 -- so the check would report a problem that publishing in order is
+//! 0.3.9 -- so the check would report a problem that publishing in order is
 //! what fixes. Verify the leaf, publish in order, and let each step make the
 //! next one resolvable.
 
