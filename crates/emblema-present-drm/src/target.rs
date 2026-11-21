@@ -293,12 +293,36 @@ where
             let Some(ring) = self.gbm.as_ref() else {
                 return Err(Error::Unsupported("this target was not built through GBM"));
             };
-            let allocated = ring
+            let mut allocated = ring
                 .allocator
                 .allocate(self.extent, ring.fourcc, &modifiers)?;
-            let for_renderer = allocated.describe()?;
+            let texture = match ctx.import_texture(allocated.describe()?, self.extent, self.format)
+            {
+                Ok(texture) => texture,
+                Err(refused) if allocated.modifier().is_linear() => {
+                    // A renderer may need more of a linear buffer than its
+                    // rows: v3dv asks 64 bytes past the last for its texture
+                    // unit's readahead on any image it may copy from, and
+                    // refuses a dma-buf smaller than that. A display whose
+                    // mode is a whole number of pages, as the Pi 4's 800x480
+                    // DSI panel is, gets a GBM buffer of exactly its rows.
+                    // One more row covers it; the display is still given the
+                    // mode's height, so the row is never shown. Linear only:
+                    // a tiled layout may depend on the height it was made
+                    // for.
+                    let taller = Extent2D {
+                        width: self.extent.width,
+                        height: self.extent.height + 1,
+                    };
+                    allocated = ring.allocator.allocate(taller, ring.fourcc, &modifiers)?;
+                    if !allocated.modifier().is_linear() {
+                        return Err(refused);
+                    }
+                    ctx.import_texture(allocated.describe()?, self.extent, self.format)?
+                }
+                Err(refused) => return Err(refused),
+            };
             let for_display = allocated.describe()?;
-            let texture = ctx.import_texture(for_renderer, self.extent, self.format)?;
             let fb = self.output.import_dmabuf(DmaBufPlanes {
                 planes: for_display.planes,
                 fourcc: for_display.fourcc,
