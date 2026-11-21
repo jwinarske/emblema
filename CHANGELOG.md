@@ -7,6 +7,37 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.9 — 2026-11-20
+
+Two merges past 0.3.8, both found by fl-engine's dart:ui filters against the
+stock engine's goldens: a paint's color filter applied before coverage, and a
+bounded backdrop that filters what is behind it.
+
+### Color filters
+
+**A color filter colors the shape, not the quad it is drawn on.** The
+analytic shapes (circle, oval, rounded rectangle), the rounded-rectangle
+blur, the shadow mesh and glyphs folded their coverage into the color before
+the paint's filter saw it. A filter that does not keep transparent black so
+-- a translucent tint blended `SrcOver`, `multiply`, `screen`, an advanced
+mode, a matrix with an offset -- colored every fragment of the shape's quad:
+a tinted square around each circle. The filter now acts on the paint's color
+and coverage is applied after it, as `dart:ui` states and upstream's
+distance-field shapes do. Without a filter the product is the same one.
+
+### Backdrops
+
+**A bounded backdrop filters what is behind it.** A backdrop layer without an
+id filters into a target the size of its region, and each filter pass maps a
+full-target quad onto all of what it reads, so the region held the whole
+capture shrunk into it: every frosted panel a miniature of the frame. The
+region's rectangle is cropped out of the capture first, in a pass of the
+region's size, and the filter runs over that. One pass more per such
+backdrop. The two corpus goldens of a bounded backdrop had recorded the
+shrunk picture and are regenerated.
+
+No API changes.
+
 ## 0.3.8 — 2026-11-20
 
 One merge past 0.3.7: frames in flight share their pass's multisample and
