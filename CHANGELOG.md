@@ -7,6 +7,27 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.3.10 — 2026-11-21
+
+One merge past 0.3.9, found running fl-engine on a Raspberry Pi 4's touch
+panel: the GBM scanout path's buffers fit what the renderer reads past them.
+
+### Scanout
+
+**A GBM buffer is imported one row taller where the renderer needs it.** On
+a split render/display device the display's card allocates the ring through
+GBM and the renderer imports it. v3dv asks 64 bytes past an image's last row
+for its texture unit's readahead whenever the image may be copied from, and
+refuses a dma-buf smaller than that. The Pi 4's 800x480 DSI panel is a whole
+number of pages, so GBM's buffers were exactly the rows and the ring could
+not be built. Where the renderer refuses a linear buffer, it is allocated
+again one row taller and imported at the mode's extent; the display is given
+the mode's height, so the row is never scanned out. A tiled buffer, whose
+layout may depend on its height, is refused as before, and a device whose
+first import succeeds allocates nothing more.
+
+No API changes.
+
 ## 0.3.9 — 2026-11-20
 
 Two merges past 0.3.8, both found by fl-engine's dart:ui filters against the
