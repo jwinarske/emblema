@@ -178,7 +178,9 @@ impl VulkanContext {
 
     /// Build the source-over pipelines of one more variant of the built-in
     /// shader, ahead of the first draw that needs it: at one sample and at
-    /// `samples`, with no stencil and with one.
+    /// `samples`, with no stencil and with one. For a variant that reads its
+    /// destination, which blends in the shader, they are the `Src` ones its
+    /// draws use, whatever their advanced mode.
     ///
     /// [`VulkanContext::prepare_pipelines`] builds the core variant alone,
     /// which is what every frame needs. What else an application draws is its
@@ -205,9 +207,9 @@ impl VulkanContext {
         self.prepare(format, samples, shader, false)
     }
 
-    /// `shader`'s source-over pipelines at one sample and at `samples`, with
-    /// and without a stencil; with `masks`, the two a clip's mask is drawn
-    /// with as well.
+    /// `shader`'s source-over pipelines (`Src` for one that reads its
+    /// destination) at one sample and at `samples`, with and without a
+    /// stencil; with `masks`, the two a clip's mask is drawn with as well.
     fn prepare(
         &mut self,
         format: PixelFormat,
@@ -237,8 +239,15 @@ impl VulkanContext {
                 })?;
                 // A mask writes the stencil alone, and a canvas draws it with
                 // `Src`: the blend is part of a pipeline's key, so it is the
-                // one built here.
-                let mut wanted = vec![(ClipRole::Content, BlendMode::SrcOver)];
+                // one built here. A draw that reads its destination blends in
+                // the shader and asks the blend unit for `Src`
+                // (`BatchDraw::unit_blend`), so that is its pipeline's key.
+                let content = if shader.reads_destination {
+                    BlendMode::Src
+                } else {
+                    BlendMode::SrcOver
+                };
+                let mut wanted = vec![(ClipRole::Content, content)];
                 if masks && stencil.is_some() {
                     wanted.push((ClipRole::Narrow, BlendMode::Src));
                     wanted.push((ClipRole::Widen, BlendMode::Src));
