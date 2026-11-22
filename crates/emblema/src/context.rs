@@ -186,7 +186,10 @@ impl Context {
     /// [`MaterialVariant::Shape`](crate::MaterialVariant::Shape) for
     /// rounded rectangles and shadows,
     /// [`MaterialVariant::Image`](crate::MaterialVariant::Image) for
-    /// images and composited layers.
+    /// images and composited layers. On a device without advanced blending
+    /// (`Capabilities::advanced_blend`), a canvas made
+    /// `with_advanced_blends_in_shader` draws an advanced mode with the
+    /// variant that has `reads_destination`, whatever the mode.
     ///
     /// Each is a compile of its own, most of a second on some drivers, so it
     /// belongs with a step that prepares once and exits, not with every

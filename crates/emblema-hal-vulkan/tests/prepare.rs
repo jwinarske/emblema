@@ -178,6 +178,119 @@ fn a_prepared_variant_builds_nothing_for_its_first_draw() {
     assert_eq!(ctx.pipeline_count(), 12);
 }
 
+/// A clip narrowed, filled through by `blend` reading what is under it from
+/// slot 0, and widened back: a canvas's advanced draw on a device whose blend
+/// unit has no advanced modes.
+fn clipped_reading_destination(blend: BlendMode) -> Batch {
+    let mut batch = Batch::new();
+    let mask = || Material::solid([1.0; 4]);
+    batch
+        .push_with(
+            &INNER,
+            &QUAD,
+            mask(),
+            ColorFilter::None,
+            BlendMode::Src,
+            None,
+            ClipState::narrow(0),
+        )
+        .expect("push");
+    batch.read_destination_from(0);
+    batch
+        .push_with(
+            &FULL,
+            &QUAD,
+            Material::solid(HALF_RED),
+            ColorFilter::None,
+            blend,
+            None,
+            ClipState::content(1),
+        )
+        .expect("push");
+    batch.forget_destination();
+    batch
+        .push_with(
+            &INNER,
+            &QUAD,
+            mask(),
+            ColorFilter::None,
+            BlendMode::Src,
+            None,
+            ClipState::widen(1),
+        )
+        .expect("push");
+    batch
+}
+
+#[test]
+fn a_prepared_destination_read_builds_nothing_for_its_first_draw() {
+    let Some(mut ctx) = context() else { return };
+    if !ctx.capabilities().sample_counts.supports(4) {
+        eprintln!("skipping: no four-sample rendering");
+        return;
+    }
+    ctx.prepare_pipelines(PixelFormat::Rgba8Unorm, 4)
+        .expect("prepare");
+    let reads = ShaderVariant {
+        reads_destination: true,
+        ..ShaderVariant::CORE
+    };
+    ctx.prepare_variant(PixelFormat::Rgba8Unorm, 4, reads)
+        .expect("prepare the variant");
+    // The variant's `Src` at one and four samples, with a stencil and
+    // without: four more.
+    assert_eq!(ctx.pipeline_count(), 12);
+    let mut under = ctx
+        .create_texture(&TextureDescriptor::offscreen(SIZE, PixelFormat::Rgba8Unorm))
+        .expect("texture");
+    ctx.write_texture(
+        &mut under,
+        &vec![128; (SIZE.width * SIZE.height * 4) as usize],
+    )
+    .expect("write");
+    // Two advanced modes: the mode is the shader's to apply, not the
+    // pipeline's, so both draw with the one pipeline.
+    for blend in [BlendMode::Multiply, BlendMode::ColorBurn] {
+        for samples in [1, 4] {
+            let mut plain = Batch::new();
+            plain.read_destination_from(0);
+            plain
+                .push(&INNER, &QUAD, Material::solid(HALF_RED), blend)
+                .expect("push");
+            for batch in [plain, clipped_reading_destination(blend)] {
+                let mut target = ctx
+                    .create_texture(&TextureDescriptor::offscreen(SIZE, PixelFormat::Rgba8Unorm))
+                    .expect("texture");
+                ctx.submit_batch_textured(
+                    &mut target,
+                    &batch,
+                    PassDescriptor::clear([0.0, 0.0, 0.0, 1.0]).with_samples(samples),
+                    &[&under],
+                )
+                .expect("submit");
+                ctx.destroy_texture(target);
+            }
+        }
+    }
+    ctx.destroy_texture(under);
+    assert_clean_of_errors(&ctx);
+    assert_eq!(
+        ctx.pipeline_count(),
+        12,
+        "a destination read's first draw built a pipeline prepare_variant should have"
+    );
+}
+
+/// No validation error, the context's whole life.
+fn assert_clean_of_errors(ctx: &VulkanContext) {
+    let errors: Vec<_> = ctx
+        .validation_messages()
+        .into_iter()
+        .filter(|m| m.severity == ValidationSeverity::Error)
+        .collect();
+    assert!(errors.is_empty(), "validation errors: {errors:?}");
+}
+
 #[test]
 fn a_prepared_context_draws_what_an_unprepared_one_does() {
     let Some(mut cold) = context() else { return };
