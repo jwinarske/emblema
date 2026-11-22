@@ -905,3 +905,91 @@ fn overlapping_advanced_draws_blend_with_each_other_in_the_shader() {
     let want = quantize([ground[0] * 0.25, ground[1] * 0.25, ground[2] * 0.25, 1.0]);
     expect_true!(near(got, want), "got {got:?}, twice multiplied is {want:?}");
 }
+
+/// A circle and a gradient under `mode`, over a clear, with the canvas
+/// blending advanced modes in the shader or not.
+fn shapes_by<H: Hal>(ctx: &mut H::Context, mode: BlendMode, in_shader: bool) -> Vec<u8>
+where
+    H::Context: HalContext<Hal = H>,
+{
+    use emblema_core::{Canvas, Color, GradientStop, Paint, Rect};
+    use glam::Vec2;
+
+    let size = Extent2D::new(32, 32);
+    let mut canvas = Canvas::new(size).with_advanced_blends_in_shader(in_shader);
+    canvas.clear(Color::srgb(0.8, 0.6, 0.4, 1.0));
+    let circle = Paint::fill(Color::srgb(0.2, 0.4, 0.9, 0.8)).with_blend(mode);
+    canvas
+        .draw_circle(Vec2::new(10.0, 16.0), 8.0, &circle)
+        .expect("circle");
+    let ramp = Paint::linear_gradient(
+        Vec2::new(18.0, 0.0),
+        Vec2::new(30.0, 0.0),
+        vec![
+            GradientStop::new(Color::srgb(0.1, 0.9, 0.3, 1.0), 0.0),
+            GradientStop::new(Color::srgb(0.9, 0.1, 0.6, 0.6), 1.0),
+        ],
+    )
+    .with_blend(mode);
+    canvas
+        .draw_rect(Rect::new(18.0, 4.0, 30.0, 28.0), &ramp)
+        .expect("gradient");
+    emblema_core::render_offscreen_into::<H>(ctx, &canvas.finish(), &[], PixelFormat::Rgba8Unorm)
+        .expect("drawn")
+}
+
+/// Where the blend unit does the advanced modes, a shape and a gradient under
+/// each come out as the shader blends them. Both read their position from a
+/// varying, which a solid fill does not: lavapipe's advanced blend ops made
+/// every varying flat, so a circle under `multiply` covered nothing while
+/// every check of a solid fill against its equation passed.
+///
+/// Within 32 levels rather than one: the two are not the same arithmetic.
+/// The shader dithers after it blends and the blend unit blends a dithered
+/// source, which `color-burn` and `color-dodge` amplify (21 levels on
+/// llvmpipe's GLES), and a fragment at the shape's edge is covered before the
+/// blend in one and composited by the unit in the other (13). A flat varying
+/// is the whole shape missing, a hundred levels and more.
+fn check_shapes_against_the_shader<H: Hal>(ctx: &mut H::Context, backend: &str) -> usize
+where
+    H::Context: HalContext<Hal = H>,
+{
+    if !ctx.capabilities().advanced_blend {
+        eprintln!("skipping {backend}: no advanced blending in the blend unit");
+        return 0;
+    }
+    let mut compared = 0;
+    for &mode in BlendMode::ADVANCED {
+        let unit = shapes_by::<H>(ctx, mode, false);
+        let shader = shapes_by::<H>(ctx, mode, true);
+        let worst = unit
+            .iter()
+            .zip(&shader)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        expect_true!(
+            worst <= 32,
+            "{backend} {mode}: the blend unit differs from the shader by {worst}"
+        );
+        compared += 1;
+    }
+    compared
+}
+
+#[gtest]
+fn shapes_and_gradients_blend_in_the_unit_as_in_the_shader() {
+    let mut compared = 0;
+    for (preference, label) in [
+        (DevicePreference::Auto, "vulkan/auto"),
+        (DevicePreference::Software, "vulkan/software"),
+    ] {
+        if let Ok(mut ctx) = Validated::new(preference) {
+            compared += check_shapes_against_the_shader::<VulkanHal>(&mut ctx, label);
+        }
+    }
+    if let Ok(mut ctx) = GlesValidated::new(DisplayTarget::Surfaceless) {
+        compared += check_shapes_against_the_shader::<GlesHal>(&mut ctx, "gles");
+    }
+    eprintln!("compared {compared} modes' shapes between the blend unit and the shader");
+}

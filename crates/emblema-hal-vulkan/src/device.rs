@@ -201,12 +201,19 @@ fn required_dependencies(name: &str) -> &'static [&'static str] {
 /// draws share a pass without a barrier between them; and the attachment limit
 /// has to cover what a pass actually binds. Anything short of all three reports
 /// false, and the modes are then refused rather than approximated.
+///
+/// lavapipe reports all three and is still left out
+/// ([`advanced_blend_flattens_varyings`]).
 fn probe_advanced_blend(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     enabled: &HashSet<String>,
 ) -> bool {
     if !enabled.contains(ext::BLEND_OPERATION_ADVANCED) {
+        return false;
+    }
+    let device = unsafe { instance.get_physical_device_properties(physical_device) };
+    if advanced_blend_flattens_varyings(&device) {
         return false;
     }
 
@@ -221,6 +228,24 @@ fn probe_advanced_blend(
     properties.advanced_blend_all_operations == vk::TRUE
         && features.advanced_blend_coherent_operations == vk::TRUE
         && properties.advanced_blend_max_color_attachments >= 1
+}
+
+/// Mesa's vendor id, which its drivers report where there is no PCI vendor.
+const VENDOR_ID_MESA: u32 = 0x10005;
+
+/// Whether this device's advanced blend ops make every fragment input flat.
+///
+/// lavapipe, Mesa's CPU driver (measured on Mesa 26.2.7): a pipeline whose
+/// blend op is an advanced mode gives each fragment the provoking vertex's
+/// varyings rather than interpolating them. A solid color reads none and is
+/// right, so the equation checks pass; a gradient, an image or a shape reads
+/// its position from one, and a circle under `multiply` covered nothing. The
+/// same shader under source-over, and under the same mode on llvmpipe's GLES,
+/// interpolates. Mesa's only CPU Vulkan driver is lavapipe, so the vendor and
+/// the device type name it. Without the modes there, a canvas blends them in
+/// the shader, as it does on every board.
+fn advanced_blend_flattens_varyings(device: &vk::PhysicalDeviceProperties) -> bool {
+    device.vendor_id == VENDOR_ID_MESA && device.device_type == vk::PhysicalDeviceType::CPU
 }
 
 /// Expand the wanted set to include dependencies, dropping anything whose
