@@ -7,6 +7,28 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.4.2 — 2026-11-22
+
+One merge past 0.4.1, #287, found by fl-engine's blend-mode golden on
+lavapipe.
+
+### Blending
+
+**lavapipe's advanced blend ops are left unused.** On lavapipe (Mesa
+26.2.7), a pipeline whose blend op is an advanced mode gives every fragment
+the provoking vertex's inputs rather than interpolating them. A solid fill
+reads none and came out right, so the equation checks passed; a shape, a
+gradient or an image reads its position from one, and a circle under
+`multiply` covered nothing. `Capabilities::advanced_blend` is now false on
+Mesa's CPU device, and a canvas made `with_advanced_blends_in_shader`
+blends the modes in the shader there, as on every board. A new test draws a
+circle and a gradient under each advanced mode through the blend unit and
+through the shader on each device that has the modes, and asks they agree.
+
+What lavapipe no longer covers in this suite: the advanced modes'
+equations on Vulkan (GLES still checks all 29) and the 41 advanced catalog
+scenes on Vulkan, which are recorded without in-shader blending.
+
 ## 0.4.1 — 2026-11-22
 
 One merge past 0.4.0, #284, found preparing fl-engine's pipelines for the
