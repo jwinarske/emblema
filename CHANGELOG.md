@@ -7,6 +7,22 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.4.1 — 2026-11-22
+
+One merge past 0.4.0, #284, found preparing fl-engine's pipelines for the
+Raspberry Pi 4.
+
+### Pipelines
+
+**A variant that reads its destination is prepared with the blend its draws
+use.** A draw that blends an advanced mode in the shader asks the blend unit
+for `Src`, so its pipeline is keyed by `Src`. Vulkan's `prepare_variant` built
+every variant's source-over pipelines, so one with `reads_destination` built
+four pipelines no draw used, and the first advanced draw on a device without
+advanced blending still built its own: on a Pi 4 with Mesa's shader cache
+empty, about 630 ms in a frame. They are now the `Src` ones. GLES sets
+blending as state and links the same program either way, so it is unchanged.
+
 ## 0.4.0 — 2026-11-21
 
 Two merges past 0.3.9, both found running fl-engine's Wonderous on a
