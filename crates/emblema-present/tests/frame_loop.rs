@@ -56,14 +56,18 @@ fn present_scene<H: Hal, T: PresentTarget<H>>(
 where
     H::Context: HalContext<Hal = H>,
 {
-    use emblema_testkit::record_scene;
+    use emblema_testkit::Culling;
 
     // Recording goes through the testkit rather than being repeated here.
     // Turning scene data into drawing has real content — a gradient's endpoints
     // travel through two transforms, a layer becomes a pass of its own — and a
     // second copy of it silently stopped matching the first as soon as the
     // scene format grew.
-    let recording = record_scene(scene).expect("record");
+    // For this device, as `render_scene` records it: the advanced blend modes
+    // in the shader where the blend unit has none of them.
+    let in_shader = !HalContext::capabilities(ctx).advanced_blend;
+    let recording =
+        emblema_testkit::record_scene_for(scene, Culling::Applied, in_shader).expect("record");
 
     // The loop the architecture promises is the same everywhere. Presenting a
     // recording rather than a batch is what lets a scene with a layer through:

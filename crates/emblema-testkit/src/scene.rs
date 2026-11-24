@@ -1879,7 +1879,21 @@ impl Scene {
         // scene in the corpus is allowed three by this and uses two, which is
         // slack that is stated rather than discovered: if a scene ever needs
         // the third, the rule already predicted it.
-        self.allowing_ties(crate::image::Tolerance::new(1 + depth, 0.0))
+        //
+        // An advanced blend counts as one more store. Where the blend unit has
+        // none of the modes (every board's driver, and lavapipe since 0.4.2),
+        // the executor blends them in the shader, which reads its destination
+        // from a copy of the target taken at a cut: the fragment is quantized
+        // into that copy and again into the target. Measured between radv and
+        // lavapipe, both blending in the shader: the four advanced-blend
+        // scenes two levels apart on 0.2 to 1 percent of their pixels.
+        let reads_destination = self
+            .items
+            .iter()
+            .flat_map(Node::blends)
+            .any(|b| b.is_advanced());
+        let stores = depth + u8::from(reads_destination);
+        self.allowing_ties(crate::image::Tolerance::new(1 + stores, 0.0))
             .widened_by(filter)
     }
 
@@ -1939,20 +1953,24 @@ impl Scene {
     /// defect; a scene refused by a device the scene says cannot render it is a
     /// gap, and the corpus reports the second as coverage it did not get rather
     /// than as a pass.
+    ///
+    /// An advanced blend mode is not a requirement: where the blend unit has
+    /// none of them, [`crate::render_scene`] records the scene to blend them in
+    /// the shader. Recording it by hand with [`crate::record_scene`] leaves them
+    /// to the blend unit; [`Self::blends_in_the_unit`] says whether that can work.
     pub fn supported_by(&self, capabilities: &emblema_hal::Capabilities) -> bool {
-        if !capabilities.sample_counts.supports(self.samples) {
-            return false;
-        }
-        if !capabilities.advanced_blend
-            && self
+        capabilities.sample_counts.supports(self.samples)
+    }
+
+    /// Whether a device's blend unit can draw this scene's blend modes, as a
+    /// recording made without in-shader blending needs.
+    pub fn blends_in_the_unit(&self, capabilities: &emblema_hal::Capabilities) -> bool {
+        capabilities.advanced_blend
+            || !self
                 .items
                 .iter()
                 .flat_map(Node::blends)
                 .any(|b| b.is_advanced())
-        {
-            return false;
-        }
-        true
     }
 }
 

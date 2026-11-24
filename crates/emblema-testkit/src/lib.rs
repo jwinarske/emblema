@@ -22,8 +22,8 @@ pub mod shape;
 
 pub use catalog::catalog;
 pub use executor::{
-    record_scene, record_scene_with, render_corpus, render_scene, render_scene_culled_into,
-    render_scene_into, Culling, Fixtures,
+    record_scene, record_scene_for, record_scene_with, render_corpus, render_scene,
+    render_scene_culled_into, render_scene_into, Culling, Fixtures,
 };
 pub use image::{accepts, compare, Difference, Image, Tolerance};
 pub use scene::{corpus, Fill, Item, LayerSpec, Node, Scene, Stop, StrokeSpec, Transform};

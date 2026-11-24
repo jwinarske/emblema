@@ -193,7 +193,7 @@ fn rect_of([left, top, right, bottom]: [f32; 4]) -> Rect {
 /// transform, the clip or the stencil reaches its siblings. That is what makes
 /// a corpus scene a list of independent things rather than a sequence whose
 /// meaning depends on what came before.
-fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()> {
+fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool, in_shader: bool) -> Result<()> {
     match node {
         Node::Picture(picture) => {
             // Recorded into a canvas of its own and then drawn, which is the
@@ -202,10 +202,10 @@ fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()>
             // layer, a run, an effect -- and those become passes of the
             // picture's recording rather than of this one, which is the
             // difference the call exists to make.
-            let mut inner = Canvas::new(picture.size);
+            let mut inner = Canvas::new(picture.size).with_advanced_blends_in_shader(in_shader);
             inner.clear(emblema_core::Color::linear(0.0, 0.0, 0.0, 0.0));
             for child in &picture.children {
-                record_node(&mut inner, child, anti_alias)?;
+                record_node(&mut inner, child, anti_alias, in_shader)?;
             }
             let recording = inner.finish();
             canvas.save();
@@ -572,7 +572,7 @@ fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()>
                 canvas.save_layer_backdrop(layer, bounds.map(rect_of), &backdrop)?;
             }
             for child in children {
-                record_node(canvas, child, anti_alias)?;
+                record_node(canvas, child, anti_alias, in_shader)?;
             }
             canvas.restore();
             canvas.restore();
@@ -603,7 +603,7 @@ fn record_node(canvas: &mut Canvas, node: &Node, anti_alias: bool) -> Result<()>
                 canvas.clip_path(&shape.to_path())?;
             }
             for child in children {
-                record_node(canvas, child, anti_alias)?;
+                record_node(canvas, child, anti_alias, in_shader)?;
             }
             canvas.restore();
         }
@@ -634,15 +634,29 @@ pub enum Culling {
 }
 
 /// Turn a scene into a recording, saying whether culling runs.
+///
+/// The advanced blend modes are left to the blend unit, so a device without
+/// them refuses the recording; [`render_scene`] records for its device with
+/// [`record_scene_for`].
 pub fn record_scene_with(scene: &Scene, culling: Culling) -> Result<Recording> {
-    let mut canvas = Canvas::new(scene.size).with_samples(scene.samples);
+    record_scene_for(scene, culling, false)
+}
+
+/// Turn a scene into a recording, saying whether culling runs and whether the
+/// advanced blend modes are blended in the shader
+/// (`Canvas::with_advanced_blends_in_shader`): what a device whose blend unit
+/// has none of them needs to draw them at all.
+pub fn record_scene_for(scene: &Scene, culling: Culling, in_shader: bool) -> Result<Recording> {
+    let mut canvas = Canvas::new(scene.size)
+        .with_samples(scene.samples)
+        .with_advanced_blends_in_shader(in_shader);
     if culling == Culling::Kept {
         canvas.keep_hidden_draws();
     }
     canvas.clear(color_of(scene.background));
     let anti_alias = scene.samples > 1;
     for node in &scene.items {
-        record_node(&mut canvas, node, anti_alias)?;
+        record_node(&mut canvas, node, anti_alias, in_shader)?;
     }
     Ok(canvas.finish())
 }
@@ -688,7 +702,10 @@ pub fn render_scene_culled_into<H: Hal>(
 where
     H::Context: HalContext<Hal = H>,
 {
-    let recording = record_scene_with(scene, culling)?;
+    // In the shader wherever the blend unit cannot: every board's driver, and
+    // lavapipe since emblema 0.4.2. Where it can, the unit, as before.
+    let in_shader = !ctx.capabilities().advanced_blend;
+    let recording = record_scene_for(scene, culling, in_shader)?;
     // Uploaded per scene that asks for it rather than held by the caller,
     // which keeps every consumer of this function -- the window, the
     // comparison, the sheet renderer -- from having to know that some scenes
