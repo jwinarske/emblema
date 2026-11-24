@@ -171,11 +171,18 @@ where
 {
     let advanced = ctx.capabilities().advanced_blend;
     let mut checked = 0;
+    let mut in_shader = 0;
     for mode in BlendMode::ALL {
-        if mode.is_advanced() && !advanced {
-            continue;
-        }
-        match render::<H>(ctx, *mode) {
+        // A mode the blend unit cannot do is blended in the shader, against its
+        // destination read from a texture as the canvas does on such a device
+        // ([`render_in_shader`]), and held to the same equation.
+        let shader = mode.is_advanced() && !advanced;
+        in_shader += usize::from(shader);
+        let rendered = match shader {
+            true => render_in_shader::<H>(ctx, *mode),
+            false => render::<H>(ctx, *mode),
+        };
+        match rendered {
             Ok(got) => {
                 checked += 1;
                 let want = expected(*mode);
@@ -201,12 +208,13 @@ where
     // and on a device without the advanced extension the two differ by half the
     // table while the suite passes either way.
     eprintln!(
-        "compared {checked} of {} blend modes against the equations on {backend}",
+        "compared {checked} of {} blend modes against the equations on {backend}, {in_shader} in the shader",
         BlendMode::ALL.len()
     );
-    assert!(
-        checked >= BlendMode::PORTER_DUFF.len(),
-        "{backend} checked only {checked} modes; every device must do all of Porter-Duff"
+    assert_eq!(
+        checked,
+        BlendMode::ALL.len(),
+        "{backend} checked only {checked} modes; every mode is drawn, by the unit or the shader"
     );
 }
 
