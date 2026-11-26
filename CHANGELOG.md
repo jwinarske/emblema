@@ -7,6 +7,39 @@ restating what moved.
 
 Dates are the day a version reached crates.io.
 
+## 0.4.3 — 2026-11-25
+
+Two merges past 0.4.2: #290, the test kit's catalog drawn with the
+advanced blends in the shader where the device's blend unit has none,
+and #291, an image over another producer's dma-buf. Additive API, so a
+patch release.
+
+### Images
+
+**`Context::import_image` samples a dma-buf.** It takes an
+`ExternalImageDesc` -- the planes, the DRM fourcc and the modifier --
+that a camera, a decoder or a renderer on a device of its own made, and
+gives an image drawn as one written from host memory is. fl-engine's
+`Texture` widget is the first user. `VulkanContext::import_texture`
+imported only a render target, which a shader cannot read;
+`import_sampled_texture` asks the device whether it samples that format
+at that layout first, and the image's first transition keeps the
+producer's pixels. A producer's later frames into the same buffer are
+read through the same image, with no ownership transfer from the foreign
+queue: right for linear and uncompressed layouts.
+`HalContext::import_sampled_texture` is new, unsupported on GLES for
+now, and emblema re-exports `DmaBufPlane`, `ExternalImageDesc`, `Fourcc`
+and `Modifier`.
+
+### Tests
+
+**The catalog's advanced blends are drawn in the shader where the
+device cannot.** Since 0.4.2 no Vulkan device here had the modes in its
+blend unit, and 41 catalog scenes were skipped. `render_scene` now
+records for the device it renders on (`record_scene_for`), an advanced
+blend counts as one more store in a scene's tolerance, and the equation
+check asks every backend for all 29 modes.
+
 ## 0.4.2 — 2026-11-22
 
 One merge past 0.4.1, #287, found by fl-engine's blend-mode golden on
