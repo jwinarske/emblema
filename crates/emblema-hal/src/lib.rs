@@ -288,6 +288,24 @@ pub trait HalContext {
         Err(Error::Unsupported("dma-buf import"))
     }
 
+    /// Import a dma-buf as a texture the renderer samples: a frame another
+    /// producer made, drawn as an image is.
+    ///
+    /// Ownership of the descriptors transfers as it does for
+    /// [`Self::import_texture`], and the producer finishes the frame before
+    /// handing it over. The texture is never drawn into. Returns
+    /// [`Error::Unsupported`] where [`DmaBufSupport::import`] is false, or the
+    /// device cannot sample this format at this layout.
+    #[cfg(unix)]
+    fn import_sampled_texture(
+        &mut self,
+        _image: ExternalImageDesc,
+        _extent: Extent2D,
+        _format: PixelFormat,
+    ) -> Result<<Self::Hal as Hal>::Texture> {
+        Err(Error::Unsupported("sampling an imported dma-buf"))
+    }
+
     /// Submit a batch without waiting, returning something that signals when
     /// the GPU has finished.
     ///
