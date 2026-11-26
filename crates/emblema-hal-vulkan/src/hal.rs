@@ -112,6 +112,16 @@ impl HalContext for VulkanContext {
         VulkanContext::import_texture(self, image, extent, format)
     }
 
+    #[cfg(unix)]
+    fn import_sampled_texture(
+        &mut self,
+        image: emblema_hal::ExternalImageDesc,
+        extent: Extent2D,
+        format: PixelFormat,
+    ) -> Result<VulkanTexture> {
+        VulkanContext::import_sampled_texture(self, image, extent, format)
+    }
+
     fn submit_batch_deferred_textured(
         &mut self,
         target: &mut VulkanTexture,

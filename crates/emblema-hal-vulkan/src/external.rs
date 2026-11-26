@@ -90,6 +90,81 @@ fn exports_as_dma_buf(
             .contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
 }
 
+/// What an imported dma-buf is for: drawn into, as the DRM path's buffers
+/// are, or sampled, as another producer's frame is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Imported {
+    RenderTarget,
+    Sampled,
+}
+
+impl Imported {
+    fn usage(self) -> vk::ImageUsageFlags {
+        match self {
+            Self::RenderTarget => {
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC
+            }
+            Self::Sampled => vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC,
+        }
+    }
+}
+
+/// Whether a dma-buf of this format can be imported at this usage: with an
+/// explicit `modifier`, or at plain LINEAR tiling where there is none.
+///
+/// The import-side mirror of [`exports_as_dma_buf`], and the same two halves
+/// of the answer: the feature, and the handle type.
+#[cfg(unix)]
+fn imports_as_dma_buf(
+    instance: &ash::Instance,
+    physical_device: vk::PhysicalDevice,
+    format: PixelFormat,
+    modifier: Option<u64>,
+    usage: vk::ImageUsageFlags,
+) -> bool {
+    let mut modifier_info = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+        .drm_format_modifier(modifier.unwrap_or(0))
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
+        .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let info = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(vk_format(format))
+        .ty(vk::ImageType::TYPE_2D)
+        .tiling(if modifier.is_some() {
+            vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
+        } else {
+            vk::ImageTiling::LINEAR
+        })
+        .usage(usage)
+        .push_next(&mut external);
+    let info = if modifier.is_some() {
+        info.push_next(&mut modifier_info)
+    } else {
+        info
+    };
+
+    let mut external_properties = vk::ExternalImageFormatProperties::default();
+    let mut properties = vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+    // SAFETY: every chained structure outlives the call.
+    let answered = unsafe {
+        instance.get_physical_device_image_format_properties2(
+            physical_device,
+            &info,
+            &mut properties,
+        )
+    }
+    .is_ok();
+
+    let external = external_properties.external_memory_properties;
+    answered
+        && external
+            .external_memory_features
+            .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+        && external
+            .compatible_handle_types
+            .contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+}
+
 pub fn query_format_modifiers(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -336,9 +411,48 @@ impl VulkanContext {
     #[cfg(unix)]
     pub fn import_texture(
         &mut self,
+        image: emblema_hal::ExternalImageDesc,
+        extent: Extent2D,
+        format: PixelFormat,
+    ) -> Result<VulkanTexture> {
+        self.import_dma_buf(image, extent, format, Imported::RenderTarget)
+    }
+
+    /// Import a dma-buf as an image the renderer samples: a frame some other
+    /// producer made -- a camera, a decoder, another renderer -- drawn the
+    /// way an image written from host memory is.
+    ///
+    /// What [`Self::import_texture`] does, at a sampled usage, and checked
+    /// first: a device may import a layout as a render target and refuse to
+    /// sample it, and creating the image anyway is undefined rather than an
+    /// error. The image is never rendered into here.
+    ///
+    /// The contents are the producer's and are kept. The image starts out
+    /// `PREINITIALIZED` as far as the barriers are concerned, so the first
+    /// move into a shader-readable layout keeps what the buffer holds rather
+    /// than discarding it as `UNDEFINED` would allow. Later frames the
+    /// producer writes into the same buffer are read through the same image,
+    /// with no ownership transfer from the foreign queue: right for linear
+    /// and for uncompressed layouts, which is what a software rasterizer, a
+    /// camera and a decoder hand over. Whoever produces the frame finishes it
+    /// before handing it over; nothing here waits for it.
+    #[cfg(unix)]
+    pub fn import_sampled_texture(
+        &mut self,
+        image: emblema_hal::ExternalImageDesc,
+        extent: Extent2D,
+        format: PixelFormat,
+    ) -> Result<VulkanTexture> {
+        self.import_dma_buf(image, extent, format, Imported::Sampled)
+    }
+
+    #[cfg(unix)]
+    fn import_dma_buf(
+        &mut self,
         mut image: emblema_hal::ExternalImageDesc,
         extent: Extent2D,
         format: PixelFormat,
+        imported: Imported,
     ) -> Result<VulkanTexture> {
         use std::os::fd::IntoRawFd as _;
 
@@ -399,6 +513,19 @@ impl VulkanContext {
                 ),
             });
         }
+        if imported == Imported::Sampled
+            && !imports_as_dma_buf(
+                self.raw_instance(),
+                self.raw_physical_device(),
+                format,
+                (!plain_linear).then_some(image.modifier.0),
+                imported.usage(),
+            )
+        {
+            return Err(Error::Unsupported(
+                "this device does not sample a dma-buf of this format and layout",
+            ));
+        }
         if !self.capabilities().can_allocate(extent) {
             return Err(Error::LimitExceeded {
                 what: "texture dimension",
@@ -458,7 +585,7 @@ impl VulkanContext {
             } else {
                 vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
             })
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC)
+            .usage(imported.usage())
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external);
@@ -557,13 +684,23 @@ impl VulkanContext {
             memory: TextureMemory::Dedicated(memory),
             extent,
             format,
-            layout: std::cell::Cell::new(vk::ImageLayout::UNDEFINED),
+            layout: std::cell::Cell::new(match imported {
+                Imported::RenderTarget => vk::ImageLayout::UNDEFINED,
+                Imported::Sampled => vk::ImageLayout::PREINITIALIZED,
+            }),
             mip_levels: 1,
-            usage: TextureUsage {
-                render_target: true,
-                transfer: true,
-                scanout: true,
-                ..TextureUsage::default()
+            usage: match imported {
+                Imported::RenderTarget => TextureUsage {
+                    render_target: true,
+                    transfer: true,
+                    scanout: true,
+                    ..TextureUsage::default()
+                },
+                Imported::Sampled => TextureUsage {
+                    sampled: true,
+                    transfer: true,
+                    ..TextureUsage::default()
+                },
             },
         })
     }

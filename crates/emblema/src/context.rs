@@ -287,6 +287,41 @@ impl Context {
         }
     }
 
+    /// An image over a dma-buf another producer made -- a camera, a decoder,
+    /// another renderer -- sampled as an image written from host memory is.
+    ///
+    /// `extent` and `format` are the renderer's view of the buffer, as
+    /// [`ExternalImageDesc`] speaks DRM fourccs. The descriptors are the
+    /// context's from here, on success or failure. The producer finishes
+    /// each frame before handing it over, and writes into the buffer while
+    /// it is being drawn only at its own risk: the image reads whatever the
+    /// buffer holds when the frame that samples it runs. Never written to
+    /// with [`Self::write_image`]; released with [`Self::destroy_image`].
+    ///
+    /// [`Error::Unsupported`] where the device cannot import a dma-buf, or
+    /// cannot sample this format at this layout -- and always on the GLES
+    /// backend, for now.
+    ///
+    /// [`ExternalImageDesc`]: emblema_hal::ExternalImageDesc
+    #[cfg(unix)]
+    pub fn import_image(
+        &mut self,
+        image: emblema_hal::ExternalImageDesc,
+        extent: Extent2D,
+        format: PixelFormat,
+    ) -> Result<Image> {
+        match self {
+            #[cfg(feature = "vulkan")]
+            Self::Vulkan(ctx) => {
+                HalContext::import_sampled_texture(ctx, image, extent, format).map(Image::Vulkan)
+            }
+            #[cfg(feature = "gles")]
+            Self::Gles(ctx) => {
+                HalContext::import_sampled_texture(ctx, image, extent, format).map(Image::Gles)
+            }
+        }
+    }
+
     /// Fill an image from host memory, tightly packed and top row first.
     ///
     /// Decoding is out of scope for this crate; bring `image` or another

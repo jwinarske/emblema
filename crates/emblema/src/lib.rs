@@ -59,6 +59,12 @@ pub use emblema_hal::{
     MORPHOLOGY_TAPS, RUNTIME_FLOATS,
 };
 
+#[cfg(unix)]
+pub use emblema_hal::{DmaBufPlane, ExternalImageDesc};
+/// What [`Context::import_image`] takes: a dma-buf's planes, its DRM format
+/// and its layout.
+pub use emblema_hal::{Fourcc, Modifier};
+
 /// Draw a recording into a texture this crate did not create.
 ///
 /// [`Context::draw`] covers the case where the target came from
